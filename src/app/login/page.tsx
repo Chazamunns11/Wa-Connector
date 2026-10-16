@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { EmailLinkForm } from "@/components/auth/EmailLinkForm";
@@ -22,6 +23,10 @@ const AUTH_ERROR_COPY: Record<string, { title: string; body: string }> = {
   },
 };
 
+export function generateMetadata(): Metadata {
+  return { title: `Sign in — ${brandConfig().name}`, robots: { index: false } };
+}
+
 interface LoginPageProps {
   /** `error` is set by /auth/callback or the sign-in action; `sent` by the sign-in action once a link has been requested. */
   searchParams: Promise<{ error?: string; sent?: string }>;
@@ -37,7 +42,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     <main id="main" style={brandCssVars(brand)} className="min-h-screen bg-bg">
       <AuthShell
         title="Sign in"
-        intro={<p>We&apos;ll email you a sign-in link. No password needed.</p>}
+        intro={sent ? undefined : <p>We&apos;ll email you a sign-in link. No password needed.</p>}
       >
         {authError ? (
           <div

@@ -461,8 +461,8 @@ live sessions fight over one WhatsApp account.
 
 | Variable | Required? | Default | Purpose |
 | --- | --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | Yes (runtime and build) | none | Supabase project URL; proxy 500s without it |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | none | Supabase anon key (login, session refresh) |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes at runtime | none | Supabase project URL; `/admin` and sign-in fail without it (public pages still render) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes at runtime | none | Supabase anon key; `/admin` and sign-in fail without it (public pages still render) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | none | Service-role key; server only |
 | `NEXT_PUBLIC_APP_URL` | Yes in production, **and for `next build`** | `http://localhost:3000` in dev only | Public base URL; `brandConfig()` throws in production without it |
 | `BRAND_NAME` | No | `PingWren` | Product name shown to users |

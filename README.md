@@ -28,11 +28,10 @@ npm run check   # typecheck + lint + tests
 | --- | --- |
 | `BRAND_TAGLINE` | Short descriptor next to the name (default `WhatsApp for GoHighLevel`) |
 | `BRAND_SUPPORT_WHATSAPP` | Optional support WhatsApp number in E.164 format |
-| `BRAND_LOGO_PATH` | Optional logo: a `/public` path or absolute URL (unset = text wordmark) |
-| `BRAND_ACCENT` | Optional accent colour as hex, e.g. `#17BEB4` (unset or invalid = default teal) |
-| `BRAND_PRICE_PER_NUMBER` | Monthly price per WhatsApp number, a decimal in major units (required in production, read by the pricing module; dev default `29`) |
+| `BRAND_LOGO_PATH` | Optional logo: a `/public` path or absolute URL (unset = the PingWren kit logo) |
+| `BRAND_ACCENT` | Optional accent colour as hex, e.g. `#FF5A36` (unset or invalid = default PingWren Coral `#FF5A36`) |
+| `BRAND_PRICE_PER_NUMBER` | Monthly price per WhatsApp number, a decimal in major units (required in production and for `next build`, because prerendered pages read it; dev default `29`) |
 | `BRAND_CURRENCY` | ISO 4217 currency code (default `GBP`) |
-
 
 The complete list, with required/optional and defaults for both the web app
 and the WhatsApp bridge, is in [`docs/GO-LIVE-FOUNDATION.md`](docs/GO-LIVE-FOUNDATION.md),

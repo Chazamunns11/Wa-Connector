@@ -24,7 +24,7 @@ export function EmptyState({
       ) : (
         <span aria-hidden className="h-3.5 w-[3px] -skew-x-[11deg] bg-accent" />
       )}
-      <h3 className="font-display text-base font-extrabold uppercase text-ink">{title}</h3>
+      <h3 className="font-display text-base font-extrabold text-ink">{title}</h3>
       {description ? (
         <p className="max-w-sm text-sm text-ink-faint">{description}</p>
       ) : null}

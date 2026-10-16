@@ -442,7 +442,7 @@ export function ConnectLinkClient({
         <ConnectedHero summary={summary} nowMs={nowMs} />
       ) : (
         <>
-          <h2 className="font-display text-lg font-bold uppercase italic text-ink">Connect your business WhatsApp</h2>
+          <h2 className="font-display text-lg font-bold text-ink">Connect your business WhatsApp</h2>
 
           {/*
             MANDATORY LINE 2 (above the connect button) — the single most
