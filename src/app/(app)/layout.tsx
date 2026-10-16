@@ -6,7 +6,7 @@ import { Container } from "@/components/site/Container";
 import { brandCssVars, brandConfig } from "@/lib/brand-config";
 import { SITE_ROUTES } from "@/lib/site/routes";
 
-const LINK = "inline-flex min-h-11 items-center px-2 text-sm text-ink-dim hover:text-ink";
+const LINK = "inline-flex min-h-11 items-center whitespace-nowrap px-1.5 text-sm sm:px-2 text-ink-dim hover:text-ink";
 
 /** Account screens: the site shell without the marketing nav. */
 export default function AppLayout({ children }: { children: ReactNode }) {

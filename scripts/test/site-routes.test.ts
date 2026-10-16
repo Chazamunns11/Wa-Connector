@@ -30,10 +30,7 @@ const PAGE_FILES: Record<string, string> = {
 
 // Routes whose pages later tasks create (4-10). Each task removes its own
 // entries; an empty set means every page exists.
-const PENDING = new Set<string>([
-  SITE_ROUTES.dashboard,
-  SITE_ROUTES.billing,
-]);
+const PENDING = new Set<string>();
 
 test("every SITE_ROUTES entry has a page file in the expected route group", () => {
   for (const route of Object.values(SITE_ROUTES)) {

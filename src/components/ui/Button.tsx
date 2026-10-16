@@ -36,7 +36,7 @@ const SIZE_CLASSES: Record<Size, string> = {
  * which is the part that would otherwise drift.
  */
 export function buttonClasses(variant: Variant = "primary", size: Size = "md", className = ""): string {
-  return `inline-flex items-center justify-center gap-2 rounded font-semibold transition duration-[120ms] active:scale-[.975] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`;
+  return `inline-flex items-center justify-center gap-2 rounded font-semibold transition-[color,background-color,border-color,filter,transform] duration-[120ms] active:scale-[.975] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`;
 }
 
 export function Button({

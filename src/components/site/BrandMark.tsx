@@ -1,7 +1,12 @@
 import { brandConfig } from "@/lib/brand-config";
 
-/** The kit's horizontal logo is 473 x 148 (it already carries its own clear space). */
+/**
+ * The kit's horizontal logo is 473 x 148. The artwork is cropped to the mark,
+ * so it carries NO clear space of its own: BrandMark adds it as a margin of
+ * 20% of the logo height (at least the wren head's height).
+ */
 const LOGO_RATIO = 473 / 148;
+const CLEAR_SPACE = 0.2;
 
 /**
  * The PingWren logo, untouched: the standard artwork on light surfaces, the
@@ -25,7 +30,7 @@ export function BrandMark({
         alt={name}
         width={Math.round(size * LOGO_RATIO)}
         height={size}
-        style={{ height: size, width: "auto" }}
+        style={{ height: size, width: "auto", margin: Math.round(size * CLEAR_SPACE) }}
       />
     );
   }
