@@ -82,7 +82,7 @@ export interface WhatsappSessionSummary {
  * and deleting `coachId`, so a future field added to that interface can
  * never ride along by default.
  */
-export type GhlEmbedWhatsappSummary = Omit<WhatsappSessionSummary, "coachId" | "heldMessages">;
+export type GhlEmbedWhatsappSummary = Omit<WhatsappSessionSummary, "coachId">;
 
 // ---------------------------------------------------------------------------
 // GHL custom conversation provider, Phase 1 (WAGHL replacement — replacing

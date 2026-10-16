@@ -47,7 +47,7 @@ test("toWhatsappState: dropped after having connected is disconnected with the h
 
 test("toLocationRow maps name, caps, sends, held and failures", () => {
   const failed = { count: 2, reasons: ["Number not on WhatsApp"] };
-  const r = toLocationRow(loc(), summary(), stats({ pendingSend: 4, failedLast7Days: failed }), NOW, 150);
+  const r = toLocationRow(loc(), summary(), stats({ pendingSend: 4, failedLast7Days: failed }), NOW, 150, 3);
   assert.equal(r.id, "loc-1");
   assert.equal(r.name, "Harbour Street Physio");
   assert.equal(r.activated, true);
@@ -55,16 +55,16 @@ test("toLocationRow maps name, caps, sends, held and failures", () => {
   assert.equal(r.dailyCap, 150);
   assert.equal(r.heldMessages, 4);
   assert.deepEqual(r.failedLast7Days, failed);
-  assert.equal(r.optOuts, 0);
+  assert.equal(r.optOuts, 3);
 });
 test("toLocationRow passes dailyCap through and zeroes sends without a summary", () => {
-  const r = toLocationRow(loc(), null, stats(), NOW, 75);
+  const r = toLocationRow(loc(), null, stats(), NOW, 75, 0);
   assert.equal(r.dailyCap, 75);
   assert.equal(r.sentToday, 0);
   assert.equal(DEFAULT_DAILY_CAP, 150);
 });
 test("a not-activated row is not active and never nudges", () => {
-  const r = toLocationRow(loc({ activatedAt: null }), summary(), stats({ everReceived: false }), NOW, 150);
+  const r = toLocationRow(loc({ activatedAt: null }), summary(), stats({ everReceived: false }), NOW, 150, 0);
   assert.equal(r.activated, false);
   assert.deepEqual(r.state, { kind: "not_active" });
   assert.equal(r.providerNudge, false);
@@ -72,11 +72,11 @@ test("a not-activated row is not active and never nudges", () => {
 
 test("providerNudge: true at exactly 24h activated, connected, nothing ever received", () => {
   const at = loc({ activatedAt: new Date(NOW.getTime() - PROVIDER_NUDGE_AFTER_MS).toISOString() });
-  assert.equal(toLocationRow(at, summary(), stats({ everReceived: false }), NOW, 150).providerNudge, true);
+  assert.equal(toLocationRow(at, summary(), stats({ everReceived: false }), NOW, 150, 0).providerNudge, true);
 });
 test("providerNudge: false before 24h, when received, or when not connected", () => {
   const young = loc({ activatedAt: new Date(NOW.getTime() - PROVIDER_NUDGE_AFTER_MS + 1).toISOString() });
-  assert.equal(toLocationRow(young, summary(), stats({ everReceived: false }), NOW, 150).providerNudge, false);
-  assert.equal(toLocationRow(loc(), summary(), stats({ everReceived: true }), NOW, 150).providerNudge, false);
-  assert.equal(toLocationRow(loc(), summary({ status: "waiting_qr" }), stats({ everReceived: false }), NOW, 150).providerNudge, false);
+  assert.equal(toLocationRow(young, summary(), stats({ everReceived: false }), NOW, 150, 0).providerNudge, false);
+  assert.equal(toLocationRow(loc(), summary(), stats({ everReceived: true }), NOW, 150, 0).providerNudge, false);
+  assert.equal(toLocationRow(loc(), summary({ status: "waiting_qr" }), stats({ everReceived: false }), NOW, 150, 0).providerNudge, false);
 });

@@ -23,6 +23,7 @@ export function toLocationRow(
   stats: LocationStats,
   now: Date,
   dailyCap: number,
+  optOuts: number,
 ): LocationRow {
   const activated = loc.activatedAt !== null;
   const state = toWhatsappState(activated, summary, stats.pendingSend);
@@ -41,8 +42,7 @@ export function toLocationRow(
     dailyCap,
     heldMessages: stats.pendingSend,
     failedLast7Days: stats.failedLast7Days,
-    // STOP opt-out counts arrive with the reliability plan's feature; wire this column when it lands.
-    optOuts: 0,
+    optOuts,
     providerNudge,
   };
 }

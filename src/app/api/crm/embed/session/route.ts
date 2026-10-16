@@ -126,7 +126,7 @@ import { embedStateFor } from "./logic";
 import { brandConfig } from "@/lib/brand-config";
 import { claimSignupUrl, isClaimConfigured } from "@/lib/ghl-claim";
 import { getWhatsappBridgeHealth, isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
-import type { GhlEmbedWhatsappSummary, WhatsappSessionSummary } from "@/lib/types";
+import { toEmbedWhatsappSummary } from "@/lib/embed-summary";
 
 export const dynamic = "force-dynamic";
 
@@ -143,12 +143,6 @@ function fail(status: number, error: string): NextResponse {
  * EITHER". `null` in, `null` out (a coach — here, GHL location — with no
  * `whatsapp_sessions` row at all).
  */
-function toEmbedSummary(summary: WhatsappSessionSummary | null): GhlEmbedWhatsappSummary | null {
-  if (!summary) return null;
-  const { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday } = summary;
-  return { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday };
-}
-
 export async function POST(request: Request) {
   try {
     if (!isGhlEmbedConfigured()) return fail(503, "embed_not_configured");
@@ -223,7 +217,7 @@ export async function POST(request: Request) {
     // display isn't worth the request).
     const bridgeReachable = isWhatsappBridgeConfigured() ? (await getWhatsappBridgeHealth()).ok : null;
 
-    return NextResponse.json({ ok: true, state: "ok", token, label: account.label, summary: toEmbedSummary(summary), bridgeReachable });
+    return NextResponse.json({ ok: true, state: "ok", token, label: account.label, summary: toEmbedWhatsappSummary(summary), bridgeReachable });
   } catch (err) {
     // Adversarial review lens 4, finding 6 (MINOR) — see this file's header.
     // Never echoes `err` into the response.

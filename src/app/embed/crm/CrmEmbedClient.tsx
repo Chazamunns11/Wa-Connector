@@ -497,7 +497,7 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
       // empty string exists purely to satisfy the shared prop's TypeScript
       // shape without touching `WhatsappConnectionPanel.tsx`, and is never
       // derived from, or capable of leaking, the real tenant id.
-      summary={summary ? { ...summary, coachId: "", heldMessages: 0 } : null}
+      summary={summary ? { ...summary, coachId: "" } : null}
       bridgeConfigured={bridgeConfigured}
       bridgeReachable={bridgeReachable}
       nowMs={nowMs}
