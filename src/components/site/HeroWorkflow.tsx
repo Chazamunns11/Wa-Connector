@@ -6,7 +6,7 @@
 const OUT = "Hi Sam, your call is booked for 2pm tomorrow.";
 const IN = "Thanks, see you then.";
 
-const LABEL = `Example: a Send SMS workflow step named Appointment reminder sends "${OUT}" on WhatsApp. It shows as Delivered, and Sam replies "${IN}", which appears back in Conversations.`;
+const LABEL = `Example: a Send SMS step in a workflow called Appointment reminder sends "${OUT}" on WhatsApp. It shows as Delivered, and Sam replies "${IN}", which appears back in Conversations.`;
 
 export function HeroWorkflow() {
   return (
@@ -14,7 +14,7 @@ export function HeroWorkflow() {
       <div className="relative z-10 rounded-lg border bg-card px-4 py-3">
         <p className="font-display text-xl font-medium leading-tight">Send SMS</p>
         <p className="text-ink-dim">Appointment reminder</p>
-        <div className="mt-3 border-t pt-3">
+        <div className="mt-3 hidden border-t pt-3 sm:block">
           <p className="text-[0.8rem] text-ink-dim">Message</p>
           <p>{OUT}</p>
         </div>

@@ -37,7 +37,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     safety: [
       {
         title: "Paced sending",
-        body: "Messages leave at a steady rate, spread out over the day, and each number has a daily cap. It will not send more than the cap in a day.",
+        body: "Messages leave at a steady rate, spread out over the day, and each number has a daily cap. It will not send more than the cap in a day. Anything over the cap is reported back to GoHighLevel as not sent, and the number starts again the next day.",
       },
       {
         title: "Held while disconnected",

@@ -305,22 +305,24 @@ h2 {
   border-radius: 20px 20px 20px 4px;
 }
 
+/* A message that was not sent: dashed outline, muted text (Ink-dim on Paper is 7.9:1). */
+.bubble-unsent {
+  border: 1px dashed var(--color-border-strong);
+  background: transparent;
+  color: var(--color-ink-dim);
+}
+
 /* ---- home hero: one load sequence, about 1.2s ----
-   1 the bubble slides out from under the workflow step (150-700ms)
+   1 the bubble slides out from behind the workflow step (full opacity, hidden by the card) (150-700ms)
    2 a Coral dot pings on its tail corner (700-1200ms)
    3 "Delivered" and the reply arrive (850-1200ms)
    Final state is the default style, so reduced motion simply drops the
    animations and shows the finished frame. */
 @keyframes hero-land {
   from {
-    opacity: 0;
     transform: translateY(-88px) scale(0.86);
   }
-  35% {
-    opacity: 1;
-  }
   to {
-    opacity: 1;
     transform: none;
   }
 }
