@@ -95,6 +95,7 @@ import {
   type RefreshGhlTokenResult,
 } from "@/lib/ghl";
 import { brandConfig } from "@/lib/brand-config";
+import { sendingGate } from "@/lib/billing/gate";
 import { normalisePhoneE164 } from "@/lib/phone";
 import {
   getWhatsappBridgeSession,
@@ -112,6 +113,7 @@ import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, Ghl
 export type GhlProviderRepo = Pick<
   GhlRepository,
   | "getGhlAccountByLocationId"
+  | "getAccountById"
   | "recordGhlOutboundMessage"
   | "updateGhlOutboundSendState"
   | "listUnreportedGhlOutboundMessages"
@@ -647,6 +649,18 @@ export async function handleProviderOutboundMessage(
   // drain's problem to pick up next pass, never GHL's — the route returns
   // 200 regardless (see the "error" outcome's own JSDoc).
   try {
+    // Accounts gate: only an activated number on a paid or trialing account
+    // sends. Refused honestly — recorded, then reported back to GoHighLevel as
+    // failed with the fixed customer string — and BEFORE the media split, so
+    // the media path is gated too.
+    const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
+    const gateReason = sendingGate(account, owner?.billingStatus ?? null, brandConfig().name);
+    if (gateReason) {
+      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
+      await reportGhlOutcome(repo, deps, account, row, "failed", gateReason);
+      return { kind: "refused", reason: gateReason };
+    }
+
     // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — split off
     // ENTIRELY before any of the legacy single-send logic below runs. With
     // `mediaSplit` false (flag off, or no attachments), execution never

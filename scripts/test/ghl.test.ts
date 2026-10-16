@@ -33,7 +33,7 @@ import {
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
 import type { BridgeSendResult, BridgeSessionResult, SendWhatsappAttachmentInput, SendWhatsappInput } from "@/lib/whatsapp-bridge";
-import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, GhlOutboundMessageDraft } from "@/lib/types";
+import type { Account, GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, GhlOutboundMessageDraft } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // 1. Ed25519 synthetic fixture — src/lib/ghl.ts's verifyGhlSignature
@@ -343,6 +343,8 @@ function makeAccount(overrides: Partial<GhlAccount> = {}): GhlAccount {
     lastError: null,
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
+    accountId: "acc",
+    activatedAt: "2026-10-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -359,7 +361,7 @@ interface FakeCall {
  * transition, markGhlOutboundReported's nullable-reportedStatus contract,
  * an atomic-ish claimGhlTokenRefresh).
  */
-function createFakeRepo(accounts: GhlAccount[] = []) {
+function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account["billingStatus"] } | null | "default" = "default") {
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const rows = new Map<string, GhlOutboundMessage>();
   const bridgeLedger = new Map<string, { status: string; error: string | null }>();
@@ -372,6 +374,12 @@ function createFakeRepo(accounts: GhlAccount[] = []) {
   let claimedAt: number | null = null;
 
   const repo: GhlProviderRepo = {
+    async getAccountById(id: string) {
+      calls.push({ method: "getAccountById", args: [id] });
+      if (billing === null) return null;
+      const status = billing === "default" ? "active" : billing.status;
+      return { id, name: "Acme", kind: "business", ownerEmail: "o@x.test", stripeCustomerId: null, stripeSubscriptionId: null, billingStatus: status, trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, createdAt: "2026-10-01T00:00:00Z" } as Account;
+    },
     async getGhlAccountByLocationId(locationId: string) {
       calls.push({ method: "getGhlAccountByLocationId", args: [locationId] });
       return accountsByLocation.get(locationId) ?? null;
@@ -762,6 +770,68 @@ test("handleProviderOutboundMessage: a disabled account never attempts the bridg
   assert.equal(statusCalls.length, 0, "disabled is a deliberate manual state — unlike needs_reauth, a fresh token changes nothing here");
   const row = [...rows.values()][0];
   assert.equal(row.refusalReason, GHL_PROVIDER_REASONS.disabled);
+});
+
+const REASON_GATE_NOT_ACTIVATED = "WhatsApp isn't activated for this sub-account";
+const REASON_GATE_INACTIVE = "PingWren subscription inactive — the account owner needs to update billing";
+
+test("sending gate: a location that is not activated is refused with the fixed string, reported failed inline, bridge never called", async () => {
+  const { repo, rows, calls } = createFakeRepo([makeAccount({ activatedAt: null })]);
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-gate-off" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: REASON_GATE_NOT_ACTIVATED });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 1, "GoHighLevel is told, not left waiting");
+  assert.equal(statusCalls[0].status, "failed");
+  const update = calls.find((c) => c.method === "updateGhlOutboundSendState");
+  assert.deepEqual((update?.args[1] as { refusalReason: string }).refusalReason, REASON_GATE_NOT_ACTIVATED);
+  assert.equal([...rows.values()][0].refusalReason, REASON_GATE_NOT_ACTIVATED);
+});
+
+test("sending gate: activated but the account is paused -> refused with the subscription-inactive string", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { status: "paused" });
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-gate-paused" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: REASON_GATE_INACTIVE });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 1);
+});
+
+test("sending gate: activated but the account row is missing -> refused as inactive", async () => {
+  const { repo } = createFakeRepo([makeAccount()], null);
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-gate-missing" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: REASON_GATE_INACTIVE });
+  assert.equal(sendCalls.length, 0);
+});
+
+test("sending gate: an unclaimed location (no account id) is refused as not activated", async () => {
+  const { repo } = createFakeRepo([makeAccount({ accountId: null })]);
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-gate-unclaimed" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: REASON_GATE_NOT_ACTIVATED });
+  assert.equal(sendCalls.length, 0);
+});
+
+for (const status of ["past_due", "comped", "trialing"] as const) {
+  test(`sending gate: activated + ${status} still sends`, async () => {
+    const { repo } = createFakeRepo([makeAccount()], { status });
+    const { deps, sendCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: `msg-gate-${status}` }), deps);
+    assert.deepEqual(outcome, { kind: "accepted" });
+    assert.equal(sendCalls.length, 1);
+  });
+}
+
+test("sending gate: the media-split path is gated too", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo } = createFakeRepo([makeAccount({ activatedAt: null })]);
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-gate-media", attachments: ["https://x/a.jpg"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: REASON_GATE_NOT_ACTIVATED });
+    assert.equal(sendCalls.length, 0);
+    assert.equal(sendAttachmentCalls.length, 0);
+  });
 });
 
 test("drainGhlOutboundStatuses: the 'refused' defensive branch reports the row's PERSISTED refusal reason, not a generic fallback (finding 3)", async () => {
