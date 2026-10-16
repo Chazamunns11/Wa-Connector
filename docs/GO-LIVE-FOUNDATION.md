@@ -197,8 +197,9 @@ drain instead of arriving in seconds.
    Part 4, then redeploy.
 
 `CRON_SECRET` and `ONBOARD_STATE_SECRET` must be different values.
-`ONBOARD_STATE_SECRET` is deliberately never inferred from `CRON_SECRET`:
-anyone holding the cron password could otherwise mint embed sessions.
+Embed and connect-link signing never falls back to `CRON_SECRET`: anyone
+holding the cron password could otherwise mint embed sessions. (The
+owner-gated GHL install OAuth state in `signed-state.ts` still falls back to it.)
 
 ---
 
@@ -331,8 +332,10 @@ self-healing.
 
 GHL publishes one **public** Ed25519 key for signing provider webhooks
 (https://marketplace.gohighlevel.com/docs/webhook/ProviderOutboundMessage).
-It is a public key, so it does not need rule-zero handling. This is a **new
-app with its own value**: paste GHL's current key, both marker lines included:
+It is a public key, so it does not need rule-zero handling. The key is global
+to GHL, not specific to your app: paste GHL's current published key, both
+marker lines included. The point is that it is set fresh in this Vercel
+project rather than copied from the old one:
 
 ```
 -----BEGIN PUBLIC KEY-----
@@ -345,8 +348,8 @@ app with its own value**: paste GHL's current key, both marker lines included:
 | `GHL_WEBHOOK_PUBLIC_KEY` | the full PEM block |
 
 Until set, `/api/webhooks/crm-provider` returns 503 to every request
-(fail-closed). Signatures made by the old FitClosers app are rejected by
-design; the new deployment trusts only the key you paste here.
+(fail-closed). The deployment verifies webhooks only against the key you
+paste here.
 
 ### 4h. Custom Page (WhatsApp linking inside HighLevel)
 
@@ -469,7 +472,7 @@ live sessions fight over one WhatsApp account.
 | `SLACK_WEBHOOK_URL` | No | unset (alerts skipped) | Operational alerts |
 | `GHL_CLIENT_ID` | Yes for GHL | unset (GHL features off) | Marketplace app client id |
 | `GHL_CLIENT_SECRET` | Yes for GHL | unset | Marketplace app client secret |
-| `GHL_WEBHOOK_PUBLIC_KEY` | Yes for GHL | unset (webhook returns 503) | GHL's public key for the new app, PEM |
+| `GHL_WEBHOOK_PUBLIC_KEY` | Yes for GHL | unset (webhook returns 503) | GHL's current published webhook public key, PEM |
 | `GHL_CONVERSATION_PROVIDER_ID` | Yes for replies to reach GHL | unset (replies queue) | Provider id from 4f |
 | `GHL_SSO_SHARED_SECRET` | Yes for the Custom Page | unset (embed off) | Decrypts GHL's SSO payload |
 | `GHL_EMBED_FRAME_ANCESTORS` | No | unset (GHL's own hosts only) | Extra `frame-ancestors` origins for whitelabel domains |

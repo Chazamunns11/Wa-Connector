@@ -329,10 +329,10 @@ function GhlWhatsappConnectPanel({
     qrWarning: `Anyone who scans this code links their phone to ${label}'s WhatsApp and can read and send as them. Treat it like a password — use the location's own dedicated business number only, never a personal one.`,
     logoutConfirm: `This unlinks ${label}'s number and wipes its stored credentials.`,
     disconnectedFallback: `${label}'s WhatsApp is currently disconnected.`,
-    unlinkedMessage: `${label}'s number was unlinked from the portal. Reconnecting is safe whenever it's ready.`,
+    unlinkedMessage: `${label}'s number was unlinked from this app. Reconnecting is safe whenever it's ready.`,
     unknownAccountMessage: "That GHL location isn't recognised by the WhatsApp service — refresh the page and try again.",
     bannedHelp:
-      "This number was blocked by WhatsApp — reconnecting the same number is likely to fail. See the WhatsApp runbook before trying anything else.",
+      "This number was blocked by WhatsApp — reconnecting the same number is likely to fail. See docs/GO-LIVE-FOUNDATION.md (\"Still true after first light\") before trying anything else.",
     unauthorizedMessage:
       "The WhatsApp service rejected this deployment's credentials — this needs an operator to check the bridge configuration.",
   };

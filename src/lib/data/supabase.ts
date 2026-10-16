@@ -574,7 +574,7 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (!current) throw new Error(`[supabase] bumpGhlConnectLinkVersion: no ghl_accounts row for location ${locationId}`);
     const currentVersion = (current as { connect_link_version: number | null }).connect_link_version;
     if (typeof currentVersion !== "number") {
-      throw new Error("[supabase] bumpGhlConnectLinkVersion: connect_link_version column is absent — apply migration 0075 first");
+      throw new Error("[supabase] bumpGhlConnectLinkVersion: connect_link_version column is absent — apply supabase/migrations/0001_init.sql first");
     }
     const { error: writeError } = await supabase
       .from("ghl_accounts")

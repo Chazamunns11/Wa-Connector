@@ -161,7 +161,7 @@ export async function createGhlConnectLinkAction(
   if (!isConnectLinkConfigured()) {
     throw new Error(
       "Connect links aren't switched on for this deployment yet — ONBOARD_STATE_SECRET isn't set. Set it in " +
-        "Vercel's environment variables (see docs/RUNBOOK.md's Connect links section), then redeploy."
+        "Vercel's environment variables (see docs/GO-LIVE-FOUNDATION.md, Part 3 — Vercel), then redeploy."
     );
   }
 
@@ -171,8 +171,8 @@ export async function createGhlConnectLinkAction(
   }
   if (account.connectLinkVersion === null) {
     throw new Error(
-      "Connect links aren't available yet — migration 0075_ghl_connect_links.sql hasn't been applied to this " +
-        "database. Apply it (see supabase/migrations/0075_ghl_connect_links.sql's own header), then try again."
+      "Connect links aren't available yet — the database schema (supabase/migrations/0001_init.sql) hasn't been " +
+        "applied to this database, so the ghl_accounts.connect_link_version column is missing. Apply it, then try again."
     );
   }
 

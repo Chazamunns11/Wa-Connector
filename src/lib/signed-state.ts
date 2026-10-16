@@ -24,9 +24,9 @@ function getStateSecret(): string {
   const secret = process.env.ONBOARD_STATE_SECRET || process.env.CRON_SECRET;
   if (!secret) {
     throw new Error(
-      "Neither ONBOARD_STATE_SECRET nor CRON_SECRET is set — one is required to sign the onboarding " +
-        "OAuth state (src/lib/onboarding.ts). Set ONBOARD_STATE_SECRET (preferred) or CRON_SECRET before " +
-        "using the magic-link login step or the Stripe Connect step of /onboard/[token]."
+      "Neither ONBOARD_STATE_SECRET nor CRON_SECRET is set — one is required to sign the GHL OAuth " +
+        "install state and the connect/embed tokens. Set ONBOARD_STATE_SECRET (preferred) or CRON_SECRET before " +
+        "using GHL install, connect links or the embed."
     );
   }
   return secret;

@@ -72,7 +72,7 @@ async function deliver(message: SlackMessage): Promise<void> {
   const webhookUrl = process.env.SLACK_WEBHOOK_URL;
   if (!webhookUrl) {
     // Demo/dev mode: no Slack configured — log instead of no-op silently.
-    console.log("[slack demo] would post:", message.text);
+    console.log("[slack] SLACK_WEBHOOK_URL not set — skipped:", message.text);
     return;
   }
 
