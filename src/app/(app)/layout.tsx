@@ -15,10 +15,10 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <a href="#main" className="skip-link">
         Skip to main content
       </a>
-      <header className="border-b">
+      <header className="surface-dark border-b">
         <Container className="flex min-h-16 items-center justify-between gap-2">
           <Link href={SITE_ROUTES.dashboard} className="inline-flex min-h-11 items-center" aria-label={`${brandConfig().name} dashboard`}>
-            <BrandMark />
+            <BrandMark surface="dark" size={44} />
           </Link>
           <nav aria-label="Account" className="flex items-center gap-1">
             <Link href={SITE_ROUTES.dashboard} className={LINK}>

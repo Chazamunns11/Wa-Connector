@@ -30,7 +30,7 @@ function Rows({ pricing }: { pricing: PricingConfig }) {
 export function PricingTable({ pricing }: { pricing: PricingConfig }) {
   return (
     <div>
-      <h2 className="font-display text-lg font-semibold">Examples</h2>
+      <h2 className="font-display text-lg font-medium">Examples</h2>
       <div className="mt-3 overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <caption className="pb-2 text-left text-sm text-ink-dim">Monthly price by number of WhatsApp numbers</caption>

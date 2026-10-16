@@ -9,10 +9,10 @@ const NAV_LINK = "inline-flex min-h-11 items-center text-sm text-ink-dim hover:t
 
 export function SiteHeader() {
   return (
-    <header className="relative border-b">
-      <Container className="flex min-h-16 items-center justify-between gap-2">
+    <header className="surface-dark relative border-b">
+      <Container className="flex min-h-[72px] items-center justify-between gap-2">
         <Link href={SITE_ROUTES.home} className="inline-flex min-h-11 shrink-0 items-center" aria-label={`${brandConfig().name} home`}>
-          <BrandMark />
+          <BrandMark surface="dark" size={44} />
         </Link>
         <nav aria-label="Main" className="hidden gap-6 md:flex">
           {NAV_LINKS.map((l) => (
@@ -33,7 +33,7 @@ export function SiteHeader() {
             </span>
           </Link>
           <details className="group md:hidden">
-            <summary className="inline-flex min-h-11 cursor-pointer list-none items-center rounded border px-3.5 text-sm font-medium text-ink-dim hover:text-ink [&::-webkit-details-marker]:hidden">
+            <summary className="inline-flex min-h-11 cursor-pointer list-none items-center rounded border border-border-strong px-3.5 text-sm font-medium text-ink-dim hover:text-ink [&::-webkit-details-marker]:hidden">
               Menu
             </summary>
             {/* Full width of the header, not a narrow popover. */}

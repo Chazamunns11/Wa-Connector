@@ -9,7 +9,7 @@ export function PricingSummary({ ctaLabel }: { ctaLabel: string }) {
     <div className="flex flex-wrap items-center justify-between gap-6">
       <div>
         <p className="text-sm text-ink-dim">One price per number, per month</p>
-        <p className="font-display text-5xl font-bold leading-none [font-variant-numeric:tabular-nums]">
+        <p className="font-display text-5xl font-extrabold leading-none [font-variant-numeric:tabular-nums]">
           {formatMoney(pricing.pricePerNumber, pricing.currency)}
         </p>
         <p className="mt-3 max-w-[48ch] text-ink-dim">

@@ -18,12 +18,12 @@ export default function BillingHelpPage() {
   const brand = brandConfig();
   const pricing = pricingConfig();
   const copy = pricingCopy(brand);
-  const h2 = "mt-10 font-display text-[clamp(20px,3vw,24px)] font-bold";
+  const h2 = "mt-10 font-display text-[clamp(20px,3vw,24px)] font-extrabold";
   return (
     <section className="pb-12 pt-12 md:pb-20">
       <Container>
         <div className="max-w-[760px]">
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-bold leading-[1.15]">Billing</h1>
+          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">Billing</h1>
           <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
             One price: {formatMoney(pricing.pricePerNumber, pricing.currency)} per active number, per month.
           </p>

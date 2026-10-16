@@ -20,8 +20,8 @@ function Chooser({ brandName, x, y, w, stack }: { brandName: string; x: number; 
         points={`${x + 16 + fieldW - 28},${fieldY + 15} ${x + 16 + fieldW - 14},${fieldY + 15} ${x + 16 + fieldW - 21},${fieldY + 24}`}
         className="fill-ink"
       />
-      <rect x={saveX} y={saveY} width={124} height={38} rx={4} className="fill-accent-text" />
-      <text x={saveX + 62} y={saveY + 24} textAnchor="middle" fontSize={14} fontWeight={600} className="fill-white">
+      <rect x={saveX} y={saveY} width={124} height={38} rx={4} className="fill-accent" />
+      <text x={saveX + 62} y={saveY + 24} textAnchor="middle" fontSize={14} fontWeight={600} className="fill-accent-ink">
         Save
       </text>
     </g>

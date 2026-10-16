@@ -138,7 +138,7 @@ export function QrMark({ x, y, size }: { x: number; y: number; size: number }) {
   const d = size * 0.1;
   return (
     <g aria-hidden="true">
-      <rect x={x} y={y} width={size} height={size} rx={4} className="fill-white stroke-ink-faint" strokeWidth={1.5} />
+      <rect x={x} y={y} width={size} height={size} rx={4} className="fill-card stroke-ink-faint" strokeWidth={1.5} />
       {finder(x + 10, y + 10)}
       {finder(x + size - f - 10, y + 10)}
       {finder(x + 10, y + size - f - 10)}

@@ -30,8 +30,8 @@ export default function PricingPage() {
     <>
       <section className="pb-6 pt-14 md:pb-8">
         <Container>
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-bold leading-[1.15]">One price per number</h1>
-          <p className="mt-4 font-display text-2xl font-semibold [font-variant-numeric:tabular-nums]">
+          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">One price per number</h1>
+          <p className="mt-4 font-display text-2xl font-medium [font-variant-numeric:tabular-nums]">
             {priceLine(1, pricing)}
           </p>
           <p className="mt-3 max-w-[60ch] text-lg text-ink-dim">
@@ -52,7 +52,7 @@ export default function PricingPage() {
             </div>
             <aside aria-labelledby="terms">
             <Card>
-              <h2 id="terms" className="font-display text-2xl font-bold">Trial and billing</h2>
+              <h2 id="terms" className="font-display text-2xl font-extrabold">Trial and billing</h2>
               <ul className="mt-4 grid gap-3">
                 {copy.trialTerms.map((t) => (
                   <li key={t} className="relative pl-7">
@@ -61,9 +61,9 @@ export default function PricingPage() {
                   </li>
                 ))}
               </ul>
-              <h3 className="mt-6 font-display text-lg font-semibold">Cancelling</h3>
+              <h3 className="mt-6 font-display text-lg font-medium">Cancelling</h3>
               <p className="mt-2 text-ink-dim">{copy.cancel}</p>
-              <h3 className="mt-6 font-display text-lg font-semibold">If a payment fails</h3>
+              <h3 className="mt-6 font-display text-lg font-medium">If a payment fails</h3>
               {copy.failedPayment.map((p) => (
                 <p key={p} className="mt-2 text-ink-dim">{p}</p>
               ))}
@@ -77,7 +77,7 @@ export default function PricingPage() {
       </section>
       <section className="py-12 md:py-20">
         <Container>
-          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-bold leading-[1.15]">Billing questions</h2>
+          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-extrabold leading-[1.15]">Billing questions</h2>
           <FaqList entries={faq} />
         </Container>
       </section>

@@ -14,13 +14,13 @@ export function generateMetadata(): Metadata {
 
 export default function PrivacyAndDataPage() {
   const { name } = brandConfig();
-  const h2 = "mt-10 font-display text-[clamp(20px,3vw,24px)] font-bold";
+  const h2 = "mt-10 font-display text-[clamp(20px,3vw,24px)] font-extrabold";
   const ul = "mt-3 grid max-w-[62ch] list-disc gap-2 pl-5 text-ink-dim marker:text-ink-faint";
   return (
     <section className="pb-12 pt-12 md:pb-20">
       <Container>
         <div className="max-w-[760px]">
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-bold leading-[1.15]">Privacy and data</h1>
+          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">Privacy and data</h1>
           <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
             A plain summary of what {name} keeps. It is not the privacy policy, which is still a{" "}
             <Link href={SITE_ROUTES.privacy} className="underline underline-offset-2">

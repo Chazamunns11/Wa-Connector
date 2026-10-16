@@ -1,5 +1,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { inkFor } from "@/lib/brand";
 import { brandConfig, brandCssVars } from "@/lib/brand-config";
 
@@ -9,6 +11,7 @@ const KEYS = [
   "BRAND_SUPPORT_EMAIL",
   "BRAND_SUPPORT_WHATSAPP",
   "BRAND_LOGO_PATH",
+  "BRAND_LOGO_REVERSE_PATH",
   "BRAND_ACCENT",
   "NEXT_PUBLIC_APP_URL",
   "NODE_ENV",
@@ -23,17 +26,55 @@ afterEach(() => {
   }
 });
 
-test("defaults: tagline, no logo/accent/whatsapp", () => {
+test("defaults: PingWren name, tagline, kit logos, coral accent, no whatsapp", () => {
   for (const k of KEYS) delete process.env[k];
   assert.deepEqual(brandConfig(), {
-    name: "WA Connector",
+    name: "PingWren",
     tagline: "WhatsApp for GoHighLevel",
     supportEmail: null,
     supportWhatsApp: null,
-    logoPath: null,
-    accent: null,
+    logoPath: "/brand/pingwren-logo.svg",
+    logoReversePath: "/brand/pingwren-logo-reverse.svg",
+    accent: "#FF5A36",
     appUrl: "http://localhost:3000",
   });
+});
+
+test("BRAND_LOGO_PATH overrides the light logo; reverse falls back to it unless set", () => {
+  for (const k of KEYS) delete process.env[k];
+  process.env.BRAND_LOGO_PATH = "/custom.svg";
+  assert.equal(brandConfig().logoPath, "/custom.svg");
+  assert.equal(brandConfig().logoReversePath, "/custom.svg");
+  process.env.BRAND_LOGO_REVERSE_PATH = "/custom-rev.svg";
+  assert.equal(brandConfig().logoReversePath, "/custom-rev.svg");
+  delete process.env.BRAND_LOGO_REVERSE_PATH;
+});
+
+test("brand kit logo and favicon files exist", () => {
+  for (const f of ["pingwren-logo.svg", "pingwren-logo-reverse.svg", "favicon.svg", "favicon.ico", "favicon-180.png"]) {
+    assert.ok(existsSync(join(process.cwd(), "public/brand", f)), f);
+  }
+});
+
+function walk(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+  );
+}
+
+test("no source file under src/ uses WhatsApp green or a WhatsApp logo asset", () => {
+  const bad: string[] = [];
+  for (const f of walk(join(process.cwd(), "src"))) {
+    if (!/\.(tsx?|css|svg|json|md)$/.test(f)) {
+      if (/whatsapp[-_ ]?(logo|icon|glyph)/i.test(f)) bad.push(f);
+      continue;
+    }
+    const text = readFileSync(f, "utf8");
+    if (/#25D366/i.test(text) || /whatsapp[-_]?(logo|icon|glyph)\.(svg|png|webp)/i.test(text) || /whatsapp[-_ ]?(logo|icon|glyph)/i.test(f)) {
+      bad.push(f);
+    }
+  }
+  assert.deepEqual(bad, []);
 });
 
 test("env overrides name and support email", () => {
@@ -56,19 +97,19 @@ test("brandConfig does not throw in production with BRAND_PRICE_PER_NUMBER unset
   assert.doesNotThrow(() => brandConfig());
 });
 
-test("BRAND_ACCENT '#abc' normalises to #AABBCC and brandCssVars sets accent, ink and text", () => {
+test("BRAND_ACCENT '#abc' normalises to #AABBCC and brandCssVars sets accent and ink (text stays themed)", () => {
   process.env.BRAND_ACCENT = "#abc";
   const b = brandConfig();
   assert.equal(b.accent, "#AABBCC");
   const vars = brandCssVars(b) as Record<string, string>;
   assert.equal(vars["--color-accent"], "#AABBCC");
-  assert.equal(vars["--color-accent-text"], "#AABBCC");
+  assert.equal(vars["--color-accent-text"], undefined);
   assert.equal(vars["--color-accent-ink"], inkFor("#AABBCC"));
 });
 
-test("BRAND_ACCENT invalid → accent null and brandCssVars undefined", () => {
+test("BRAND_ACCENT invalid → default coral accent and brandCssVars undefined", () => {
   process.env.BRAND_ACCENT = "teal-ish";
   const b = brandConfig();
-  assert.equal(b.accent, null);
+  assert.equal(b.accent, "#FF5A36");
   assert.equal(brandCssVars(b), undefined);
 });

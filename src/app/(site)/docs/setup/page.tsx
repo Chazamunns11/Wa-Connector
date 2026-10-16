@@ -50,7 +50,7 @@ export default async function SetupPage({
     AUDIENCES.map((a) => [
       a,
       <div key={a}>
-        <h2 className="font-display text-[clamp(24px,4vw,32px)] font-bold leading-tight">{AUDIENCE_LABELS[a]}</h2>
+        <h2 className="font-display text-[clamp(24px,4vw,32px)] font-extrabold leading-tight">{AUDIENCE_LABELS[a]}</h2>
         <ol role="list" className="mt-4 list-none p-0">
           {steps.map((s, i) => (
             <SetupStep key={s.id} index={i} step={s} audience={a} brandName={brand.name} />
@@ -65,7 +65,7 @@ export default async function SetupPage({
       <section className="pb-12 pt-12 md:pb-20">
         <Container>
           <div className="max-w-[760px]">
-            <h1 className="font-display text-[clamp(32px,6vw,48px)] font-bold leading-[1.15]">
+            <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">
               Set up {brand.name} in GoHighLevel
             </h1>
             <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
@@ -73,7 +73,7 @@ export default async function SetupPage({
               WhatsApp messages from your existing workflows.
             </p>
             <div className="mt-6 rounded-lg border bg-raised p-4">
-              <h2 className="font-display text-lg font-semibold">Before you start</h2>
+              <h2 className="font-display text-lg font-medium">Before you start</h2>
               <ul className="mt-2 grid list-disc gap-1 pl-5 text-ink-dim marker:text-ink-faint">
                 <li>A GoHighLevel account with at least one sub-account.</li>
                 <li>A {brand.name} account (start the free trial first).</li>
@@ -85,7 +85,7 @@ export default async function SetupPage({
               <AudienceTabs key={initial} panels={panels} initial={initial} />
             </div>
 
-            <h2 id="troubleshooting" className="mt-16 scroll-mt-4 font-display text-[clamp(24px,4vw,32px)] font-bold">
+            <h2 id="troubleshooting" className="mt-16 scroll-mt-4 font-display text-[clamp(24px,4vw,32px)] font-extrabold">
               Troubleshooting
             </h2>
             <div className="mt-4">
@@ -109,7 +109,7 @@ export default async function SetupPage({
               ))}
             </div>
 
-            <h2 className="mt-16 font-display text-[clamp(24px,4vw,32px)] font-bold">Once you are sending</h2>
+            <h2 className="mt-16 font-display text-[clamp(24px,4vw,32px)] font-extrabold">Once you are sending</h2>
             <ul className="mt-4 grid max-w-[62ch] list-disc gap-2 pl-5 text-ink-dim marker:text-ink-faint">
               <li>Each number has a daily cap, and messages go out at a steady pace rather than all at once.</li>
               <li>If someone replies STOP, that number stops messaging them. Other numbers are not affected.</li>

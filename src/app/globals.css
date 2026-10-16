@@ -1,97 +1,93 @@
 @import "tailwindcss";
 
+/* PINGWREN THEME. Cream is the default ground; Ink sections opt in with
+   `.surface-dark`. Token NAMES are the old ones on purpose (bg, card, raised,
+   well, ink = the TEXT colour, accent...), so call sites repaint without
+   per-component hexes. Brand swatches (public/brand/README.md):
+   Ink #1B1F2A, Wren #7A4E2D, Tan #D9A47A, Cream #F6F1EA, Coral #FF5A36.
+   Every text pairing below is >= 4.5:1; borders that mark a control are
+   >= 3:1 (docs/design/website/README.md, "PingWren brand applied"). */
 :root {
-  /* PORTAL PALETTE — Uberstyle dashboard redesign (design handoff, Aug 2026;
-     tokens sourced from the design system ramp — do not invent new
-     hexes). Token NAMES are unchanged from the previous palette on purpose:
-     every existing `bg-card` / `text-ink` / `border-border` call site
-     repaints to the new skin with no per-screen edits.
+  /* Grounds: Cream page, white panels, a deeper sand for raised bands. */
+  --color-bg: #F6F1EA;
+  --color-card: #FFFFFF;
+  --color-raised: #EFE8DD;
+  --color-well: #FFFFFF;
 
-     Surfaces are the "ink" ramp: ink-900 page ground, ink-800 panels,
-     ink-700 raised chips/tracks/nav states. */
-  --color-bg: #0B0C0D;
-  --color-card: #121417;
-  --color-raised: #1A1D21;
-  /* Inset wells (form fields, QR panels, previews) — ink-850. */
-  --color-well: #0F1113;
+  /* Hairlines (decorative panel edges) and the stronger edge that marks a
+     control (inputs, secondary buttons, tabs): 3.3:1 on Cream. */
+  --color-border: rgba(27, 31, 42, 0.14);
+  --color-divider: rgba(27, 31, 42, 0.09);
+  --color-border-strong: #8C8478;
 
-  /* Borders on dark are translucent white hairlines, not solid greys:
-     panels at .07, row rules inside a panel at .05 (also read by the global
-     reset below). Hover state for a panel border is rgba(255,255,255,.16) —
-     applied per component, no token. */
-  --color-border: rgba(255, 255, 255, 0.07);
-  --color-divider: rgba(255, 255, 255, 0.05);
+  /* Text: Ink body, a softer Ink for secondary copy, a muted Ink for meta. */
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #454A57;
+  --color-ink-faint: #5F6270;
 
-  /* Text on dark: white primary/numerals, grey-300 body, grey-500 secondary
-     (eyebrows, timestamps, captions). grey-500 (#8C9296) is ~5.5:1 on
-     --color-card — clear of WCAG AA for the small meta text it carries. */
-  --color-ink: #FFFFFF;
-  --color-ink-dim: #C9CED1;
-  --color-ink-faint: #8C9296;
+  /* Accent: Coral fills (buttons, step rules, the one diagram highlight) always
+     carry Ink text (5.3:1); white on Coral is 3.1:1 and is not used. Coral is
+     not readable as small text on Cream, so accent TEXT and links are Wren
+     (6.3:1). The dark scope swaps Wren for Tan. */
+  --color-accent: #FF5A36;
+  --color-accent-ink: #1B1F2A;
+  --color-accent-text: #7A4E2D;
+  --color-focus: #1B1F2A;
 
-  /* Accent — brand Teal (teal-500), used SPARINGLY: active nav,
-     one data series, positive money, the primary CTA. Status colours below
-     are never teal. `--color-accent-ink` is the brand's own Ink swatch, the
-     text that sits ON a teal fill (8.45:1). `--color-accent-text` is the
-     teal-as-TEXT tier: teal-400 on dark, flipped to teal-700 by the
-     `.surface-light` scope below. */
-  --color-accent: #17BEB4;
-  --color-accent-ink: #0B0C0D;
-  --color-accent-text: #3ED2C7;
+  /* Status: deep, distinct hues on solid tints, text >= 5.9:1. Win is a forest
+     green, nowhere near WhatsApp's. A word always accompanies the colour. */
+  --color-win: #17663F;
+  --color-loss: #A8231B;
+  --color-warn: #7A5000;
+  --color-info: #1D5596;
+  --color-win-soft: #E3F1E8;
+  --color-loss-soft: #FBE6E3;
+  --color-warn-soft: #F8EBCC;
+  --color-info-soft: #E2ECF7;
+  --color-accent-soft: #FFE6DE;
 
-  /* Semantic status — never teal. Soft tiers are the tag/pill backgrounds
-     (translucent tints on dark; the `.surface-light` scope swaps them for
-     the design system's solid 50-level tints). */
-  --color-win: #2FBF71;
-  --color-loss: #E5484D;
-  --color-warn: #F2B23E;
-  --color-info: #3E9BEE;
-  --color-win-soft: rgba(47, 191, 113, 0.12);
-  --color-loss-soft: rgba(229, 72, 77, 0.12);
-  --color-warn-soft: rgba(242, 178, 62, 0.12);
-  --color-info-soft: rgba(62, 155, 238, 0.12);
-  --color-accent-soft: rgba(23, 190, 180, 0.12);
-
-  /* Motion — the one easing the whole portal uses. Hovers 120ms, state
-     changes 180ms, drawers 260ms. */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
-  --font-display: var(--font-chakra-petch);
-  --font-body: var(--font-barlow);
+  --font-display: var(--font-bricolage);
+  --font-body: var(--font-body-sans);
   --font-mono: var(--font-jetbrains-mono);
 }
 
 /**
- * Light-surface scope — the redesign floats its data tables (and only its
- * data tables) on a WHITE panel sitting on the dark ground. Cell renderers,
- * StatusPill and money formatting all speak in tokens (`text-ink`,
- * `bg-win-soft`, …), so rather than fork light variants of every one of
- * them, this class flips the tokens inside the panel — the same
- * scoped-custom-property mechanism. Values are the design system's
- * light pairs: grey-200 panel borders, grey-100 row rules, grey-50 row
- * hover, grey-600 tertiary text, dark status text over 50-level tint
- * backgrounds, and Deep Teal for teal-as-text.
+ * Ink scope: header, hero, feature bands, footer. Same token names, flipped to
+ * the dark half of the palette: Cream text, Tan links (the kit's "wren on
+ * dark"), Coral accent. The logo on these sections is the reverse artwork.
  */
+.surface-dark {
+  --color-bg: #1B1F2A;
+  --color-card: #242938;
+  --color-raised: #2D3345;
+  --color-well: #151823;
+  --color-border: rgba(246, 241, 234, 0.16);
+  --color-divider: rgba(246, 241, 234, 0.1);
+  --color-border-strong: #7E8290;
+  --color-ink: #F6F1EA;
+  --color-ink-dim: #D3CCC0;
+  --color-ink-faint: #A8A296;
+  --color-accent-text: #D9A47A;
+  --color-focus: #D9A47A;
+  --color-win: #6FD0A0;
+  --color-loss: #FF8F86;
+  --color-warn: #F2B23E;
+  --color-info: #86BDF2;
+  --color-win-soft: rgba(111, 208, 160, 0.14);
+  --color-loss-soft: rgba(255, 143, 134, 0.14);
+  --color-warn-soft: rgba(242, 178, 62, 0.14);
+  --color-info-soft: rgba(134, 189, 242, 0.14);
+  --color-accent-soft: rgba(255, 90, 54, 0.16);
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+}
+
+/* Legacy alias: docs and legal wrappers still say `surface-light`; it is now
+   simply the default Cream theme restated. */
 .surface-light {
-  --color-bg: #FFFFFF;
-  --color-card: #FFFFFF;
-  --color-raised: #F6F7F8;
-  --color-well: #F6F7F8;
-  --color-border: #E1E4E6;
-  --color-divider: #EDEFF0;
-  --color-ink: #0B0C0D;
-  --color-ink-dim: #1A1D21;
-  --color-ink-faint: #6E757A;
-  --color-accent-text: #0C7C76;
-  --color-win: #12805A;
-  --color-loss: #C0272C;
-  --color-warn: #8A5B08;
-  --color-info: #1F5FC4;
-  --color-win-soft: #E8F8EF;
-  --color-loss-soft: #FDECEC;
-  --color-warn-soft: #FDF4E3;
-  --color-info-soft: #EAF3FD;
-  --color-accent-soft: #E6FAF8;
+  background-color: var(--color-bg);
   color: var(--color-ink);
 }
 
@@ -102,6 +98,7 @@
   --color-well: var(--color-well);
   --color-border: var(--color-border);
   --color-divider: var(--color-divider);
+  --color-border-strong: var(--color-border-strong);
 
   --color-ink: var(--color-ink);
   --color-ink-dim: var(--color-ink-dim);
@@ -145,6 +142,8 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Bricolage Grotesque, loaded at 500 and 800 only (the logo's own rhythm:
+   "ping" 800, "wren" 500). h1/h2 take 800, smaller headings 500. */
 h1,
 h2,
 h3,
@@ -152,6 +151,15 @@ h4,
 h5,
 h6 {
   font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  font-optical-sizing: auto;
+}
+
+h1,
+h2 {
+  font-weight: 800;
+  letter-spacing: -0.025em;
 }
 
 .font-mono-nums {
@@ -160,12 +168,9 @@ h6 {
   font-feature-settings: "tnum" 1;
 }
 
-/* Thin scrollbars for dark UI — thumb is the ramp's ink-600, a solid a shade
-   above the raised surface (the hairline border tokens are now translucent
-   whites, far too faint to serve as a scrollbar). */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #23272c transparent;
+  scrollbar-color: var(--color-border-strong) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -174,7 +179,7 @@ h6 {
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: #23272c;
+  background-color: var(--color-border-strong);
   border-radius: 999px;
 }
 
@@ -182,22 +187,19 @@ h6 {
   background: transparent;
 }
 
-/* Focus is always visible: 2px teal outline at 2px offset, everywhere —
-   never outline:none. */
+/* Focus is always visible: 2px outline at 2px offset, never outline:none.
+   Ink on Cream (14.7:1), Tan on Ink (7.5:1). */
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-/* The redesign drops the old teal inner glow: dark panels carry no shadow at
-   all, and a hovered panel simply sharpens its hairline. The class stays
-   because call sites outside the shared primitives still reference it. */
 .card-glow {
   transition: border-color 120ms var(--ease-out);
 }
 
 .card-glow:hover {
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: var(--color-border-strong);
 }
 
 /* Page entrance: sections fade in and rise 12px, staggered ~60ms at the call

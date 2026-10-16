@@ -19,7 +19,7 @@ export default function FaqPage() {
   return (
     <section className="pb-12 pt-12 md:pb-20">
       <Container>
-        <h1 className="font-display text-[clamp(32px,6vw,48px)] font-bold leading-[1.15]">Frequently asked questions</h1>
+        <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">Frequently asked questions</h1>
         <FaqList entries={faqEntries(brand)} />
         <p className="mt-8 max-w-[62ch] text-ink-dim">
           Not here? The{" "}

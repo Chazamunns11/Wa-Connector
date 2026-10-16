@@ -20,7 +20,7 @@ export function generateMetadata(): Metadata {
 }
 
 const SECTION = "py-12 md:py-20";
-const BAND = "border-y bg-card";
+const BAND = "bg-raised";
 
 export default function HomePage() {
   const brand = brandConfig();
@@ -28,9 +28,9 @@ export default function HomePage() {
   const note = `Card needed up front. ${TRIAL_MAX_NUMBERS} numbers on the ${TRIAL_DAYS}-day trial. Cancel any time.`;
   return (
     <>
-      <section className="pb-12 pt-16 md:pb-20">
+      <section className="surface-dark pb-14 pt-12 md:pb-24 md:pt-20">
         <Container>
-          <h1 className="max-w-[20ch] font-display text-[clamp(32px,6vw,48px)] font-bold leading-[1.15]">
+          <h1 className="max-w-[18ch] font-display text-[clamp(36px,7.5vw,68px)] font-extrabold leading-[1.04]">
             {copy.hook.heading}
           </h1>
           <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">{copy.hook.sub}</p>
@@ -46,7 +46,7 @@ export default function HomePage() {
                 <path d="M158 75h47M355 75h47" />
                 <path d="M196 69l9 6-9 6M393 69l9 6-9 6" />
               </g>
-              <g fill="currentColor" fontFamily="Barlow, sans-serif" fontSize="14" textAnchor="middle" className="text-ink-dim">
+              <g fill="currentColor" fontSize="14" textAnchor="middle" className="text-ink-dim">
                 <text x="83" y="70">Workflow step</text>
                 <text x="83" y="90" fontSize="12">Send SMS</text>
                 <text x="280" y="70">{brand.name}</text>
@@ -62,28 +62,28 @@ export default function HomePage() {
 
       <section id="how-it-works" className={`${SECTION} scroll-mt-4`}>
         <Container>
-          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-bold leading-[1.15]">Live in three steps</h2>
+          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-extrabold leading-[1.15]">Live in three steps</h2>
           <HowItWorks steps={copy.steps} />
         </Container>
       </section>
 
-      <section className={`${SECTION} ${BAND}`}>
+      <section className={`${SECTION} surface-dark`}>
         <Container>
-          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-bold leading-[1.15]">{copy.keepWorkflows.heading}</h2>
+          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-extrabold leading-[1.15]">{copy.keepWorkflows.heading}</h2>
           <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">{copy.keepWorkflows.body}</p>
         </Container>
       </section>
 
       <section className={SECTION}>
         <Container>
-          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-bold leading-[1.15]">Built to be careful with your numbers</h2>
+          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-extrabold leading-[1.15]">Built to be careful with your numbers</h2>
           <SafetyList items={copy.safety} />
         </Container>
       </section>
 
       <section id="faq" className={`${SECTION} ${BAND} scroll-mt-4`}>
         <Container>
-          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-bold leading-[1.15]">Straight answers</h2>
+          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-extrabold leading-[1.15]">Straight answers</h2>
           <FaqList entries={faqEntries(brand)} />
         </Container>
       </section>

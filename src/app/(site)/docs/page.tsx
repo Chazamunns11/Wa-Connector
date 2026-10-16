@@ -25,7 +25,7 @@ export default function DocsIndexPage() {
     <section className="pb-12 pt-12 md:pb-20">
       <Container>
         <div className="max-w-[760px]">
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-bold leading-[1.15]">{name} docs</h1>
+          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">{name} docs</h1>
           <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
             Start with the setup guide. The rest is here when you need it.
           </p>
@@ -36,7 +36,7 @@ export default function DocsIndexPage() {
                   href={d.href}
                   className="block h-full min-h-11 rounded-lg border bg-raised p-6 transition-colors hover:border-accent-text"
                 >
-                  <span className="font-display text-lg font-semibold text-accent-text underline underline-offset-2">
+                  <span className="font-display text-lg font-medium text-accent-text underline underline-offset-2">
                     {d.title}
                   </span>
                   <span className="mt-2 block text-ink-dim">{d.text}</span>

@@ -84,7 +84,7 @@ export function SignupForm({
         {KIND_OPTIONS.map((o) => (
           <label
             key={o.value}
-            className="flex min-h-11 cursor-pointer items-start gap-3 rounded border bg-well p-3 has-[:checked]:border-accent"
+            className="flex min-h-11 cursor-pointer items-start gap-3 rounded border border-border-strong bg-well p-3 has-[:checked]:border-accent"
           >
             <input
               id={`kind-${o.value}`}

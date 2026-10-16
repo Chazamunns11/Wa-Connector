@@ -45,3 +45,25 @@ New (site-only, not in `ui/`): header/footer, FAQ accordion, schematic figure, t
 - The calculator in the drafts is static; the build needs the server-rendered fallback table (kept in the drafts) plus a small island.
 - Light `--win` (`#12805A`) on `--win-soft` (`#E8F8EF`) is about 4.48:1, just under AA for 12px chip text; consider `ink-dim` text with a win dot in the build.
 - Schematic SVG text scales with the figure, so labels fall below about 9px under 480px wide. Treat figures as illustration, with the step text carrying the meaning.
+
+## PingWren brand applied (Task 9b)
+
+The drafts above stay as history (teal on dark). The built site uses the PingWren kit (`public/brand/README.md`): Cream grounds, Ink sections (`.surface-dark`: header, home hero, the "keep your workflows" band, footer), Coral buttons with Ink text, Wren links on Cream, Tan links on Ink.
+
+### Token mapping (`src/app/globals.css`)
+
+| Token | Cream (`:root`) | Ink (`.surface-dark`) |
+|---|---|---|
+| bg / card / raised / well | #F6F1EA / #FFFFFF / #EFE8DD / #FFFFFF | #1B1F2A / #242938 / #2D3345 / #151823 |
+| ink / ink-dim / ink-faint (text) | #1B1F2A / #454A57 / #5F6270 | #F6F1EA / #D3CCC0 / #A8A296 |
+| accent / accent-ink | #FF5A36 / #1B1F2A | same |
+| accent-text (links, small accent) | #7A4E2D Wren | #D9A47A Tan |
+| border / border-strong | rgba(27,31,42,.14) / #8C8478 | rgba(246,241,234,.16) / #7E8290 |
+| focus ring | #1B1F2A | #D9A47A |
+| win / loss / warn / info | #17663F / #A8231B / #7A5000 / #1D5596 on solid tints | #6FD0A0 / #FF8F86 / #F2B23E / #86BDF2 on translucent tints |
+
+Fonts: Bricolage Grotesque 500 and 800 for headings (h1/h2 800, smaller 500). Body: Instrument Sans (replaces Barlow; a plain humanist sans that stays quiet beside Bricolage). Logo: standard on light surfaces, reverse on Ink, via `BrandMark surface`. Favicons use the file convention (`src/app/favicon.ico`, `icon.svg`, `apple-icon.png`, copies of the kit files).
+
+### Measured contrast (WCAG ratio)
+
+Ink on Cream 14.65; Ink on white 16.46; ink-dim on Cream 7.88; ink-faint on Cream 5.39, on raised 4.98; Wren on Cream 6.32, on raised 5.84, on white 7.11; Ink on Coral (buttons) 5.30; white on Coral 3.10 (not used); Coral on Cream 2.76 (never used as text). Ink scope: Cream 14.65, ink-dim 9.91, ink-faint 6.03 (4.95 on raised), Tan 7.48, Coral text 5.30. Status chips 5.99 to 6.29 (light), 7.46 to 8.79 (dark). Focus ring 14.65 (Cream), 7.48 (Ink). Control borders 3.29 (Cream), 4.30 (Ink). Every rendered text node on every page passes 4.5:1 (3:1 for large) in a computed check.

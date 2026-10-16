@@ -39,7 +39,7 @@ export default async function CheckoutPage({
         <header>
           <PreviewBadge />
         </header>
-        <h1 className="mt-4 font-display text-[clamp(28px,5vw,40px)] font-bold leading-[1.15]">Checkout</h1>
+        <h1 className="mt-4 font-display text-[clamp(28px,5vw,40px)] font-extrabold leading-[1.15]">Checkout</h1>
         <p className="mt-3 max-w-[60ch] text-lg text-ink-dim">
           This is a preview of the last step. Nothing here creates an account, sends an email or takes a card.
         </p>
@@ -47,7 +47,7 @@ export default async function CheckoutPage({
         {claim ? <p className="mt-3 text-ink-dim">You arrived from GoHighLevel.</p> : null}
         <div className="mt-8 grid gap-4">
           <Card>
-            <h2 className="font-display text-xl font-bold">Your details</h2>
+            <h2 className="font-display text-xl font-extrabold">Your details</h2>
             <dl className="mt-4 grid gap-x-3 gap-y-1 sm:grid-cols-[8rem_1fr] sm:gap-y-3">
               <dt className="text-ink-faint">Account</dt>
               <dd className="mb-2 break-words sm:mb-0">{accountName}</dd>
@@ -64,7 +64,7 @@ export default async function CheckoutPage({
           </Card>
 
           <Card>
-            <h2 className="font-display text-xl font-bold">What happens next</h2>
+            <h2 className="font-display text-xl font-extrabold">What happens next</h2>
             <ul className="mt-4 grid gap-3 text-ink-dim">
               <li>
                 <span className="font-semibold text-ink">{formatMoney(pricing.pricePerNumber, pricing.currency)}</span> per
@@ -80,7 +80,7 @@ export default async function CheckoutPage({
           </Card>
 
           <Card>
-            <h2 className="font-display text-xl font-bold">Payment</h2>
+            <h2 className="font-display text-xl font-extrabold">Payment</h2>
             <p className="mt-2 text-ink-dim">Preview — no card is taken. This form does nothing.</p>
             <form className="mt-4 grid gap-4" aria-label="Card details (preview, disabled)">
               <fieldset disabled className="grid gap-4 opacity-60">

@@ -43,7 +43,7 @@ export function SetupStep({
   return (
     <li className="grid gap-4 border-t py-6">
       <div>
-        <h3 id={headingId} className="font-display text-lg font-semibold">
+        <h3 id={headingId} className="font-display text-lg font-medium">
           <span className="mr-2 text-accent-text">{index + 1}.</span>
           {step.title}
         </h3>

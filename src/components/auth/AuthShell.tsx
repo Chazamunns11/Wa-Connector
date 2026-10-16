@@ -22,10 +22,10 @@ export function AuthShell({
     <div className="mx-auto w-full max-w-md px-4 py-10 md:py-16">
       <div className="rounded-lg border bg-card p-5 sm:p-8">
         <header className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <BrandMark size={28} />
+          <BrandMark size={36} />
           {preview ? <PreviewBadge /> : null}
         </header>
-        <h1 className="mt-6 font-display text-[28px] font-bold leading-[1.15]">{title}</h1>
+        <h1 className="mt-6 font-display text-[28px] font-extrabold leading-[1.15]">{title}</h1>
         {intro ? <div className="mt-3 text-ink-dim">{intro}</div> : null}
         <div className="mt-6">{children}</div>
       </div>
