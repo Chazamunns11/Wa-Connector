@@ -4,7 +4,7 @@
  * Run against a production build:
  *   NEXT_PUBLIC_APP_URL=http://localhost:3000 npm run build && npx next start -p 3000 &
  *   BASE_URL=http://localhost:3000 node scripts/connect-sheet-pdf.cjs
- * Uses the global Playwright install; prints the page count so you can check it is one A4 page.
+ * Uses the global Playwright install; prints the page count so you can check it is two A4 pages.
  */
 const { chromium } = require("/opt/node22/lib/node_modules/playwright");
 const { readFileSync } = require("node:fs");

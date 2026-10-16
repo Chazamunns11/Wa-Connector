@@ -549,24 +549,19 @@ launch publicly until each of these is built or the copy is changed to match:
 - **(a) Held messages while a phone is disconnected.** The site promises that
   messages are held and retried when a number is offline (reliability plan).
 - **(b) STOP opt-outs.** Honouring a contact's STOP reply (reliability plan).
-- **(c) 14-day post-cancellation cleanup.** WhatsApp credentials deleted 14
-  days after cancellation (product plan).
-- **(d) Accounts, Stripe billing, dashboard and activation (product plan).**
-  Today the website's signup, dashboard and billing screens run on preview
-  sample data.
 - **(e) Real legal text.** Replace the draft notice and the "(drafts)" label
   on the privacy, terms and related pages with reviewed legal text.
 
 Also before launch:
 
-- Confirm the launch prices in `src/lib/pricing.ts` (volume pricing in GBP: £14.99 a month per number below 10 numbers, £7.99 a month for every number at 10 or more). There is no price env var any more. Set up the matching Stripe volume-tier price before taking real payments.
+- Confirm the launch prices in `src/lib/pricing.ts` (volume pricing in GBP: £14.99 a month per number below 10 numbers, £7.99 a month for every number at 10 or more). There is no price env var any more. See GO-LIVE-ACCOUNTS.md Part 2.
 - Run a trademark search for "PingWren".
 
 ---
 
 ## Still true after first light
 
-- There is no sign-out button; clear the site cookies.
+- The account dashboard has Log out. The owner panel at /admin has none yet: clear the site cookies.
 - Use a **dedicated business number** for every location, and make sure the
   client has agreed in writing that the number will receive and be answered
   for cold inbound WhatsApp. The bridge stores every 1:1 reply; it does not

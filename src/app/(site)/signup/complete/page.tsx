@@ -20,7 +20,13 @@ export default async function SignupCompletePage({
   return (
     <AuthShell
       title="You're nearly there"
-      intro={<p>Your card is saved and your {TRIAL_DAYS}-day trial is ready. One more step: sign in.</p>}
+      intro={
+        sessionId ? (
+          <p>Your card is saved and your {TRIAL_DAYS}-day trial is ready. One more step: sign in.</p>
+        ) : (
+          <p>One more step: sign in.</p>
+        )
+      }
     >
       {sessionId ? (
         <form action={sendCompleteLinkAction} className="flex flex-col gap-4">
@@ -32,7 +38,7 @@ export default async function SignupCompletePage({
         </form>
       ) : (
         <p className="text-ink-dim">
-          Your card was saved. Request a sign-in link from the{" "}
+          If you&apos;ve just finished checkout, request a sign-in link from the{" "}
           <Link href="/login" className="font-semibold text-ink underline underline-offset-2">
             login page
           </Link>

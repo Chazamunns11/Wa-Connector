@@ -8,7 +8,7 @@
  *
  *   NEXT_PUBLIC_APP_URL=http://localhost:3000 npm run build
  *   NEXT_PUBLIC_APP_URL=http://localhost:3000 npm start &
- *   npm i --no-save axe-core@4.10.2
+ *   npm i --no-save axe-core@4.14.0
  *   NODE_PATH=/opt/node22/lib/node_modules node scripts/site-walkthrough.cjs
  *
  * For every route, at 375x812 and 1280x900:
@@ -128,7 +128,7 @@ const ROUTES = [...SITE_ROUTES.map((url) => ({ url })), ...EXTRA_ROUTES].map((r)
 
 async function main() {
   if (!fs.existsSync(AXE_PATH)) {
-    console.error(`axe-core not found at ${AXE_PATH}. Run: npm i --no-save axe-core@4.10.2`);
+    console.error(`axe-core not found at ${AXE_PATH}. Run: npm i --no-save axe-core@4.14.0`);
     process.exit(2);
   }
   const axeSource = fs.readFileSync(AXE_PATH, "utf8");

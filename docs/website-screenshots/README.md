@@ -7,13 +7,13 @@ Verification of the PingWren website at commit `574906e` (branch `claude/adoring
 ```sh
 NEXT_PUBLIC_APP_URL=http://localhost:3000 npm run build   # no price env var: pricing is a constant in src/lib/pricing.ts (W40)
 NEXT_PUBLIC_APP_URL=http://localhost:3000 npm start   # port 3000; note the PID
-npm i --no-save axe-core@4.10.2
+npm i --no-save axe-core@4.14.0
 NODE_PATH=/opt/node22/lib/node_modules PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node scripts/site-walkthrough.cjs
 ```
 
 The price figures quoted in the Task 12 and Task 13 sections below (£29, £145, £348) are the historical single price; since Task 15 the site uses volume pricing (£14.99 a number, £7.99 each at 10 or more). See the Task 17 re-run at the end for the current figures.
 
-`scripts/site-walkthrough.cjs` starts nothing itself. For every route at 375x812 and 1280x900 it asserts no horizontal scroll, the expected `<h1>` count, the expected HTTP status, no WhatsApp green (`#25D366`) in any computed colour and no image whose `src` looks like a WhatsApp logo; it captures a full-page screenshot and runs axe-core 4.10.2 (`wcag2a`, `wcag2aa`, `wcag21aa`). It exits 1 on any failure or any serious/critical axe violation and writes `a11y-report.md`.
+`scripts/site-walkthrough.cjs` starts nothing itself. For every route at 375x812 and 1280x900 it asserts no horizontal scroll, the expected `<h1>` count, the expected HTTP status, no WhatsApp green (`#25D366`) in any computed colour and no image whose `src` looks like a WhatsApp logo; it captures a full-page screenshot and runs axe-core 4.14.0 (`wcag2a`, `wcag2aa`, `wcag21aa`). It exits 1 on any failure or any serious/critical axe violation and writes `a11y-report.md`.
 
 ## Result
 
