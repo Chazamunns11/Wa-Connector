@@ -4,8 +4,7 @@ The code is built and tested. This is the operator checklist for the parts
 only a human with the accounts can do. Work top to bottom: each part feeds
 values into the next.
 
-`<Brand>` below means whatever you set `BRAND_NAME` to (default "WA
-Connector"). `<app>` means this app's public URL, for example
+`<Brand>` below means whatever you set `BRAND_NAME` to (default "PingWren"). `<app>` means this app's public URL, for example
 `https://wa.example.com`, no trailing slash. `<bridge>` means the Railway
 bridge's public URL.
 
@@ -182,7 +181,8 @@ drain instead of arriving in seconds.
    | `NEXT_PUBLIC_SUPABASE_URL` | Part 1 |
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Part 1 |
    | `SUPABASE_SERVICE_ROLE_KEY` | Part 1 |
-   | `BRAND_NAME` | `<Brand>` (optional; default "WA Connector") |
+   | `BRAND_NAME` | `<Brand>` (optional; default "PingWren") |
+   | `BRAND_PRICE_PER_NUMBER` | monthly price per number, e.g. `29` — **required for `next build` and at runtime in production** |
    | `WHATSAPP_BRIDGE_URL` | `<bridge>` (https) |
    | `WHATSAPP_BRIDGE_SECRET` | the Railway `WA_BRIDGE_SECRET` value |
    | `WHATSAPP_INBOUND_POKE_SECRET` | the Railway `WA_INBOUND_POKE_SECRET` value |
@@ -191,8 +191,9 @@ drain instead of arriving in seconds.
    | `SLACK_WEBHOOK_URL` | optional; an incoming-webhook URL for operational alerts |
 
    **The Supabase variables are required at runtime**, not just at build:
-   without them the proxy returns 500 on every request. There is no demo
-   mode.
+   without them `/admin` fails (the proxy throws for it) and sign-in cannot
+   work. Public pages (the website, `/login`, `/signup`) still render. There
+   is no demo mode.
 4. Deploy. Visit `<app>/login`; it should render. The GHL variables come in
    Part 4, then redeploy.
 
@@ -413,7 +414,9 @@ zero still applies: no secrets in screenshots you share.
    minted in `/admin`), choose connect and scan the QR with your phone:
    WhatsApp → Linked devices → Link a device. Status moves to connected.
 3. **Set the Telephony Provider.** In the sub-account: Settings → Phone
-   Numbers → Advanced Settings → SMS Provider → select `<Brand>`.
+   System → Advanced Settings → Telephony Provider → select `<Brand>`. Some
+   accounts label it Phone Numbers → SMS Provider instead; it is the same
+   setting.
 4. **Send.** Build or run a workflow with an SMS step to a contact whose
    phone is your number. It should arrive on WhatsApp within the pacing
    delay (the first send waits at least the 45 s gap plus jitter) and the
@@ -462,8 +465,15 @@ live sessions fight over one WhatsApp account.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | none | Supabase anon key (login, session refresh) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | none | Service-role key; server only |
 | `NEXT_PUBLIC_APP_URL` | Yes in production, **and for `next build`** | `http://localhost:3000` in dev only | Public base URL; `brandConfig()` throws in production without it |
-| `BRAND_NAME` | No | `WA Connector` | Product name shown to users |
+| `BRAND_NAME` | No | `PingWren` | Product name shown to users |
+| `BRAND_TAGLINE` | No | `WhatsApp for GoHighLevel` | Short descriptor next to the name |
+| `BRAND_LOGO_PATH` | No | the PingWren kit logo | Logo for light surfaces: a `/public` path or absolute URL |
+| `BRAND_LOGO_REVERSE_PATH` | No | falls back to `BRAND_LOGO_PATH`, then the kit logo | Logo for dark surfaces |
+| `BRAND_ACCENT` | No | PingWren Coral | Accent colour as hex, e.g. `#FF6B5B`; invalid values fall back to the default |
 | `BRAND_SUPPORT_EMAIL` | No | unset | Support address shown to users |
+| `BRAND_SUPPORT_WHATSAPP` | No | unset | Support WhatsApp number, E.164 |
+| `BRAND_PRICE_PER_NUMBER` | **Yes in production, at build time and at runtime** | `29` in dev only | Monthly price per WhatsApp number, a decimal in major units. Prerendered pages read it, so a missing value fails the build and the deploy. Choose the real price before launch |
+| `BRAND_CURRENCY` | No | `GBP` | ISO 4217 currency code |
 | `WHATSAPP_BRIDGE_URL` | Yes for sending | unset (sends fail closed) | `<bridge>`, https (plain http only for localhost) |
 | `WHATSAPP_BRIDGE_SECRET` | Yes for sending | unset (fail closed) | Must equal the bridge's `WA_BRIDGE_SECRET` |
 | `WHATSAPP_INBOUND_POKE_SECRET` | Yes for pokes | unset (poke routes return 503; the hourly cron still drains) | Must equal the bridge's `WA_INBOUND_POKE_SECRET`; guards both poke routes |
@@ -481,7 +491,7 @@ live sessions fight over one WhatsApp account.
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | Lifetime of signed media URLs |
 | `NODE_ENV` | Set by Vercel | n/a | Not an operator setting |
 
-That is 22 names: 21 from `src/` (including `NODE_ENV`) plus
+That is 22 foundation names (the `BRAND_*` website variables above are extra): 21 from `src/` (including `NODE_ENV`) plus
 `GHL_EMBED_FRAME_ANCESTORS` from `next.config.ts`.
 
 **Media switches, flip order.** Both media features default off and stay off
@@ -528,6 +538,29 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Storage bucket for inbound media |
 
 That is 28 variables, all read in `config.ts`.
+
+---
+
+## Go-live gates — the website promises these
+
+The marketing site, FAQ and setup guide describe the launched product. Do not
+launch publicly until each of these is built or the copy is changed to match:
+
+- **(a) Held messages while a phone is disconnected.** The site promises that
+  messages are held and retried when a number is offline (reliability plan).
+- **(b) STOP opt-outs.** Honouring a contact's STOP reply (reliability plan).
+- **(c) 14-day post-cancellation cleanup.** WhatsApp credentials deleted 14
+  days after cancellation (product plan).
+- **(d) Accounts, Stripe billing, dashboard and activation (product plan).**
+  Today the website's signup, dashboard and billing screens run on preview
+  sample data.
+- **(e) Real legal text.** Replace the draft notice and the "(drafts)" label
+  on the privacy, terms and related pages with reviewed legal text.
+
+Also before launch:
+
+- Choose the real `BRAND_PRICE_PER_NUMBER` (the `29` default is a dev value).
+- Run a trademark search for "PingWren".
 
 ---
 
