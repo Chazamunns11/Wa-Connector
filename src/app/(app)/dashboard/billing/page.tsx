@@ -8,9 +8,13 @@ import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { getAccountDataSource, parseScenario } from "@/lib/account-data";
 import { headline, planStatus } from "@/lib/account-data/derive";
+import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { formatMoney, pricingConfig, standardPrice, volumePrice, VOLUME_FROM } from "@/lib/pricing";
 import { dashboardHref } from "@/lib/site/dashboard-url";
+
+// Session-gated (requireAccountSession reads cookies): never prerendered.
+export const dynamic = "force-dynamic";
 
 export function generateMetadata(): Metadata {
   return { title: `Billing (preview) — ${brandConfig().name}`, robots: { index: false } };
@@ -23,6 +27,7 @@ export default async function BillingPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireAccountSession();
   const params = await searchParams;
   const scenario = parseScenario(params.scenario);
   const now = new Date();

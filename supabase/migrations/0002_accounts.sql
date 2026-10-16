@@ -42,7 +42,10 @@ alter table public.accounts enable row level security;
 -- NO policies, deliberately — service-role only.
 
 alter table public.profiles add column account_id uuid references public.accounts (id) on delete restrict;
-create unique index profiles_email_lower_idx on public.profiles (lower(email));
+-- Normalise any existing rows first so the plain unique index below is
+-- equivalent to a case-insensitive one (every write path lower-cases).
+update public.profiles set email = lower(trim(email));
+create unique index profiles_email_idx on public.profiles (email);
 
 alter table public.ghl_accounts add column account_id uuid references public.accounts (id) on delete restrict;
 alter table public.ghl_accounts add column activated_at timestamptz;

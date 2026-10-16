@@ -7,9 +7,13 @@ import { Container } from "@/components/site/Container";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { getAccountDataSource, parseScenario } from "@/lib/account-data";
 import { headline, needsAttention, planStatus } from "@/lib/account-data/derive";
+import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { pricingConfig } from "@/lib/pricing";
 import { billingHref, dashboardHref, parseFilter } from "@/lib/site/dashboard-url";
+
+// Session-gated (requireAccountSession reads cookies): never prerendered.
+export const dynamic = "force-dynamic";
 
 export function generateMetadata(): Metadata {
   return { title: `Dashboard (preview) — ${brandConfig().name}`, robots: { index: false } };
@@ -20,6 +24,7 @@ export default async function DashboardPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireAccountSession();
   const params = await searchParams;
   const scenario = parseScenario(params.scenario);
   const filter = parseFilter(params.filter);

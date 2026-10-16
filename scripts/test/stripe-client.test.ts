@@ -100,6 +100,18 @@ test("stripeRequest: error mapping and network failure", async () => {
   });
 });
 
+test("stripeRequest: a 2xx with a non-JSON body is a failure, not ok", async () => {
+  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_1" }, async () => {
+    const html = (async () => new Response("<html>gateway</html>", { status: 200 })) as unknown as typeof fetch;
+    assert.deepEqual(await stripeRequest("GET", "/x", {}, { fetchImpl: html }), {
+      ok: false,
+      status: 200,
+      code: null,
+      message: "Stripe returned a non-JSON response",
+    });
+  });
+});
+
 test("isStripeConfigured: needs both secret key and price id", () => {
   withEnv({ STRIPE_SECRET_KEY: undefined, STRIPE_PRICE_ID: undefined }, () => assert.equal(isStripeConfigured(), false));
   withEnv({ STRIPE_SECRET_KEY: "sk", STRIPE_PRICE_ID: undefined }, () => assert.equal(isStripeConfigured(), false));

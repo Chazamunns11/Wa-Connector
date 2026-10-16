@@ -1156,9 +1156,10 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async getProfileByEmail(email: string) {
     const supabase = getServiceClient();
-    // Every write path stores profiles.email lower-cased (normaliseEmail), so
-    // an exact match on the lower-cased input is correct and uses the
-    // profiles_email_lower_idx unique index; no LIKE metacharacters to escape.
+    // Migration 0002 lower-cases existing profiles.email and every write path
+    // stores it lower-cased (normaliseEmail), so an exact match on the
+    // lower-cased input is correct and uses the plain unique index
+    // profiles_email_idx; no LIKE metacharacters to escape.
     const { data, error } = await supabase
       .from("profiles")
       .select("id, role, account_id")

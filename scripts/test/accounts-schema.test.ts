@@ -24,7 +24,9 @@ test("profiles and ghl_accounts link to accounts", () => {
     sql,
     /alter table public\.profiles add column account_id uuid references public\.accounts \(id\) on delete restrict/
   );
-  assert.match(sql, /create unique index profiles_email_lower_idx on public\.profiles \(lower\(email\)\)/);
+  assert.match(sql, /update public\.profiles set email = lower\(trim\(email\)\);/);
+  assert.match(sql, /create unique index profiles_email_idx on public\.profiles \(email\)/);
+  assert.ok(sql.indexOf("set email = lower(trim(email))") < sql.indexOf("create unique index profiles_email_idx"));
   assert.match(
     sql,
     /alter table public\.ghl_accounts add column account_id uuid references public\.accounts \(id\) on delete restrict/

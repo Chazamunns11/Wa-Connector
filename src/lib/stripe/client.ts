@@ -84,10 +84,11 @@ export async function stripeRequest<T>(
     return { ok: false, status: 0, code: null, message: "network" };
   }
   let json: unknown = null;
+  let parsed = true;
   try {
     json = await res.json();
   } catch {
-    json = null;
+    parsed = false;
   }
   if (!res.ok) {
     const err = (json as { error?: { code?: unknown; message?: unknown } } | null)?.error;
@@ -97,6 +98,9 @@ export async function stripeRequest<T>(
       code: typeof err?.code === "string" ? err.code : null,
       message: typeof err?.message === "string" ? err.message : `HTTP ${res.status}`,
     };
+  }
+  if (!parsed) {
+    return { ok: false, status: res.status, code: null, message: "Stripe returned a non-JSON response" };
   }
   return { ok: true, data: json as T };
 }
