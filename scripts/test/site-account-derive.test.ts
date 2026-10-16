@@ -55,7 +55,7 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ ...all, state: { kind: "disconnected", waiting: 4 } })), "Disconnected — 4 messages waiting");
   assert.equal(needsAttention(row({ state: { kind: "disconnected", waiting: 1 } })), "Disconnected — 1 message waiting");
   assert.equal(needsAttention(row({ ...all, state: { kind: "waiting_qr" } })), "Waiting for QR scan");
-  assert.equal(needsAttention(row(all)), "No messages from GHL yet. Is the Telephony Provider set?");
+  assert.equal(needsAttention(row(all)), "No messages from GoHighLevel yet. Is the Telephony Provider set?");
   assert.equal(needsAttention(row({ sentToday: 150, dailyCap: 150 })), "Daily cap reached");
   assert.equal(needsAttention(row({ dailyCap: 0, sentToday: 0 })), null);
   assert.equal(needsAttention(row()), null);

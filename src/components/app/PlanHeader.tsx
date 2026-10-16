@@ -36,7 +36,7 @@ export function PlanHeader({
         <p className="font-display text-xl font-medium text-ink tabular-nums sm:text-2xl">{headline}</p>
         <div className="flex flex-wrap gap-2 sm:ml-auto">
           <Link href={SITE_ROUTES.setup} className={buttonClasses("primary", "md", "min-h-11 px-5")}>
-            {hasLocations ? "Add sub-accounts" : "Connect GHL"}
+            {hasLocations ? "Add sub-accounts" : "Connect GoHighLevel"}
           </Link>
           <Link href={billingHref} className={buttonClasses("secondary", "md", "min-h-11 px-5")}>
             Billing

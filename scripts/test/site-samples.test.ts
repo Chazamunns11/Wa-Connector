@@ -81,3 +81,10 @@ test("phone frame has a status bar and the QR is a dense deterministic grid", ()
   assert.ok(!/Math\.random|Date\.now/.test(c), "QR must be deterministic");
   assert.match(read(`${DIR}/SameReminderTwice.tsx`), /hero-delivered/);
 });
+
+test("DashboardSample's provider note is the string derive.ts prints", () => {
+  const d = readFileSync(join(process.cwd(), "src/lib/account-data/derive.ts"), "utf8");
+  const m = d.match(/"(No messages from [^"]+)"/);
+  assert.ok(m);
+  assert.ok(readFileSync(join(process.cwd(), "src/components/site/samples/DashboardSample.tsx"), "utf8").includes(m![1]));
+});

@@ -44,8 +44,28 @@ test("W34: the footnote link is a sibling of the h1, not inside it", () => {
   assert.match(p, /href="#own-result"/);
 });
 
-test("calculator input has an explicit accessible name", () => {
-  assert.match(read("src/components/site/PricingCalculator.tsx"), /aria-label="How many numbers"/);
+test("calculator label text matches its visible name (WCAG 2.5.3): no aria-label, only 'If I connect' in the label", () => {
+  const c = read("src/components/site/PricingCalculator.tsx");
+  assert.ok(!/aria-label=/.test(c));
+  const label = c.slice(c.indexOf("<label"), c.indexOf("</label>"));
+  assert.ok(!/<input/.test(label));
+  assert.match(label, /If I connect/);
+  assert.ok(!/numbers,/.test(label));
+});
+
+test("calculator note region is a static status role", () => {
+  assert.match(read("src/components/site/PricingCalculator.tsx"), /role="status"/);
+  assert.ok(!/role=\{note/.test(read("src/components/site/PricingCalculator.tsx")));
+});
+
+test("footnote link name has no stray digit", () => {
+  const p = read("src/app/(site)/page.tsx");
+  assert.match(p, /aria-label="Our own average, footnote 1"/);
+  assert.match(p, /<sup[^>]*aria-hidden="true"/);
+});
+
+test("dead rise-in CSS is gone", () => {
+  assert.ok(!/\.rise-in/.test(read("src/app/globals.css")));
 });
 
 test("connect strip does not say Connected twice", () => {
@@ -59,8 +79,12 @@ test("selected audience tab is Ink, not Coral", () => {
   assert.ok(!/bg-accent/.test(t));
 });
 
-test("SMS phone is cropped below 1024px", () => {
-  assert.match(read("src/app/globals.css"), /\.phone-sms\s*\{[^}]*height:\s*2\d\dpx/);
+test("SMS phone crop hides the composer and home bar below 1024px, restored at 1024px", () => {
+  const css = read("src/app/globals.css");
+  assert.match(css, /\.phone-sms \.phone-composer,\s*\.phone-sms \.phone-home\s*\{[^}]*display:\s*none/);
+  const wide = css.slice(css.indexOf("(min-width: 1024px) {", css.indexOf(".phone-sms .phone-home")));
+  assert.match(wide, /\.phone-sms \.phone-composer\s*\{[^}]*display:\s*flex/);
+  assert.match(wide, /\.phone-sms \.phone-home\s*\{[^}]*display:\s*block/);
 });
 
 test("how-it-works puts the sample beside the steps", () => {

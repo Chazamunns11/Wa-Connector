@@ -47,7 +47,7 @@ export function needsAttention(row: LocationRow): string | null {
     return `Disconnected — ${n} ${n === 1 ? "message" : "messages"} waiting`;
   }
   if (row.state.kind === "waiting_qr") return "Waiting for QR scan";
-  if (row.providerNudge) return "No messages from GHL yet. Is the Telephony Provider set?";
+  if (row.providerNudge) return "No messages from GoHighLevel yet. Is the Telephony Provider set?";
   if (row.activated && row.dailyCap > 0 && row.sentToday >= row.dailyCap) return "Daily cap reached";
   return null;
 }

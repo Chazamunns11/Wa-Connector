@@ -206,29 +206,6 @@ h2 {
   border-color: var(--color-border-strong);
 }
 
-/* Page entrance: sections fade in and rise 12px, staggered ~60ms at the call
-   site via animation-delay. No spring, no loops. */
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.rise-in {
-  animation: rise 620ms var(--ease-out) both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .rise-in {
-    animation: none;
-  }
-}
-
 /* ---- website ---- */
 
 /* Skip link: off-screen until focused, then pinned top-left above the header. */
@@ -467,10 +444,23 @@ h2 {
   height: 260px;
 }
 
+.phone-sms .phone-composer,
+.phone-sms .phone-home {
+  display: none;
+}
+
 @media (min-width: 1024px) {
   .phone,
   .phone-sms {
     height: 548px;
+  }
+
+  .phone-sms .phone-composer {
+    display: flex;
+  }
+
+  .phone-sms .phone-home {
+    display: block;
   }
 }
 

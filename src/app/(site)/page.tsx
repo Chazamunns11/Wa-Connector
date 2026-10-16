@@ -60,8 +60,8 @@ export default function HomePage() {
                 </span>
               </h1>
               <p className="mt-3 text-[0.9375rem]">
-                <a href="#own-result" className="inline-flex min-h-6 items-center text-accent-text underline underline-offset-2">
-                  Our own average<sup className="ml-0.5 text-xs font-bold">1</sup>
+                <a href="#own-result" aria-label="Our own average, footnote 1" className="inline-flex min-h-6 items-center text-accent-text underline underline-offset-2">
+                  Our own average<sup aria-hidden="true" className="ml-0.5 text-xs font-bold">1</sup>
                 </a>
               </p>
               <p className="mt-6 max-w-[44ch] text-[1.1875rem] leading-snug text-ink-dim md:text-[1.375rem]">{copy.heroSub}</p>

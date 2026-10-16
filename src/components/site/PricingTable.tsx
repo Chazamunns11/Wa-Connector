@@ -1,7 +1,7 @@
 import { CALCULATOR_PRESETS, formatMoney, monthlyCost, type PricingConfig } from "@/lib/pricing";
 
 /** "1 number is £29 a month, 3 numbers £87 ..." as one sentence built from the presets. */
-export function fallbackSentence(pricing: PricingConfig): string {
+function fallbackSentence(pricing: PricingConfig): string {
   const parts = CALCULATOR_PRESETS.map((n) => {
     const cost = formatMoney(monthlyCost(n, pricing.pricePerNumber), pricing.currency);
     const label = n === 1 ? "1 number is" : `${n} numbers`;
