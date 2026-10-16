@@ -9,7 +9,7 @@ function Phone({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
         Your phone
       </text>
       <text x={cx} y={y + h / 2 + 16} textAnchor="middle" fontSize={12} className="fill-ink-dim">
-        Link a Device
+        Link a device
       </text>
     </g>
   );
@@ -17,7 +17,7 @@ function Phone({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
 
 export function QrLinkDiagram() {
   const label =
-    "Diagram: the connect page shows a QR code. On your phone, WhatsApp's Link a Device screen scans it to link the number";
+    "Diagram: the connect page shows a QR code. On your phone, WhatsApp's Link a device screen scans it to link the number";
   return (
     <>
       <svg viewBox="0 0 560 170" role="img" aria-label={label} className={WIDE}>
@@ -58,7 +58,7 @@ export function QrLinkDiagram() {
           Your phone
         </text>
         <text x={150} y={282} textAnchor="middle" fontSize={12} className="fill-ink-dim">
-          Link a Device
+          Link a device
         </text>
       </svg>
     </>
