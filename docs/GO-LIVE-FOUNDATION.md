@@ -4,6 +4,9 @@ The code is built and tested. This is the operator checklist for the parts
 only a human with the accounts can do. Work top to bottom: each part feeds
 values into the next.
 
+Sign-up, Stripe billing and the dashboard have their own checklist:
+[`GO-LIVE-ACCOUNTS.md`](GO-LIVE-ACCOUNTS.md). Do this document first, then that one.
+
 `<Brand>` below means whatever you set `BRAND_NAME` to (default "PingWren"). `<app>` means this app's public URL, for example
 `https://wa.example.com`, no trailing slash. `<bridge>` means the Railway
 bridge's public URL.
