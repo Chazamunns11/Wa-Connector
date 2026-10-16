@@ -21,6 +21,7 @@ export function planStatus(account: AccountSummary, now: Date): PlanStatus {
   switch (account.billingStatus) {
     case "trialing": {
       const n = trialDaysLeft(account.trialEndsAt, now);
+      if (n === 0) return { label: "Trial ended", tone: "warn", banner: null };
       return { label: `Trial: ${n} ${n === 1 ? "day" : "days"} left`, tone: "warn", banner: null };
     }
     case "active":
@@ -47,7 +48,7 @@ export function needsAttention(row: LocationRow): string | null {
   }
   if (row.state.kind === "waiting_qr") return "Waiting for QR scan";
   if (row.providerNudge) return "No messages from GHL yet. Is the Telephony Provider set?";
-  if (row.activated && row.sentToday >= row.dailyCap) return "Daily cap reached";
+  if (row.activated && row.dailyCap > 0 && row.sentToday >= row.dailyCap) return "Daily cap reached";
   return null;
 }
 

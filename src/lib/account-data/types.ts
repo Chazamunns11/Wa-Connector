@@ -34,8 +34,10 @@ export interface BillingSummary {
   cardLast4: string | null;
   /** ISO timestamp. */
   nextInvoiceAt: string | null;
-  /** Major units, in the pricingConfig() currency. */
+  /** Major units, in `currency`. */
   nextInvoiceAmount: number | null;
+  /** ISO 4217 code of `nextInvoiceAmount` (from pricingConfig()). */
+  currency: string;
   portalAvailable: boolean;
 }
 

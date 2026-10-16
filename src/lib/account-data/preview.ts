@@ -56,7 +56,7 @@ export class PreviewAccountDataSource implements AccountDataSource {
       providerNudge: false,
       ...over,
     });
-    return [
+    const rows = [
       row({
         id: "loc-1", name: "Harbour Street Physio",
         state: { kind: "connected", number: "+44 7700 900101" },
@@ -85,6 +85,14 @@ export class PreviewAccountDataSource implements AccountDataSource {
         failedLast7Days: { count: 3, reasons: ["Daily cap reached"] },
       }),
     ];
+    // The trial includes TRIAL_MAX_NUMBERS numbers: keep the sample within it.
+    if (this.scenario !== "trial") return rows;
+    const idle = new Set(["loc-3", "loc-6"]);
+    return rows.map((r) =>
+      idle.has(r.id)
+        ? { ...r, activated: false, state: { kind: "not_active" as const }, sentToday: 0, optOuts: 0, failedLast7Days: NONE }
+        : r,
+    );
   }
 
   async getBilling(): Promise<BillingSummary> {
@@ -93,6 +101,7 @@ export class PreviewAccountDataSource implements AccountDataSource {
       cardLast4: "4242",
       nextInvoiceAt: new Date(this.now.getTime() + (this.scenario === "trial" ? 4 : 12) * DAY_MS).toISOString(),
       nextInvoiceAmount: monthlyCost(activeCount(await this.listLocations()), pricingConfig().pricePerNumber),
+      currency: pricingConfig().currency,
       portalAvailable: false,
     };
   }

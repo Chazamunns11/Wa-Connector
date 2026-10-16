@@ -10,8 +10,8 @@ const SCENARIOS: readonly PreviewScenario[] = ["trial", "active", "past_due"];
  * The one place the data source is chosen. Returns the preview source until
  * the accounts-and-billing stage replaces this function.
  */
-export function getAccountDataSource(opts?: { scenario?: PreviewScenario }): AccountDataSource {
-  return new PreviewAccountDataSource(opts?.scenario ?? "trial");
+export function getAccountDataSource(opts?: { scenario?: PreviewScenario; now?: Date }): AccountDataSource {
+  return new PreviewAccountDataSource(opts?.scenario ?? "trial", opts?.now);
 }
 
 /** Reads a ?scenario= search param; anything unknown falls back to "trial". */

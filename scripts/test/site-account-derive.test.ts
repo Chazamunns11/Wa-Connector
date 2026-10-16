@@ -36,7 +36,7 @@ test("planStatus per billing status", () => {
   const end = new Date(NOW.getTime() + 4 * day).toISOString();
   assert.deepEqual(planStatus(acct("trialing", end), NOW), { label: "Trial: 4 days left", tone: "warn", banner: null });
   assert.equal(planStatus(acct("trialing", new Date(NOW.getTime() + day).toISOString()), NOW).label, "Trial: 1 day left");
-  assert.equal(planStatus(acct("trialing", new Date(NOW.getTime() - day).toISOString()), NOW).label, "Trial: 0 days left");
+  assert.equal(planStatus(acct("trialing", new Date(NOW.getTime() - day).toISOString()), NOW).label, "Trial ended");
   assert.deepEqual(planStatus(acct("active"), NOW), { label: "Active", tone: "win", banner: null });
   assert.deepEqual(planStatus(acct("comped"), NOW), { label: "Active", tone: "win", banner: null });
   assert.deepEqual(planStatus(acct("past_due"), NOW), {
@@ -56,6 +56,7 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ ...all, state: { kind: "waiting_qr" } })), "Waiting for QR scan");
   assert.equal(needsAttention(row(all)), "No messages from GHL yet. Is the Telephony Provider set?");
   assert.equal(needsAttention(row({ sentToday: 150, dailyCap: 150 })), "Daily cap reached");
+  assert.equal(needsAttention(row({ dailyCap: 0, sentToday: 0 })), null);
   assert.equal(needsAttention(row()), null);
   assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
 });
