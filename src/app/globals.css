@@ -46,6 +46,10 @@
   --color-info-soft: #E2ECF7;
   --color-accent-soft: #FFE6DE;
 
+  /* Message bubbles are Paper with Ink text on every ground (Cream or Ink). */
+  --color-paper: #FFFFFF;
+  --color-paper-ink: #1B1F2A;
+
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   --font-display: var(--font-bricolage);
@@ -277,4 +281,102 @@ h2 {
 
 .prose-flow ol {
   list-style: decimal;
+}
+
+/* ---- message bubbles ----
+   Shape from the PingWren logo bubble: generous radius, one square-ish corner
+   on the tail side. Outgoing tails bottom-right, inbound bottom-left. */
+.bubble {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  padding: 10px 14px;
+  border: 1px solid rgba(27, 31, 42, 0.14);
+  background: var(--color-paper);
+  color: var(--color-paper-ink);
+  line-height: 1.4;
+}
+
+.bubble-out {
+  border-radius: 20px 20px 4px 20px;
+}
+
+.bubble-in {
+  border-radius: 20px 20px 20px 4px;
+}
+
+/* ---- home hero: one load sequence, about 1.2s ----
+   1 the bubble slides out from under the workflow step (150-700ms)
+   2 a Coral dot pings on its tail corner (700-1200ms)
+   3 "Delivered" and the reply arrive (850-1200ms)
+   Final state is the default style, so reduced motion simply drops the
+   animations and shows the finished frame. */
+@keyframes hero-land {
+  from {
+    opacity: 0;
+    transform: translateY(-88px) scale(0.86);
+  }
+  35% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes hero-ping-ring {
+  from {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(3);
+  }
+}
+
+@keyframes hero-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hero-bubble {
+  animation: hero-land 550ms var(--ease-out) 150ms both;
+}
+
+.hero-ping::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--color-accent);
+  animation: hero-ping-ring 500ms ease-out 700ms both;
+}
+
+.hero-ping {
+  animation: hero-fade-up 200ms var(--ease-out) 650ms both;
+}
+
+.hero-late {
+  animation: hero-fade-up 320ms var(--ease-out) 880ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-bubble,
+  .hero-ping,
+  .hero-ping::after,
+  .hero-late {
+    animation: none;
+  }
+
+  .hero-ping::after {
+    display: none;
+  }
 }
