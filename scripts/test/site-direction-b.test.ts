@@ -81,3 +81,94 @@ test("chrome: header is coral, footer is Ink, Cta and forms use the site pills",
   assert.match(docs, /slab/);
   assert.ok(!docs.includes("rounded-lg border bg-raised"));
 });
+
+// ---- Task 14B: home page in Direction B ----
+
+test("14B home page: grounds run coral, dark, coral, slab, mist, coral", () => {
+  const p = read("src/app/(site)/page.tsx");
+  const order = ["surface-coral", "surface-dark", "surface-coral", "slab slab-lift", "bg-raised", "surface-coral"];
+  let at = -1;
+  for (const token of order) {
+    const i = p.indexOf(token, at + 1);
+    assert.ok(i > at, `${token} out of order`);
+    at = i;
+  }
+  assert.ok(!p.includes("section-rule"));
+  assert.ok(p.indexOf("bg-raised") > p.indexOf("slab slab-lift"), "bg-raised only on the FAQ band");
+  const heroSection = p.slice(p.indexOf("<section"), p.indexOf("</section>"));
+  assert.match(heroSection, /surface-coral/);
+  const h1 = p.slice(p.indexOf("<h1"), p.indexOf("</h1>"));
+  assert.match(h1, /hero-big/);
+  assert.ok(p.indexOf('id="own-result"') > p.indexOf("<ReminderResearch"));
+  assert.match(p, /<HowItWorks steps=\{copy\.setup\.steps\} \/>/);
+  assert.ok(!/aside=/.test(p));
+  assert.match(p, /<CustomerResults/);
+  assert.match(p, /<SafetyThread items=\{copy\.safety\}/);
+  assert.ok(!/Clients read WhatsApp/.test(p));
+  assert.ok(!/copy\.safetyIntro/.test(p), "safetyIntro is not rendered (W37)");
+});
+
+test("14B HowItWorks: giant numerals, path chip, no aside", () => {
+  const h = read("src/components/site/HowItWorks.tsx");
+  assert.match(h, /step-num/);
+  assert.match(h, /path-chip/);
+  assert.match(h, /s\.path/);
+  assert.match(h, /aria-hidden="true"/);
+  assert.ok(!/aside/.test(h));
+  assert.ok(!/lg:grid-cols-\[/.test(h));
+});
+
+test("14B SafetyThread: ruled rows, no bubbles", () => {
+  const s = read("src/components/site/SafetyThread.tsx");
+  assert.match(s, /className="rules"/);
+  assert.match(s, /\[paced, held, stop\] = items/);
+  assert.match(s, /note\.title/);
+  assert.ok(!/bubble/.test(s));
+  assert.ok(!/<ol/.test(s));
+});
+
+test("14B DashboardSample: the board, with the pinned strings kept", () => {
+  const d = read("src/components/site/samples/DashboardSample.tsx");
+  for (const c of ["board", "board-top", "pill-sample", "Sample", "meter", "dot", "attn"]) assert.ok(d.includes(c), c);
+  assert.ok(!/import \{[^}]*Chip/.test(d));
+});
+
+test("14B SameReminderTwice: two phones are direct children of .phones", () => {
+  const t = read("src/components/site/samples/SameReminderTwice.tsx");
+  const wrap = t.slice(t.indexOf("className=\"phones\""));
+  const inner = wrap.slice(0, wrap.indexOf("<figcaption"));
+  assert.equal((inner.match(/<PhoneFrame/g) ?? []).length, 2);
+  assert.ok(t.includes("Sample messages. Sam is made up."));
+});
+
+test("14B globals.css: hero-rise only under no-preference, reduced motion lists the phones, no SMS crop", () => {
+  const css = read("src/app/globals.css");
+  const npIdx = css.indexOf("@media (prefers-reduced-motion: no-preference)");
+  assert.ok(npIdx >= 0);
+  const kf = css.indexOf("@keyframes hero-rise");
+  assert.ok(kf > npIdx);
+  // keyframes sits inside a no-preference block: nearest preceding @media is no-preference
+  assert.equal(css.lastIndexOf("@media", kf), css.lastIndexOf("@media (prefers-reduced-motion: no-preference)", kf));
+  const reduced = css.split("@media (prefers-reduced-motion: reduce)").slice(1).join("\n");
+  assert.match(reduced, /\.phones \.phone/);
+  assert.ok(!/height:\s*260px/.test(css));
+  assert.ok(!/\.phone-sms \.phone-composer,\s*\.phone-sms \.phone-home\s*\{[^}]*display:\s*none/.test(css));
+  assert.match(css, /\.phones > \.phone:nth-child\(1\)\s*\{[^}]*rotate\(-4deg\)/);
+});
+
+test("14B sales-copy: step 2 carries the path chip; sampleCaption gone; other strings untouched", async () => {
+  const { salesCopy } = await import("../../src/lib/site/sales-copy.ts");
+  const c = salesCopy({ name: "PingWren" } as never);
+  assert.equal(c.setup.steps[1].path, "Settings → Phone System → Advanced Settings → Telephony Provider");
+  assert.ok(!c.setup.steps[1].body.includes("Phone System"));
+  assert.equal(c.setup.steps[0].path, undefined);
+  assert.equal(c.setup.steps[2].path, undefined);
+  assert.ok(!("sampleCaption" in c.setup));
+  assert.equal(
+    c.heroSub,
+    "PingWren takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.",
+  );
+  assert.equal(c.faqAllLink, "All the questions, on one page");
+  assert.equal(c.priceStrip.terms, "The 7-day trial covers up to 3 numbers. We take a card up front, and you can cancel any time from the billing portal.");
+  assert.ok(c.safety[0].body.startsWith("Messages leave at a steady rate"));
+});

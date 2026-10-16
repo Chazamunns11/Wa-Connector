@@ -79,16 +79,4 @@ test("selected audience tab is Ink, not Coral", () => {
   assert.ok(!/bg-accent/.test(t));
 });
 
-test("SMS phone crop hides the composer and home bar below 1024px, restored at 1024px", () => {
-  const css = read("src/app/globals.css");
-  assert.match(css, /\.phone-sms \.phone-composer,\s*\.phone-sms \.phone-home\s*\{[^}]*display:\s*none/);
-  const wide = css.slice(css.indexOf("(min-width: 1024px) {", css.indexOf(".phone-sms .phone-home")));
-  assert.match(wide, /\.phone-sms \.phone-composer\s*\{[^}]*display:\s*flex/);
-  assert.match(wide, /\.phone-sms \.phone-home\s*\{[^}]*display:\s*block/);
-});
-
-test("how-it-works puts the sample beside the steps", () => {
-  const h = read("src/components/site/HowItWorks.tsx");
-  assert.match(h, /lg:grid-cols-\[/);
-  assert.ok(!/mt-8">\{aside\}/.test(h));
-});
+// Task 14: Direction B. The SMS crop test and the 'sample beside the steps' test are deleted: both phones are full height and the home page has no connect sample.

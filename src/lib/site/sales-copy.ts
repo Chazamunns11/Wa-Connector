@@ -7,11 +7,11 @@ export interface SalesCopy {
   setup: {
     heading: string;
     lead: string;
-    steps: { title: string; body: string }[];
-    sampleCaption: string;
+    steps: { title: string; body: string; path?: string }[];
   };
   afterwards: { heading: string; body: string; caption: string };
   safetyHeading: string;
+  /** Not rendered on the home page since Direction B (W37); kept for the tests and the docs. */
   safetyIntro: string;
   safety: { title: string; body: string }[];
   disclosure: { heading: string; paragraphs: [string, string, string] };
@@ -45,14 +45,14 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
         },
         {
           title: "Set the Telephony Provider",
-          body: `In the sub-account, go to Settings → Phone System → Advanced Settings → Telephony Provider, choose ${name} and save. This is the step people miss, and until it's done a connected number sends nothing.`,
+          body: `In the sub-account, open the path below, choose ${name} as the provider and save. This is the step people miss, and until it's done a connected number sends nothing.`,
+          path: "Settings → Phone System → Advanced Settings → Telephony Provider",
         },
         {
           title: "Scan the QR code",
           body: `Open the ${name} page in the left menu, click Connect WhatsApp and scan the code with the phone, the same way you'd link WhatsApp Web. When the status says Connected, you're sending.`,
         },
       ],
-      sampleCaption: "Sample screen: the connect page inside GoHighLevel.",
     },
     afterwards: {
       heading: "What you look at afterwards",

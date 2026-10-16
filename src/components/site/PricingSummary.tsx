@@ -1,29 +1,26 @@
 import Link from "next/link";
-import { Cta } from "@/components/site/Cta";
-import { formatMoney, pricingConfig } from "@/lib/pricing";
+import { siteButton } from "@/components/site/button";
 import { SITE_ROUTES } from "@/lib/site/routes";
+import { formatMoney, pricingConfig } from "@/lib/pricing";
 
-/** The closing price strip, on Ink. The price is set large; the terms are one plain sentence. */
+/** The closing price strip, on the coral ground: the price as the headline, one plain terms line, an Ink pill. */
 export function PricingSummary({ ctaLabel, terms }: { ctaLabel: string; terms: string }) {
   const pricing = pricingConfig();
   return (
-    <div className="flex flex-wrap items-end justify-between gap-x-12 gap-y-8">
-      <div className="max-w-[46ch]">
-        <p className="flex flex-wrap items-baseline gap-x-4">
-          <span className="font-display text-[3.8125rem] font-extrabold leading-none tracking-[-0.04em] [font-variant-numeric:tabular-nums]">
-            {formatMoney(pricing.pricePerNumber, pricing.currency)}
-          </span>
-          <span className="text-xl">per WhatsApp number, per month</span>
-        </p>
-        <p className="mt-4 text-ink-dim">{terms}</p>
-      </div>
+    <div className="flex flex-wrap items-center justify-between gap-x-12 gap-y-8">
       <div>
-        <Cta label={ctaLabel} />
-        <p className="mt-2">
-          <Link href={SITE_ROUTES.pricing} className="inline-flex min-h-11 items-center text-accent-text underline underline-offset-2">
-            See the full pricing
-          </Link>
-        </p>
+        <h2 className="price-h2 font-display font-extrabold">
+          {formatMoney(pricing.pricePerNumber, pricing.currency)} per WhatsApp number, per month
+        </h2>
+        <p className="mt-3.5 max-w-[52ch] font-medium">{terms}</p>
+      </div>
+      <div className="btn-stack flex-col items-start sm:items-end">
+        <Link href={SITE_ROUTES.signup} className={siteButton("ink")}>
+          {ctaLabel}
+        </Link>
+        <Link href={SITE_ROUTES.pricing} className="inline-flex min-h-11 items-center font-semibold underline underline-offset-2">
+          See the full pricing
+        </Link>
       </div>
     </div>
   );

@@ -1,28 +1,21 @@
-import type { ReactNode } from "react";
-
 /**
- * The three steps as a vertical timeline (a Wren line with the steps hanging
- * off it). From 1024px the connect sample sits beside the steps, so neither
- * side leaves a hole. Numbers stay because this really is a sequence.
+ * The three steps as three columns, each under a 3px Coral rule with a giant
+ * Coral numeral (Direction B). Numbers stay because this really is a sequence.
+ * Step 2 carries the GoHighLevel path as a chip.
  */
-export function HowItWorks({ steps, aside }: { steps: { title: string; body: string }[]; aside?: ReactNode }) {
+export function HowItWorks({ steps }: { steps: { title: string; body: string; path?: string }[] }) {
   return (
-    <div className="mt-12 grid gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] lg:items-start lg:gap-16">
-      <ol className="grid list-none p-0">
-        {steps.map((s, i) => (
-          <li key={s.title} className="relative border-l-2 border-rule pb-12 pl-8 last:pb-0">
-            <span
-              aria-hidden="true"
-              className="absolute -left-[17px] top-0 flex h-8 w-8 items-center justify-center rounded bg-bg font-display text-lg font-extrabold ring-2 ring-rule"
-            >
-              {i + 1}
-            </span>
-            <h3 className="font-display text-[1.375rem] font-medium leading-tight tracking-[-0.015em] md:text-[1.5625rem]">{s.title}</h3>
-            <p className="mt-3 max-w-[40ch] text-ink-dim">{s.body}</p>
-          </li>
-        ))}
-      </ol>
-      {aside ? <div>{aside}</div> : null}
-    </div>
+    <ol className="mt-10 grid list-none grid-cols-1 gap-0 p-0 min-[901px]:grid-cols-3 md:mt-16">
+      {steps.map((s) => (
+        <li key={s.title} className="border-t-[3px] border-rule pb-2 pr-7 pt-7 min-[901px]:mr-7 min-[901px]:last:mr-0 max-[900px]:mb-6">
+          <span aria-hidden="true" className="step-num">
+            {steps.indexOf(s) + 1}
+          </span>
+          <h3 className="mb-2.5 text-[1.35rem] leading-[1.1]">{s.title}</h3>
+          <p className="max-w-[40ch] text-ink-dim">{s.body}</p>
+          {s.path ? <span className="path-chip">{s.path}</span> : null}
+        </li>
+      ))}
+    </ol>
   );
 }

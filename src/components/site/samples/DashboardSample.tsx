@@ -1,5 +1,3 @@
-import { Chip, type ChipTone } from "@/components/ui/Chip";
-import { buttonClasses } from "@/components/ui/Button";
 import { brandConfig } from "@/lib/brand-config";
 
 /**
@@ -10,9 +8,10 @@ import { brandConfig } from "@/lib/brand-config";
  */
 interface Row {
   name: string;
-  chip: { tone: ChipTone; label: string };
+  status: { on: boolean; label: string };
   number?: string;
   sent: string;
+  pct: number;
   note?: { text: string; tone: "warn" | "none" };
   action?: string;
 }
@@ -20,27 +19,31 @@ interface Row {
 const ROWS: Row[] = [
   {
     name: "Harbour Street Physio",
-    chip: { tone: "win", label: "Connected" },
+    status: { on: true, label: "Connected" },
     number: "+44 7700 900101",
     sent: "42 / 150",
+    pct: 28,
   },
   {
     name: "Millbrook Vets",
-    chip: { tone: "loss", label: "Disconnected · 4 waiting" },
+    status: { on: false, label: "Disconnected · 4 waiting" },
     sent: "18 / 150",
+    pct: 12,
     note: { text: "Disconnected — 4 messages waiting", tone: "warn" },
     action: "Reconnect",
   },
   {
     name: "Fernbank Dental",
-    chip: { tone: "win", label: "Connected" },
+    status: { on: true, label: "Connected" },
     number: "+44 7700 900102",
     sent: "0 / 150",
+    pct: 0,
     note: { text: "No messages from GoHighLevel yet. Is the Telephony Provider set?", tone: "warn" },
   },
 ];
 
-const GRID = "md:grid md:grid-cols-[minmax(0,1.15fr)_minmax(0,1.6fr)_minmax(0,0.75fr)_minmax(0,1.4fr)] md:items-start md:gap-4";
+const GRID = "sm:grid sm:grid-cols-[minmax(0,1.15fr)_minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1.4fr)] sm:items-start sm:gap-4";
+const L = "text-sm font-semibold text-ink-dim sm:hidden";
 
 export function DashboardSample() {
   const { name } = brandConfig();
@@ -48,28 +51,45 @@ export function DashboardSample() {
 
   return (
     <div role="img" aria-label={label} className="w-full">
-      <div aria-hidden="true" className="sample-chrome overflow-hidden">
-        <div className="hidden border-b bg-raised px-5 py-3 text-sm text-ink-faint md:grid md:grid-cols-[minmax(0,1.15fr)_minmax(0,1.6fr)_minmax(0,0.75fr)_minmax(0,1.4fr)] md:gap-4">
+      <div aria-hidden="true" className="board">
+        <div className="board-top">
+          <span>Sub-accounts</span>
+          <span className="pill-sample">Sample</span>
+        </div>
+        <div className={`hidden border-b-2 border-rule px-5 py-3.5 text-[0.9rem] font-semibold text-ink-dim ${GRID}`}>
           <span>Sub-account</span>
-          <span>WhatsApp</span>
+          <span>WhatsApp status</span>
           <span>Sent today</span>
           <span>Needs attention</span>
         </div>
-        <ul className="divide-y divide-divider">
+        <ul className="m-0 list-none p-0">
           {ROWS.map((r) => (
-            <li key={r.name} className={`grid gap-2 px-4 py-4 md:px-5 ${GRID}`}>
-              <p className="font-semibold">{r.name}</p>
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <Chip tone={r.chip.tone}>{r.chip.label}</Chip>
-                {r.number ? <span className="font-mono-nums text-sm text-ink-dim">{r.number}</span> : null}
+            <li key={r.name} className={`grid gap-1.5 border-b border-border px-5 py-4 last:border-b-0 ${GRID}`}>
+              <div>
+                <span className={L}>Sub-account</span>
+                <p className="font-medium">{r.name}</p>
               </div>
-              <p className="text-sm text-ink-dim tabular-nums">
-                <span className="text-ink-faint md:hidden">Sent today </span>
-                {r.sent}
-              </p>
+              <div>
+                <span className={L}>WhatsApp status</span>
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold">
+                  <i className={`dot${r.status.on ? "" : " dot-off"}`} />
+                  {r.status.label}
+                </p>
+                {r.number ? <p className="font-mono-nums mt-0.5 text-sm text-ink-dim">{r.number}</p> : null}
+              </div>
+              <div>
+                <span className={L}>Sent today</span>
+                <p className="flex items-center gap-2.5 font-medium tabular-nums">
+                  <span className="whitespace-nowrap">{r.sent}</span>
+                  <span className="meter flex-1">
+                    <i style={{ width: `${r.pct}%` }} />
+                  </span>
+                </p>
+              </div>
               <div className="flex flex-col items-start gap-2">
-                {r.note ? <p className="text-sm font-medium text-warn">{r.note.text}</p> : <p className="text-sm text-ink-faint">Nothing to do</p>}
-                {r.action ? <span className={buttonClasses("secondary", "sm")}>{r.action}</span> : null}
+                <span className={L}>Needs attention</span>
+                {r.note ? <p className="text-sm font-semibold">{r.note.text}</p> : <p className="text-sm font-medium">Nothing to do</p>}
+                {r.action ? <span className="attn">{r.action}</span> : null}
               </div>
             </li>
           ))}

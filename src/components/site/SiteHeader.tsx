@@ -28,13 +28,13 @@ export function SiteHeader() {
               Log in
             </Link>
           </span>
-          <Link href={SITE_ROUTES.signup} className={siteButton("ink", "btn-sm")}>
+          <Link href={SITE_ROUTES.signup} className={siteButton("ink", "btn-sm max-[420px]:!px-3")}>
             <span className="whitespace-nowrap">
               Start <span className="max-sm:hidden">7-day </span>free trial
             </span>
           </Link>
           <details className="group md:hidden">
-            <summary className="inline-flex min-h-11 cursor-pointer list-none items-center rounded-full border-2 border-border-strong px-4 font-semibold text-ink [&::-webkit-details-marker]:hidden">
+            <summary className="inline-flex min-h-11 cursor-pointer list-none items-center rounded-full border-2 border-border-strong px-3 font-semibold min-[420px]:px-4 text-ink [&::-webkit-details-marker]:hidden">
               Menu
             </summary>
             {/* Full width of the header, not a narrow popover. */}

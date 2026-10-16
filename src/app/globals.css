@@ -327,7 +327,7 @@ h2 {
 }
 
 .hero-bubble {
-  animation: hero-land 450ms var(--ease-out) 150ms both;
+  animation: hero-land 450ms var(--ease-out) 750ms both;
 }
 
 .hero-ping::after {
@@ -336,11 +336,11 @@ h2 {
   inset: 0;
   border-radius: 999px;
   background: var(--color-accent);
-  animation: hero-ping-ring 500ms ease-out 650ms both;
+  animation: hero-ping-ring 500ms ease-out 1250ms both;
 }
 
 .hero-ping {
-  animation: hero-fade-up 200ms var(--ease-out) 650ms both;
+  animation: hero-fade-up 200ms var(--ease-out) 1250ms both;
 }
 
 /* "Delivered" fades in on its own at 600ms (REDESIGN section 7); the reply follows at 950ms. */
@@ -354,11 +354,11 @@ h2 {
 }
 
 .hero-delivered {
-  animation: hero-fade 200ms var(--ease-out) 600ms both;
+  animation: hero-fade 200ms var(--ease-out) 1200ms both;
 }
 
 .hero-late {
-  animation: hero-fade-up 350ms var(--ease-out) 950ms both;
+  animation: hero-fade-up 350ms var(--ease-out) 1550ms both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -366,7 +366,8 @@ h2 {
   .hero-ping,
   .hero-ping::after,
   .hero-delivered,
-  .hero-late {
+  .hero-late,
+  .phones .phone {
     animation: none;
   }
 
@@ -423,7 +424,6 @@ h2 {
   flex-direction: column;
   width: 100%;
   max-width: 272px;
-  height: 410px;
   padding: 9px;
   border-radius: 40px;
   --color-ink: #1B1F2A;
@@ -436,32 +436,6 @@ h2 {
   box-shadow:
     0 0 0 1.5px #4A5163,
     0 32px 56px -28px rgba(0, 0, 0, 0.7);
-}
-
-/* Below 1024px the SMS phone is cropped to its top: the reminder and the
-   stamp, not 250px of empty thread. */
-.phone-sms {
-  height: 260px;
-}
-
-.phone-sms .phone-composer,
-.phone-sms .phone-home {
-  display: none;
-}
-
-@media (min-width: 1024px) {
-  .phone,
-  .phone-sms {
-    height: 548px;
-  }
-
-  .phone-sms .phone-composer {
-    display: flex;
-  }
-
-  .phone-sms .phone-home {
-    display: block;
-  }
 }
 
 .phone-island {
@@ -577,8 +551,9 @@ h2 {
 
 /* Browser-ish chrome around a sample app screen. */
 .sample-chrome {
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border: 3px solid var(--color-ink);
+  border-radius: 20px;
+  overflow: hidden;
   background: var(--color-card);
   color: var(--color-ink);
 }
@@ -945,8 +920,8 @@ h3 {
 }
 
 /* ---- phones, restyled for B (class names unchanged) ----
-   Both full height at every width: the earlier SMS crop rules are overridden
-   here (Task 14B deletes them). Hard offset shadow, no soft blur. */
+   Both full height at every width (the SMS crop rules are gone, Task 14B).
+   Hard offset shadow, no soft blur. */
 .phone {
   width: clamp(158px, 22vw, 300px);
   max-width: none;
@@ -960,18 +935,6 @@ h3 {
   box-shadow: 0 30px 0 -12px rgba(27, 31, 42, 0.18);
 }
 
-.phone-sms {
-  height: auto;
-}
-
-.phone-sms .phone-composer {
-  display: flex;
-}
-
-.phone-sms .phone-home {
-  display: block;
-}
-
 .phone-screen {
   min-height: clamp(340px, 46vw, 580px);
   border-radius: 26px;
@@ -979,6 +942,7 @@ h3 {
 
 .phones {
   position: relative;
+  margin: 0;
   z-index: 3;
   display: flex;
   align-items: flex-start;
@@ -999,5 +963,102 @@ h3 {
   .phones {
     margin-top: 24px;
     transform: translateY(110px);
+  }
+}
+
+/* ---- Task 14B: home page ----
+   The one orchestrated moment: both phones rise first (0-600ms), then the
+   bubble, Delivered, the ping and the reply follow (750-1900ms). `translate`
+   is its own property, so the tilt transforms are untouched. Inside
+   no-preference, so the finished frame renders straight away otherwise. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes hero-rise {
+    from {
+      opacity: 0;
+      translate: 0 60px;
+    }
+    to {
+      opacity: 1;
+      translate: 0 0;
+    }
+  }
+
+  .phones .phone {
+    animation: hero-rise 600ms var(--ease-out) both;
+  }
+
+  .phones .phone:nth-child(2) {
+    animation-delay: 120ms;
+  }
+}
+
+.hero-big {
+  display: block;
+  margin: 0.06em 0 0.02em -0.04em;
+  font-size: clamp(6.5rem, 22vw, 17.5rem);
+  line-height: 0.8;
+  letter-spacing: -0.06em;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-h1 {
+  max-width: 15ch;
+  font-size: clamp(2.1rem, 4.6vw, 4.1rem);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+}
+
+.phones-cap {
+  position: absolute;
+  right: 0;
+  bottom: -64px;
+  left: 0;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #1B1F2A;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+  gap: 0 24px;
+  padding-top: clamp(24px, 5vw, 64px);
+}
+
+.why-pad {
+  padding-top: clamp(180px, 25vw, 340px);
+}
+
+.h2-b {
+  font-size: clamp(2.1rem, 5.2vw, 4rem);
+  line-height: 0.98;
+  letter-spacing: -0.025em;
+}
+
+.price-h2 {
+  max-width: 14ch;
+  font-size: clamp(2.2rem, 6vw, 5rem);
+  line-height: 0.95;
+  letter-spacing: -0.025em;
+}
+
+@media (min-width: 901px) {
+  .rules > li {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-h1 {
+    max-width: none;
+  }
+
+  .why-pad {
+    padding-top: 230px;
   }
 }

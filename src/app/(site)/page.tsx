@@ -9,7 +9,6 @@ import { HowItWorks } from "@/components/site/HowItWorks";
 import { PricingSummary } from "@/components/site/PricingSummary";
 import { ReminderResearch } from "@/components/site/ReminderResearch";
 import { SafetyThread } from "@/components/site/SafetyThread";
-import { ConnectPanelSample } from "@/components/site/samples/ConnectPanelSample";
 import { DashboardSample } from "@/components/site/samples/DashboardSample";
 import { SameReminderTwice } from "@/components/site/samples/SameReminderTwice";
 import { brandConfig } from "@/lib/brand-config";
@@ -26,17 +25,15 @@ export function generateMetadata(): Metadata {
   };
 }
 
-const SECTION = "py-16 md:py-28";
-const H2 = "font-display text-[1.9375rem] font-extrabold leading-[1.1] tracking-[-0.03em] md:text-[2.4375rem]";
-/** Section opener: the Wren rule is the section device, so every section starts with it. */
-const RULE = "section-rule";
-const SPLIT = "grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)] lg:gap-16";
+const H2 = "h2-b font-display font-extrabold";
+const BAND = "band";
+const GAP = "gap-[clamp(24px,5vw,80px)]";
 
 function Sample({ caption, children }: { caption: string; children: ReactNode }) {
   return (
-    <figure>
+    <figure className="m-0">
       {children}
-      <figcaption className="mt-3 text-[0.9375rem] text-ink-faint">{caption}</figcaption>
+      <figcaption className="mt-3 text-[0.95rem] font-medium">{caption}</figcaption>
     </figure>
   );
 }
@@ -48,137 +45,114 @@ export default function HomePage() {
   const home = faqEntries(brand).filter((e) => (HOME_FAQ_IDS as readonly string[]).includes(e.id));
   return (
     <>
-      <section className="surface-dark pb-16 pt-12 md:pb-20 md:pt-14 lg:pb-16">
+      <section className="surface-coral pb-0">
         <Container>
-          <div className="grid items-start gap-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.08fr)] lg:gap-12">
+          <div className="hero-grid">
             <div>
-              <h1 className="font-display text-[2.4375rem] font-extrabold leading-[1.04] tracking-[-0.035em] lg:text-[3.25rem]">
-                <span className="block">{result.headingLead}</span>{" "}
-                <span className="mt-2 block">{result.headingTail}</span>{" "}
-                <span className="block text-[3.5rem] leading-[0.95] tracking-[-0.04em] [font-variant-numeric:tabular-nums] md:text-[6rem]">
-                  {result.after}
-                </span>
+              <h1 className="hero-h1 font-display font-extrabold">
+                {result.headingLead} {result.headingTail} <span className="hero-big">{result.after}</span>
               </h1>
-              <p className="mt-3 text-[0.9375rem]">
-                <a href="#own-result" aria-label="Our own average, footnote 1" className="inline-flex min-h-6 items-center text-accent-text underline underline-offset-2">
+              <p className="mt-1.5 text-[0.95rem] font-semibold">
+                <a href="#own-result" aria-label="Our own average, footnote 1" className="inline-flex min-h-6 items-center underline underline-offset-2">
                   Our own average<sup aria-hidden="true" className="ml-0.5 text-xs font-bold">1</sup>
                 </a>
               </p>
-              <p className="mt-6 max-w-[44ch] text-[1.1875rem] leading-snug text-ink-dim md:text-[1.375rem]">{copy.heroSub}</p>
-              <div className="mt-8">
-                <Cta label={copy.ctaLabel} secondary={{ href: SITE_ROUTES.setup, label: "Read the setup guide" }} note={copy.ctaNote} />
+              <p className="mt-7 max-w-[46ch] text-[clamp(1.1rem,1.6vw,1.3rem)] font-medium leading-[1.45]">{copy.heroSub}</p>
+              <div className="mt-7">
+                <Cta onCoral label={copy.ctaLabel} secondary={{ href: SITE_ROUTES.setup, label: "Read the setup guide" }} note={copy.ctaNote} />
               </div>
-              <p id="own-result" className="mt-10 max-w-[48ch] scroll-mt-6 border-t-2 border-rule pt-4 text-sm text-ink-faint md:text-[0.9375rem]">
+            </div>
+            <div className="relative z-[3] max-[900px]:mt-6">
+              <SameReminderTwice />
+            </div>
+          </div>
+        </Container>
+      </section>
+
+      <section className={`why-pad ${BAND}`}>
+        <Container>
+          <div className={`grid items-start ${GAP} min-[901px]:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]`}>
+            <h2 className={`${H2} max-w-[11ch]`}>{copy.why.heading}</h2>
+            <div>
+              <p className="max-w-[62ch] text-[1.3rem] font-medium leading-[1.4]">{copy.why.paragraphs[0]}</p>
+              <p className="mt-4 max-w-[62ch]">{copy.why.paragraphs[1]}</p>
+              <div className="mt-8 border-t-2 border-rule pt-4">
+                <ReminderResearch />
+              </div>
+              <p id="own-result" className="mt-6 max-w-[56ch] scroll-mt-6 border-t-2 border-rule pt-4 text-[0.95rem]">
                 <span aria-hidden="true">1 </span>
                 {result.note}
               </p>
             </div>
-            <SameReminderTwice />
           </div>
         </Container>
       </section>
 
-      <section className={SECTION}>
+      <section id="how-it-works" className={`surface-dark ${BAND} scroll-mt-4`}>
         <Container>
-          <div className={RULE}>
-            <div className={SPLIT}>
-              <h2 className={H2}>{copy.why.heading}</h2>
-              <div className="grid gap-10 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:gap-12">
-                <div className="grid max-w-[62ch] gap-5 text-lg">
-                  {copy.why.paragraphs.map((p) => (
-                    <p key={p}>{p}</p>
-                  ))}
-                </div>
-                <div className="border-t-2 border-rule pt-4 xl:border-l-2 xl:border-t-0 xl:pl-6 xl:pt-0">
-                  <ReminderResearch />
-                </div>
-              </div>
-            </div>
-          </div>
+          <h2 className={`${H2} max-w-[14ch]`}>{copy.setup.heading}</h2>
+          <p className="mt-4 max-w-[52ch] text-xl text-ink-dim">{copy.setup.lead}</p>
+          <HowItWorks steps={copy.setup.steps} />
         </Container>
       </section>
 
-      <section id="how-it-works" className={`${SECTION} scroll-mt-4 pt-0 md:pt-0`}>
+      <section className={BAND}>
         <Container>
-          <div className={RULE}>
-            <h2 className={H2}>{copy.setup.heading}</h2>
-            <p className="mt-4 max-w-[52ch] text-xl text-ink-dim">{copy.setup.lead}</p>
-            <HowItWorks
-              steps={copy.setup.steps}
-              aside={
-                <Sample caption={copy.setup.sampleCaption}>
-                  <ConnectPanelSample />
-                </Sample>
-              }
-            />
+          <div className="flex flex-wrap items-end justify-between gap-6">
+            <h2 className={`${H2} max-w-[12ch]`}>{copy.afterwards.heading}</h2>
+            <p className="max-w-[40ch]">{copy.afterwards.body}</p>
           </div>
-        </Container>
-      </section>
-
-      <section className={`${SECTION} bg-raised`}>
-        <Container>
-          <div className={RULE}>
-            <div className={SPLIT}>
-              <div>
-                <h2 className={H2}>{copy.afterwards.heading}</h2>
-                <p className="mt-5 max-w-[46ch] text-lg">{copy.afterwards.body}</p>
-              </div>
-              <Sample caption={copy.afterwards.caption}>
-                <DashboardSample />
-              </Sample>
-            </div>
+          <div className="mt-10">
+            <Sample caption={copy.afterwards.caption}>
+              <DashboardSample />
+            </Sample>
           </div>
         </Container>
       </section>
 
       <CustomerResults headingClass={H2} />
 
-      <section className={SECTION}>
+      <section className={`surface-coral ${BAND}`}>
         <Container>
-          <div className={RULE}>
-            <h2 className={H2}>{copy.safetyHeading}</h2>
-            <p className="mt-4 max-w-[52ch] text-xl text-ink-dim">{copy.safetyIntro}</p>
+          <div className={`grid ${GAP} min-[901px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]`}>
+            <h2 className={`${H2} max-w-[10ch]`}>{copy.safetyHeading}</h2>
             <SafetyThread items={copy.safety} />
           </div>
         </Container>
       </section>
 
-      <section className={`${SECTION} pt-0 md:pt-0`}>
+      <section className={BAND}>
         <Container>
-          <div className={RULE}>
-            <div className={SPLIT}>
-              <h2 className={H2}>{copy.disclosure.heading}</h2>
-              <div className="grid max-w-[62ch] gap-5 text-lg">
-                {copy.disclosure.paragraphs.map((p) => (
-                  <p key={p}>{p}</p>
-                ))}
-              </div>
-            </div>
-          </div>
-        </Container>
-      </section>
-
-      <section id="faq" className={`${SECTION} pt-0 scroll-mt-4 md:pt-0`}>
-        <Container>
-          <div className={RULE}>
-            <div className={SPLIT}>
-              <div>
-                <h2 className={H2}>{copy.faqHeading}</h2>
-                <p className="mt-5">
-                  <Link href={SITE_ROUTES.faq} className="inline-flex min-h-11 items-center text-accent-text underline underline-offset-2">
-                    {copy.faqAllLink}
-                  </Link>
+          <div className="slab slab-lift grid gap-[clamp(24px,4vw,64px)] p-[clamp(24px,5vw,56px)] min-[901px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            <h2 className="font-display text-[clamp(1.9rem,4vw,3rem)] font-extrabold leading-[0.98] tracking-[-0.025em] max-w-[11ch]">{copy.disclosure.heading}</h2>
+            <div className="grid gap-[18px]">
+              {copy.disclosure.paragraphs.map((p) => (
+                <p key={p} className="max-w-[58ch]">
+                  {p}
                 </p>
-              </div>
-              <div className="lg:-mt-6">
-                <FaqList entries={home} />
-              </div>
+              ))}
             </div>
           </div>
         </Container>
       </section>
 
-      <section className="surface-dark py-14 md:py-20">
+      <section id="faq" className={`${BAND} scroll-mt-4 bg-raised`}>
+        <Container>
+          <div className={`grid ${GAP} min-[901px]:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]`}>
+            <div className="min-[901px]:sticky min-[901px]:top-6 min-[901px]:self-start">
+              <h2 className={`${H2} max-w-[8ch]`}>{copy.faqHeading}</h2>
+              <p className="mt-5">
+                <Link href={SITE_ROUTES.faq} className="inline-flex min-h-11 items-center font-semibold underline underline-offset-2">
+                  {copy.faqAllLink}
+                </Link>
+              </p>
+            </div>
+            <FaqList entries={home} />
+          </div>
+        </Container>
+      </section>
+
+      <section className="surface-coral py-[clamp(40px,6vw,72px)]">
         <Container>
           <PricingSummary ctaLabel={copy.ctaLabel} terms={copy.priceStrip.terms} />
         </Container>

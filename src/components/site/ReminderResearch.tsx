@@ -9,12 +9,12 @@ export function ReminderResearch() {
   const { name } = brandConfig();
   const [clinic, hospital] = RESEARCH_FINDINGS;
   const link = (f: (typeof RESEARCH_FINDINGS)[number]) => (
-    <a href={f.href} rel="noopener" className="text-accent-text underline underline-offset-2">
+    <a href={f.href} rel="noopener" className="font-semibold text-accent-text underline underline-offset-2">
       {f.from} to {f.to}
     </a>
   );
   return (
-    <p className="max-w-[44ch] text-[0.9375rem] leading-[1.5] text-ink-dim">
+    <p className="max-w-[44ch] text-[0.9375rem] leading-[1.5]">
       Outside our own numbers, two published trials found the same direction: a children&apos;s clinic went from {link(clinic)} of
       appointments missed when a text reminder was added, and a hospital went from {link(hospital)} across about 160,000
       appointments by rewording its reminder. Both studies used SMS reminders. {name} sends the same kind of reminder on
