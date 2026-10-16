@@ -126,6 +126,7 @@ const sub = (over: Partial<StripeSubscription> = {}): StripeSubscription => ({
   customer: "cus",
   trialEnd: 1_800_000_000,
   canceledAt: null,
+  endedAt: null,
   cancelAtPeriodEnd: false,
   currentPeriodEnd: null,
   itemId: "si",

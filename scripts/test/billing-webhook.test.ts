@@ -109,7 +109,7 @@ test("subscription.updated past_due writes the mapped status", async () => {
   });
   assert.equal(out.kind, "handled");
   assert.deepEqual(h.patches, [
-    { id: "acc-1", patch: { billingStatus: "past_due", trialEndsAt: null, cancelledAt: null, stripeSubscriptionId: "sub" } },
+    { id: "acc-1", patch: { billingStatus: "past_due", trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, stripeSubscriptionId: "sub" } },
   ]);
 });
 
@@ -118,12 +118,31 @@ test("subscription.deleted writes cancelled with cancelledAt", async () => {
   await run(h, {
     id: "evt_4",
     type: "customer.subscription.deleted",
-    data: { object: sub({ status: "canceled", canceled_at: 1_800_000_000 }) },
+    data: { object: sub({ status: "canceled", canceled_at: 1_700_000_000, ended_at: 1_800_000_000 }) },
   });
   assert.deepEqual(h.patches[0].patch, {
     billingStatus: "cancelled",
     trialEndsAt: null,
     cancelledAt: "2027-01-15T08:00:00.000Z",
+    stripeSubscriptionId: "sub",
+  });
+});
+
+test("cancel-at-period-end: cancelledAt is ended_at, not the request date", async () => {
+  const h = harness();
+  h.state.live = sub({ status: "canceled", canceled_at: 1_800_000_000 - 30 * 86400, ended_at: 1_800_000_000 });
+  await run(h, { id: "evt_e", type: "customer.subscription.deleted", data: { object: sub({ status: "canceled" }) } });
+  assert.equal((h.patches[0].patch as { cancelledAt: string }).cancelledAt, "2027-01-15T08:00:00.000Z");
+});
+
+test("reactivation clears cancelledAt and cleanedUpAt", async () => {
+  const h = harness({ byId: account({ billingStatus: "cancelled", cancelledAt: "2026-01-01T00:00:00.000Z", cleanedUpAt: "2026-02-01T00:00:00.000Z" }) });
+  await run(h, { id: "evt_r", type: "customer.subscription.updated", data: { object: sub({ status: "active" }) } });
+  assert.deepEqual(h.patches[0].patch, {
+    billingStatus: "active",
+    trialEndsAt: null,
+    cancelledAt: null,
+    cleanedUpAt: null,
     stripeSubscriptionId: "sub",
   });
 });

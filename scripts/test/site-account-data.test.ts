@@ -42,7 +42,7 @@ function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]
 const stripeCalls: string[] = [];
 const retrieveSubscription = async (id: string) => {
   stripeCalls.push(id);
-  return { ok: true as const, data: { id, status: "trialing", customer: "cus_1", trialEnd: null, canceledAt: null, cancelAtPeriodEnd: true, currentPeriodEnd: 1_792_000_000, itemId: "si_1", quantity: 2, cardLast4: "4242", metadata: {} } };
+  return { ok: true as const, data: { id, status: "trialing", customer: "cus_1", trialEnd: null, canceledAt: null, endedAt: null, cancelAtPeriodEnd: true, currentPeriodEnd: 1_792_000_000, itemId: "si_1", quantity: 2, cardLast4: "4242", metadata: {} } };
 };
 const make = (f: ReturnType<typeof fakes>, now = NOW) =>
   new SupabaseAccountDataSource(f.repo as never, { retrieveSubscription } as never, "acc-1", now);
@@ -88,6 +88,16 @@ test("getBilling reads the subscription; next invoice uses volume pricing over a
   assert.equal(b.currency, pricingConfig().currency);
   assert.equal(b.portalAvailable, true);
   assert.equal(b.cancelAtPeriodEnd, true);
+});
+
+test("getBilling given the rows does not list locations again", async () => {
+  const f = fakes();
+  const src = make(f);
+  const rows = await src.listLocations();
+  const before = f.calls.length;
+  const b = await src.getBilling(rows);
+  assert.equal(b.nextInvoiceAmount, monthlyCostPence(2) / 100);
+  assert.equal(f.calls.slice(before).filter((c) => c.name === "listGhlAccountsForAccount").length, 0);
 });
 
 test("getBilling at 10 active numbers prices every number at the volume rate", async () => {

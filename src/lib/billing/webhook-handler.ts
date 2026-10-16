@@ -98,7 +98,10 @@ async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeE
       await repo.updateAccountBilling(account.id, {
         billingStatus: status,
         trialEndsAt: status === "trialing" ? iso(live.trialEnd) : null,
-        cancelledAt: status === "cancelled" ? (iso(live.canceledAt) ?? new Date().toISOString()) : null,
+        // ended_at is when the subscription actually ended; canceled_at is only when cancellation was requested.
+        cancelledAt: status === "cancelled" ? (iso(live.endedAt) ?? new Date().toISOString()) : null,
+        // A purged account that resubscribes must be cleaned up again if it later cancels.
+        ...(status === "cancelled" ? {} : { cleanedUpAt: null }),
         stripeSubscriptionId: sub.id,
       });
       return { kind: "handled", type: event.type };

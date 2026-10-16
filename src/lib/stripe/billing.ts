@@ -7,6 +7,7 @@ export interface StripeSubscription {
   customer: string;
   trialEnd: number | null;
   canceledAt: number | null;
+  endedAt: number | null;
   cancelAtPeriodEnd: boolean;
   currentPeriodEnd: number | null;
   itemId: string | null;
@@ -59,6 +60,7 @@ export function parseSubscription(raw: unknown): StripeSubscription | null {
     customer,
     trialEnd: num(o.trial_end),
     canceledAt: num(o.canceled_at),
+    endedAt: num(o.ended_at),
     cancelAtPeriodEnd: o.cancel_at_period_end === true,
     currentPeriodEnd: num(o.current_period_end),
     itemId: str(first?.id),
