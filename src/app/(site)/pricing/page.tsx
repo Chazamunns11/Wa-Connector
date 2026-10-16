@@ -3,6 +3,7 @@ import { Container } from "@/components/site/Container";
 import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
 import { PricingCalculator } from "@/components/site/PricingCalculator";
+import { ResaleCalculator } from "@/components/site/ResaleCalculator";
 import { PricingTable } from "@/components/site/PricingTable";
 import { TierList } from "@/components/site/TierList";
 import { brandConfig } from "@/lib/brand-config";
@@ -10,6 +11,7 @@ import { pricingConfig, standardPrice, tierSentence } from "@/lib/pricing";
 import { COMPARISON, ourColumn, sourceParts } from "@/lib/site/comparison";
 import { faqEntries } from "@/lib/site/faq";
 import { pricingCopy } from "@/lib/site/pricing-copy";
+import { resaleExamplePrice, resaleFallbackLine } from "@/lib/site/resale";
 
 export function generateMetadata(): Metadata {
   const { name } = brandConfig();
@@ -61,6 +63,29 @@ export default function PricingPage() {
             </div>
             <div className="mt-6">
               <PricingTable pricing={pricing} />
+            </div>
+          </div>
+        </Container>
+      </section>
+
+      <section id="resale" className="surface-dark band mt-[clamp(64px,9vw,120px)] scroll-mt-4">
+        <Container>
+          <div className="grid gap-10 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-16">
+            <div>
+              <h2 className={H2}>Reselling to your clients?</h2>
+              <p className="mt-6 max-w-[44ch] text-[1.2rem] leading-[1.45]">
+                Many agencies include WhatsApp sending in a client package and charge for each number. {resaleExamplePrice(pricing.currency)} a number
+                is a common price, so it is the starting figure here. Change it to whatever you charge.
+              </p>
+              <p className="mt-4 max-w-[44ch] text-ink-dim">
+                You set your own price. These figures are examples, not a promise of income, and they leave out your own costs and tax.
+              </p>
+            </div>
+            <div>
+              <ResaleCalculator currency={pricing.currency} />
+              <p className="mt-8 max-w-[52ch] border-t-2 border-border pt-4 text-[.95rem] leading-[1.45] text-ink-dim">
+                {resaleFallbackLine(pricing.currency)}
+              </p>
             </div>
           </div>
         </Container>

@@ -15,6 +15,7 @@ export function generateMetadata(): Metadata {
 
 const DOCS = [
   { href: SITE_ROUTES.setup, title: "Setup guide", text: "Install, set the Telephony Provider, scan the QR code and send a test. About ten minutes." },
+  { href: SITE_ROUTES.connect, title: "How to connect", text: "A two-page sheet for whoever scans the QR code. Print it or send the PDF to your client." },
   { href: SITE_ROUTES.faq, title: "FAQ", text: "Straight answers on linked devices, ban risk, the daily cap and what happens when a phone goes offline." },
   { href: SITE_ROUTES.billingHelp, title: "Billing", text: "How the free trial works, what a failed payment does and how to cancel." },
   { href: SITE_ROUTES.privacySummary, title: "Privacy and data", text: "What we store, for how long, and what we do not keep." },

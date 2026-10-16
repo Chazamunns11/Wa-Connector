@@ -18,6 +18,7 @@ const PAGE_FILES: Record<string, string> = {
   [SITE_ROUTES.pricing]: "src/app/(site)/pricing/page.tsx",
   [SITE_ROUTES.docs]: "src/app/(site)/docs/page.tsx",
   [SITE_ROUTES.setup]: "src/app/(site)/docs/setup/page.tsx",
+  [SITE_ROUTES.connect]: "src/app/(site)/docs/connect/page.tsx",
   [SITE_ROUTES.faq]: "src/app/(site)/docs/faq/page.tsx",
   [SITE_ROUTES.billingHelp]: "src/app/(site)/docs/billing/page.tsx",
   [SITE_ROUTES.privacySummary]: "src/app/(site)/docs/privacy-and-data/page.tsx",

@@ -16,6 +16,13 @@ export function PricingSummary({ ctaLabel, terms }: { ctaLabel: string; terms: s
           Connect {VOLUME_FROM} or more and every number drops to {volumePrice(pricing.currency)} a month.
         </p>
         <p className="mt-2 max-w-[52ch] font-medium">{terms}</p>
+        <p className="mt-2 max-w-[52ch] font-medium">
+          Reselling to clients?{" "}
+          <Link href={`${SITE_ROUTES.pricing}#resale`} className="font-semibold underline underline-offset-2">
+            See what you would keep
+          </Link>
+          .
+        </p>
       </div>
       <div className="btn-stack flex-col items-start sm:items-end">
         <Link href={SITE_ROUTES.signup} className={siteButton("ink")}>

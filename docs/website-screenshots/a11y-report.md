@@ -15,6 +15,8 @@ axe-core 4.10.2 with tags wcag2a, wcag2aa, wcag21aa; viewports 375x812 and 1280x
 | `/docs` | 1280 | 200 | 1 | yes | 0 | 0 |
 | `/docs/setup` | 375 | 200 | 1 | yes | 0 | 0 |
 | `/docs/setup` | 1280 | 200 | 1 | yes | 0 | 0 |
+| `/docs/connect` | 375 | 200 | 1 | yes | 0 | 0 |
+| `/docs/connect` | 1280 | 200 | 1 | yes | 0 | 0 |
 | `/docs/faq` | 375 | 200 | 1 | yes | 0 | 0 |
 | `/docs/faq` | 1280 | 200 | 1 | yes | 0 | 0 |
 | `/docs/billing` | 375 | 200 | 1 | yes | 0 | 0 |
@@ -59,7 +61,7 @@ None.
 
 ## Logo variant per route
 
-Logo `<img>` sources found at 1280 with the nearest painted background (reverse artwork belongs on Ink, standard on Cream).
+Logo `<img>` sources found at 1280 with the nearest painted background (reverse artwork belongs on Ink, standard on Coral).
 
 | Route | Logo file | Background |
 | --- | --- | --- |
@@ -71,6 +73,8 @@ Logo `<img>` sources found at 1280 with the nearest painted background (reverse 
 | docs | pingwren-logo-reverse.svg | rgb(27, 31, 42) |
 | docs-setup | pingwren-logo.svg | rgb(255, 90, 54) |
 | docs-setup | pingwren-logo-reverse.svg | rgb(27, 31, 42) |
+| docs-connect | pingwren-logo.svg | rgb(255, 90, 54) |
+| docs-connect | pingwren-logo-reverse.svg | rgb(27, 31, 42) |
 | docs-faq | pingwren-logo.svg | rgb(255, 90, 54) |
 | docs-faq | pingwren-logo-reverse.svg | rgb(27, 31, 42) |
 | docs-billing | pingwren-logo.svg | rgb(255, 90, 54) |

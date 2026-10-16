@@ -69,6 +69,13 @@ export default async function SetupPage({
           About ten minutes, start to finish. Pick the guide that matches your account, and by the end the workflows
           you already have will be sending on WhatsApp.
         </p>
+        <p className="mt-3 text-[1.05rem] font-medium">
+          Handing the scan to a client? Send them the{" "}
+          <Link href={SITE_ROUTES.connect} className="underline underline-offset-2">
+            two-page how-to-connect sheet
+          </Link>
+          .
+        </p>
       </PageTop>
       <section className="pb-12 pt-12 md:pb-20">
         <Container>

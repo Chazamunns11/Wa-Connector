@@ -5,6 +5,8 @@ export interface FaqEntry {
   id: string;
   question: string;
   answer: string;
+  /** Optional follow-on link shown after the answer. */
+  link?: { text: string; href: string };
 }
 
 export const FAQ_IDS = [
@@ -31,7 +33,7 @@ type FaqId = (typeof FAQ_IDS)[number];
 export function faqEntries(brand: BrandConfig): FaqEntry[] {
   const { name } = brand;
   const tiers = tierSentence(pricingConfig().currency);
-  const copy: Record<FaqId, { question: string; answer: string }> = {
+  const copy: Record<FaqId, Omit<FaqEntry, "id">> = {
     "what-is-it": {
       question: `What is ${name}?`,
       answer: `An app for GoHighLevel that sends your messages on WhatsApp. You link a WhatsApp number by scanning a QR code, choose ${name} as the Telephony Provider, and the Send SMS steps in your workflows go out on WhatsApp instead. Replies land in Conversations.`,
@@ -80,7 +82,8 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     "agency-or-single": {
       question: "Is it for agencies or a single business?",
       answer:
-        "Both. A single business connects one or more numbers to its own account; an agency connects numbers across its sub-accounts. Either way you pay per number.",
+        "Both. A single business connects one or more numbers to its own account; an agency connects numbers across its sub-accounts. Either way you pay per number. If you resell it to your own clients, you set your price and can work out what you would keep.",
+      link: { text: "Try the resale calculator", href: "/pricing#resale" },
     },
     "white-label": {
       question: "Does it work on a white-labelled GoHighLevel account?",
