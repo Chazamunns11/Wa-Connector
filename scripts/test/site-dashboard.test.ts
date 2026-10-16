@@ -53,7 +53,7 @@ test("a pending account gets a working add-a-card form button, not a link to now
   assert.match(header, /pendingCheckoutAction/);
   assert.match(header, /Add a card to start your trial/);
   assert.match(read("src/app/(app)/dashboard/page.tsx"), /pendingCheckoutAction=\{[^}]*startCheckoutAction/);
-  assert.match(read("src/app/(app)/dashboard/actions.ts"), /export async function startCheckoutAction/);
+  assert.match(read("src/app/(app)/dashboard/billing/actions.ts"), /export async function startCheckoutAction/);
 });
 
 test("the connect button leaves the app for the OAuth start route", () => {

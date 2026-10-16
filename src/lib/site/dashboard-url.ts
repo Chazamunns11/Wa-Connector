@@ -1,5 +1,5 @@
 import { SITE_ROUTES } from "@/lib/site/routes";
-import { TRIAL_MAX_NUMBERS } from "@/lib/pricing";
+import { TRIAL_CAP_MESSAGE } from "@/lib/account-data/derive";
 
 export type DashboardFilter = "all" | "attention";
 
@@ -25,7 +25,7 @@ export const DASHBOARD_RESULT_COPY: Record<DashboardResult, string> = {
   deactivated: "Number deactivated. It will no longer send or be billed.",
   disconnected: "WhatsApp disconnected from this number.",
   link: "Connect link ready to share.",
-  trial_cap: `Your free trial includes up to ${TRIAL_MAX_NUMBERS} numbers. End the trial early to activate more.`,
+  trial_cap: TRIAL_CAP_MESSAGE,
   platform_cap: "We are at capacity for new numbers right now. Please try again soon.",
   billing_inactive: "Billing is not active on this account. Update billing to activate numbers.",
   stripe_failed: "We could not update billing just now, so nothing was changed. Please try again.",
@@ -47,6 +47,21 @@ export function dashboardHref(opts: { filter?: DashboardFilter; result?: Dashboa
   return `${SITE_ROUTES.dashboard}${s ? `?${s}` : ""}${opts.focus ? `#row-${opts.focus}` : ""}`;
 }
 
-export function billingHref(): string {
-  return SITE_ROUTES.billing;
+/** Fixed notices the billing page can show after an action. */
+export type BillingNotice = { result?: "trial_ended"; error?: "no_portal" | "stripe_failed" };
+
+export function billingHref(notice: BillingNotice = {}): string {
+  const q = new URLSearchParams();
+  if (notice.result) q.set("result", notice.result);
+  if (notice.error) q.set("error", notice.error);
+  const s = q.toString();
+  return `${SITE_ROUTES.billing}${s ? `?${s}` : ""}`;
+}
+
+export function parseBillingNotice(params: Record<string, string | string[] | undefined>): BillingNotice {
+  const f = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+  const result = f(params.result) === "trial_ended" ? "trial_ended" : undefined;
+  const e = f(params.error);
+  const error = e === "no_portal" || e === "stripe_failed" ? e : undefined;
+  return { result, error };
 }

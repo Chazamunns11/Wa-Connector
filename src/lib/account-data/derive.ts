@@ -1,4 +1,4 @@
-import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS } from "@/lib/pricing";
+import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
 import type { AccountSummary, LocationRow } from "./types";
 
 const DAY_MS = 86_400_000;
@@ -99,3 +99,6 @@ export function primaryActionFor(row: LocationRow): PrimaryAction | null {
   if (a.sendLink) return { key: "show-qr", label: "Reconnect" };
   return null;
 }
+
+/** Shown when a trialing account tries to activate past the trial cap. */
+export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_NUMBERS} numbers. Start your paid plan now to add more.`;

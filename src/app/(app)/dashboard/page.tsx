@@ -11,7 +11,8 @@ import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { billingHref, DASHBOARD_RESULT_COPY, dashboardHref, parseFilter, parseResult } from "@/lib/site/dashboard-url";
 
-import { startCheckoutAction } from "./actions";
+import { buttonClasses } from "@/components/ui/Button";
+import { endTrialNowAction, startCheckoutAction } from "./billing/actions";
 
 // Session-gated (requireAccountSession reads cookies): never prerendered.
 export const dynamic = "force-dynamic";
@@ -60,6 +61,13 @@ export default async function DashboardPage({
       {result ? (
         <p role="status" className="mt-4 rounded-lg border border-info/30 bg-info-soft p-3 font-medium text-ink">
           {DASHBOARD_RESULT_COPY[result]}
+          {result === "trial_cap" && account.billingStatus === "trialing" ? (
+            <form action={endTrialNowAction} className="mt-3">
+              <button type="submit" className={buttonClasses("primary", "md", "min-h-11 px-5")}>
+                Start my paid plan now
+              </button>
+            </form>
+          ) : null}
         </p>
       ) : null}
       <GhlResultNotice
