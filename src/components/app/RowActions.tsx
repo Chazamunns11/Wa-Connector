@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/Button";
-import { rowActionsFor } from "@/lib/account-data/derive";
+import { rowActionsFor, type PrimaryAction as Primary } from "@/lib/account-data/derive";
 import type { LocationRow } from "@/lib/account-data";
 import { previewRowAction } from "@/app/(app)/dashboard/actions";
 
@@ -40,5 +40,20 @@ export function RowActions({ row, scenario, filter }: { row: LocationRow; scenar
         </li>
       ))}
     </ul>
+  );
+}
+
+/** The row's one inline action (Activate / Show QR / Reconnect). Same preview action as the rest. */
+export function PrimaryAction({ row, action, scenario, filter }: { row: LocationRow; action: Primary; scenario: string; filter: string }) {
+  return (
+    <form action={previewRowAction}>
+      <input type="hidden" name="scenario" value={scenario} />
+      <input type="hidden" name="filter" value={filter} />
+      <input type="hidden" name="location" value={row.id} />
+      <input type="hidden" name="intent" value={action.key} />
+      <Button type="submit" size="sm" variant="secondary" className="min-h-11" aria-label={`${action.label}, ${row.name}`}>
+        {action.label}
+      </Button>
+    </form>
   );
 }

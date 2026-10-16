@@ -18,4 +18,9 @@ export function dashboardHref(opts: { scenario: PreviewScenario; filter?: Dashbo
   return `${SITE_ROUTES.dashboard}${s ? `?${s}` : ""}${opts.notice ? "#preview-notice" : ""}`;
 }
 
+/** /dashboard/billing URL that keeps the sample scenario. */
+export function billingHref(scenario: PreviewScenario): string {
+  return `${SITE_ROUTES.billing}${scenario === "trial" ? "" : `?scenario=${scenario}`}`;
+}
+
 export { parseScenario };

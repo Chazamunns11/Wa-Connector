@@ -4,7 +4,7 @@ import { Container } from "@/components/site/Container";
 import { brandConfig } from "@/lib/brand-config";
 import { SITE_ROUTES } from "@/lib/site/routes";
 
-const LINK = "inline-flex min-h-11 items-center text-ink-dim hover:text-ink";
+const LINK = "inline-flex min-h-11 items-center px-2 -mx-2 text-ink-dim hover:text-ink";
 
 export function SiteFooter() {
   const { name, supportEmail, supportWhatsApp } = brandConfig();
@@ -19,7 +19,7 @@ export function SiteFooter() {
             not affiliated with or endorsed by Meta, WhatsApp or HighLevel.
           </p>
         </div>
-        <nav aria-label="Footer" className="flex flex-wrap gap-x-6">
+        <nav aria-label="Footer" className="flex flex-wrap gap-x-6 self-start">
           <Link href={SITE_ROUTES.terms} className={LINK}>
             Terms
           </Link>

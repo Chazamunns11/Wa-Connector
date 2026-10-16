@@ -9,8 +9,7 @@ import { getAccountDataSource, parseScenario } from "@/lib/account-data";
 import { headline, needsAttention, planStatus } from "@/lib/account-data/derive";
 import { brandConfig } from "@/lib/brand-config";
 import { pricingConfig } from "@/lib/pricing";
-import { dashboardHref, parseFilter } from "@/lib/site/dashboard-url";
-import { SITE_ROUTES } from "@/lib/site/routes";
+import { billingHref, dashboardHref, parseFilter } from "@/lib/site/dashboard-url";
 
 export function generateMetadata(): Metadata {
   return { title: `Dashboard (preview) — ${brandConfig().name}`, robots: { index: false } };
@@ -30,8 +29,7 @@ export default async function DashboardPage({
 
   const attentionCount = rows.filter((r) => needsAttention(r) !== null).length;
   const visible = filter === "attention" ? rows.filter((r) => needsAttention(r) !== null) : rows;
-  const billingHref = scenario === "trial" ? SITE_ROUTES.billing : `${SITE_ROUTES.billing}?scenario=${scenario}`;
-
+  
   return (
     <Container className="py-8 md:py-12">
       <PlanHeader
@@ -39,7 +37,7 @@ export default async function DashboardPage({
         status={planStatus(account, now)}
         headline={headline(rows, pricingConfig())}
         hasLocations={rows.length > 0}
-        billingHref={billingHref}
+        billingHref={billingHref(scenario)}
       />
 
       {params.notice === "preview" ? (

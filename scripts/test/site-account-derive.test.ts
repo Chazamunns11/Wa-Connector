@@ -5,6 +5,7 @@ import {
   headline,
   needsAttention,
   planStatus,
+  primaryActionFor,
   rowActionsFor,
   trialDaysLeft,
 } from "@/lib/account-data/derive";
@@ -87,4 +88,11 @@ test("rowActionsFor for not_active, waiting_qr, connected and disconnected rows"
   assert.deepEqual(rowActionsFor(row({ state: { kind: "disconnected", waiting: 4 } })), {
     activate: false, showQr: false, sendLink: true, disconnect: false, deactivate: true,
   });
+});
+
+test("primaryActionFor: one inline action per state, none when connected", () => {
+  assert.deepEqual(primaryActionFor(row({ activated: false, state: { kind: "not_active" } })), { key: "activate", label: "Activate" });
+  assert.deepEqual(primaryActionFor(row({ state: { kind: "waiting_qr" } })), { key: "show-qr", label: "Show QR" });
+  assert.deepEqual(primaryActionFor(row({ state: { kind: "disconnected", waiting: 2 } })), { key: "show-qr", label: "Reconnect" });
+  assert.equal(primaryActionFor(row({ state: { kind: "connected", number: "+447700900101" } })), null);
 });

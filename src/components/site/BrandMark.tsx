@@ -2,8 +2,9 @@ import { brandConfig } from "@/lib/brand-config";
 
 /**
  * The kit's horizontal logo is 473 x 148. The artwork is cropped to the mark,
- * so it carries NO clear space of its own: BrandMark adds it as a margin of
- * 20% of the logo height (at least the wren head's height).
+ * so it carries NO clear space of its own: BrandMark adds it above and below as a
+ * margin of 20% of the logo height (at least the wren head's height); the page
+ * gutter already gives horizontal clear space, so the logo stays on the content edge.
  */
 const LOGO_RATIO = 473 / 148;
 const CLEAR_SPACE = 0.2;
@@ -30,7 +31,7 @@ export function BrandMark({
         alt={name}
         width={Math.round(size * LOGO_RATIO)}
         height={size}
-        style={{ height: size, width: "auto", margin: Math.round(size * CLEAR_SPACE) }}
+        style={{ height: size, width: "auto", marginBlock: Math.round(size * CLEAR_SPACE) }}
       />
     );
   }

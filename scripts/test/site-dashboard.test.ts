@@ -43,10 +43,27 @@ test("the preview badge stacks on its own line below 640px", () => {
 test("location rows use the table from 768px and cards below", () => {
   const src = read("src/components/app/LocationTable.tsx");
   assert.match(src, /hidden[^"]*md:grid/);
-  assert.match(src, /md:hidden/);
+  assert.match(src, /md:sr-only/);
 });
 
 test("the notice and banner are announced", () => {
   assert.match(read("src/app/(app)/dashboard/page.tsx"), /role="status"/);
   assert.match(read("src/components/app/PlanHeader.tsx"), /role="alert"/);
+});
+
+test("column labels stay in the accessibility tree at every width", () => {
+  const src = read("src/components/app/LocationTable.tsx");
+  assert.match(src, /md:sr-only/);
+  assert.doesNotMatch(src, /text-ink-faint md:hidden/);
+});
+
+test("scenario URLs come from one helper", () => {
+  assert.match(read("src/lib/site/dashboard-url.ts"), /export function billingHref/);
+  assert.match(read("src/app/(app)/dashboard/page.tsx"), /billingHref\(/);
+  assert.doesNotMatch(read("src/app/(app)/dashboard/page.tsx"), /\?scenario=\$/);
+  assert.doesNotMatch(read("src/components/app/ScenarioSwitcher.tsx"), /scenario=/);
+});
+
+test("the footer nav hugs its links", () => {
+  assert.match(read("src/components/site/SiteFooter.tsx"), /aria-label="Footer" className="[^"]*self-start/);
 });

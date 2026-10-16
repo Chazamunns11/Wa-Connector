@@ -1,8 +1,8 @@
 import { Chip, type ChipTone } from "@/components/ui/Chip";
-import { needsAttention } from "@/lib/account-data/derive";
+import { needsAttention, primaryActionFor } from "@/lib/account-data/derive";
 import type { LocationRow, WhatsappState } from "@/lib/account-data";
 import { LocationRowDetail } from "./LocationRowDetail";
-import { RowActions } from "./RowActions";
+import { PrimaryAction, RowActions } from "./RowActions";
 
 function stateChip(state: WhatsappState): { tone: ChipTone; label: string } {
   switch (state.kind) {
@@ -23,7 +23,7 @@ const GRID = "md:grid md:grid-cols-[minmax(0,1.5fr)_minmax(0,1.2fr)_minmax(0,1fr
 function Cell({ label, children, className = "", hideLabel = false }: { label: string; children: React.ReactNode; className?: string; hideLabel?: boolean }) {
   return (
     <div className={className}>
-      <span className={`mb-0.5 text-xs text-ink-faint md:hidden ${hideLabel ? "sr-only" : "block"}`}>{label}</span>
+      <span className={`mb-0.5 text-xs text-ink-faint ${hideLabel ? "sr-only" : "block md:sr-only"}`}>{label}</span>
       {children}
     </div>
   );
@@ -45,6 +45,7 @@ export function LocationTable({ rows, scenario, filter }: { rows: LocationRow[];
         {rows.map((row) => {
           const chip = stateChip(row.state);
           const attention = needsAttention(row);
+          const primary = primaryActionFor(row);
           const pct = row.dailyCap > 0 ? Math.min(100, Math.round((row.sentToday / row.dailyCap) * 100)) : 0;
           return (
             <li key={row.id}>
@@ -84,6 +85,11 @@ export function LocationTable({ rows, scenario, filter }: { rows: LocationRow[];
                     <p className="text-sm text-ink-faint">Nothing to do</p>
                   )}
                 </Cell>
+                {primary ? (
+                  <div className="md:col-span-4 md:flex md:justify-end">
+                    <PrimaryAction row={row} action={primary} scenario={scenario} filter={filter} />
+                  </div>
+                ) : null}
               </div>
               <LocationRowDetail row={row} actions={<RowActions row={row} scenario={scenario} filter={filter} />} />
             </li>

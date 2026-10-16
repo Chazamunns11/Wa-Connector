@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { PreviewScenario } from "@/lib/account-data";
-import { dashboardHref, type DashboardFilter } from "@/lib/site/dashboard-url";
+import { billingHref, dashboardHref, type DashboardFilter } from "@/lib/site/dashboard-url";
 
 const SCENARIOS: { id: PreviewScenario; label: string }[] = [
   { id: "trial", label: "On trial" },
@@ -12,19 +12,18 @@ const SCENARIOS: { id: PreviewScenario; label: string }[] = [
 export function ScenarioSwitcher({
   scenario,
   filter,
-  basePath,
+  billing = false,
 }: {
   scenario: PreviewScenario;
   filter?: DashboardFilter;
-  basePath?: string;
+  /** Link to the billing page instead of the dashboard. */
+  billing?: boolean;
 }) {
   return (
     <nav aria-label="Sample account" className="flex flex-wrap items-center gap-x-1 gap-y-1 text-sm text-ink-dim">
       <span className="mr-1">Sample account:</span>
       {SCENARIOS.map((s) => {
-        const href = basePath
-          ? `${basePath}${s.id === "trial" ? "" : `?scenario=${s.id}`}`
-          : dashboardHref({ scenario: s.id, filter });
+        const href = billing ? billingHref(s.id) : dashboardHref({ scenario: s.id, filter });
         const current = s.id === scenario;
         return (
           <Link

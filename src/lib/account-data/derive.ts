@@ -81,3 +81,18 @@ export function rowActionsFor(row: LocationRow): RowActions {
     deactivate: row.activated,
   };
 }
+
+export interface PrimaryAction {
+  /** Matches a RowActions key; the preview action treats it as an intent. */
+  key: "activate" | "show-qr";
+  label: string;
+}
+
+/** The one action worth showing inline on a row, or null (connected rows need none). Built on rowActionsFor. */
+export function primaryActionFor(row: LocationRow): PrimaryAction | null {
+  const a = rowActionsFor(row);
+  if (a.activate) return { key: "activate", label: "Activate" };
+  if (a.showQr) return { key: "show-qr", label: "Show QR" };
+  if (a.sendLink) return { key: "show-qr", label: "Reconnect" };
+  return null;
+}

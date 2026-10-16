@@ -11,7 +11,6 @@ import { headline, planStatus } from "@/lib/account-data/derive";
 import { brandConfig } from "@/lib/brand-config";
 import { formatMoney, pricingConfig } from "@/lib/pricing";
 import { dashboardHref } from "@/lib/site/dashboard-url";
-import { SITE_ROUTES } from "@/lib/site/routes";
 
 export function generateMetadata(): Metadata {
   return { title: `Billing (preview) — ${brandConfig().name}`, robots: { index: false } };
@@ -83,7 +82,7 @@ export default async function BillingPage({
         </p>
         {source.preview ? (
           <div className="mt-6 border-t border-divider pt-4">
-            <ScenarioSwitcher scenario={scenario} basePath={SITE_ROUTES.billing} />
+            <ScenarioSwitcher scenario={scenario} billing />
             <p className="mt-1 text-sm text-ink-faint">Sample data. Nothing here is a real account.</p>
           </div>
         ) : null}
