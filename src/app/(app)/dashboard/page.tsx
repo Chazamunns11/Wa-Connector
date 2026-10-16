@@ -29,7 +29,7 @@ export default async function DashboardPage({
 
   const attentionCount = rows.filter((r) => needsAttention(r) !== null).length;
   const visible = filter === "attention" ? rows.filter((r) => needsAttention(r) !== null) : rows;
-  
+
   return (
     <Container className="py-8 md:py-12">
       <PlanHeader

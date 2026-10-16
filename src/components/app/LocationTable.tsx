@@ -78,18 +78,21 @@ export function LocationTable({ rows, scenario, filter }: { rows: LocationRow[];
                     </span>
                   )}
                 </Cell>
-                <Cell label="Needs attention" className={attention ? "" : "hidden md:block"}>
+                <Cell
+                  label="Needs attention"
+                  className={`md:flex md:flex-col md:items-start ${attention || primary ? "" : "hidden md:flex"}`}
+                >
                   {attention ? (
                     <p className="text-sm font-medium text-warn">{attention}</p>
                   ) : (
                     <p className="text-sm text-ink-faint">Nothing to do</p>
                   )}
+                  {primary ? (
+                    <div className="mt-2">
+                      <PrimaryAction row={row} action={primary} scenario={scenario} filter={filter} />
+                    </div>
+                  ) : null}
                 </Cell>
-                {primary ? (
-                  <div className="md:col-span-4 md:flex md:justify-end">
-                    <PrimaryAction row={row} action={primary} scenario={scenario} filter={filter} />
-                  </div>
-                ) : null}
               </div>
               <LocationRowDetail row={row} actions={<RowActions row={row} scenario={scenario} filter={filter} />} />
             </li>
