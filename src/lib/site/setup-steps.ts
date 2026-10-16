@@ -64,7 +64,7 @@ export function setupSteps(brand: BrandConfig): SetupStep[] {
     },
     menu: {
       title: `Open the ${name} page`,
-      summary: "The WhatsApp page lives in the left menu of the sub-account.",
+      summary: `The ${name} page lives in the left menu of the sub-account.`,
       detail: {
         agency: [
           `Switch into a sub-account (Sub-Account view) and choose ${name} in the left menu.`,

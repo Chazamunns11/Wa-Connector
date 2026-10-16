@@ -68,3 +68,37 @@ test("the research band states honest figures and the SMS-to-WhatsApp bridge", (
   assert.ok(!/most of your\s+contacts/.test(band));
   assert.ok(!/outperform|better than SMS|beats SMS/i.test(band + text));
 });
+
+test("owner's own average: figures, honest framing, and nothing banned (Rulings W25/W27)", async () => {
+  const { OWN_RESULTS_AVERAGE } = await import("@/lib/site/proof");
+  const a = OWN_RESULTS_AVERAGE;
+  assert.match(a.before, /50%/);
+  assert.match(a.after, /85%/);
+  const text = JSON.stringify(a);
+  for (const banned of [/FitClosers/i, /\bsales\b/i, /PingWren customers/i, /with PingWren/i, /open rate/i, /read rate/i]) {
+    assert.ok(!banned.test(text), `aggregate matches ${banned}`);
+  }
+  assert.match(a.note, /not an independent study/);
+  assert.match(a.note, /vary/i);
+  const page = read("src/app/(site)/page.tsx");
+  assert.match(page, /<OwnResults/);
+  assert.ok(page.indexOf("<OwnResults") < page.indexOf("<ReminderResearch"));
+});
+
+test("walkthrough fixes: control group, best-of-eight caveat", () => {
+  const text = JSON.stringify(RESEARCH_FINDINGS);
+  assert.ok(!/patients sent none/.test(text));
+  assert.match(text, /usual voice-message reminder/);
+  assert.match(text, /best of the eight/);
+  assert.match(text, /letting others down/);
+});
+
+test("walkthrough fixes: menu item named after the brand, no triple negative, pricing line, auth logo link", () => {
+  assert.ok(!/Open the WhatsApp page in the left menu/.test(read("src/lib/site/sales-copy.ts")));
+  assert.match(read("src/lib/site/sales-copy.ts"), /left menu/);
+  assert.ok(!/The WhatsApp page lives in the left menu/.test(read("src/lib/site/setup-steps.ts")));
+  assert.ok(!/no green tick, no template approval/.test(read("src/lib/site/faq.ts")));
+  assert.match(read("src/app/(site)/pricing/page.tsx"), /There is no setup fee, and \{brand\.name\} does not charge per message\./);
+  const shell = read("src/components/auth/AuthShell.tsx");
+  assert.match(shell, /<Link[^>]*href="\/"[^>]*aria-label=\{`\$\{brandConfig\(\)\.name\} home`\}/s);
+});

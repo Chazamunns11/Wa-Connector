@@ -35,7 +35,7 @@ export default function PricingPage() {
             {priceLine(1, pricing)}
           </p>
           <p className="mt-3 max-w-[60ch] text-lg text-ink-dim">
-            Pay for the WhatsApp numbers you connect. No setup fee and no per-message charge from {brand.name}.
+            Pay for the WhatsApp numbers you connect. There is no setup fee, and {brand.name} does not charge per message.
           </p>
           <div className="mt-8 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
             <div className="grid content-start gap-4">

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { CustomerResults } from "@/components/site/CustomerResults";
 import { Container } from "@/components/site/Container";
+import { OwnResults } from "@/components/site/OwnResults";
 import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
 import { HeroWorkflow } from "@/components/site/HeroWorkflow";
@@ -65,7 +66,10 @@ export default function HomePage() {
 
       <section className={`${SECTION} ${BAND}`}>
         <Container>
-          <ReminderResearch headingClass={H2} />
+          <OwnResults headingClass={H2} />
+          <div className="mt-16 md:mt-20">
+            <ReminderResearch headingClass={H2} />
+          </div>
         </Container>
       </section>
 

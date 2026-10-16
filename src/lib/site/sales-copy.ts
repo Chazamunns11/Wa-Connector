@@ -27,7 +27,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
       },
       {
         title: "Scan the QR code",
-        body: "Open the WhatsApp page in the left menu and scan the code with the phone. The number shows as Connected when it is ready.",
+        body: `Open the ${name} page in the left menu and scan the code with the phone. The number shows as Connected when it is ready.`,
       },
     ],
     keepWorkflows: {

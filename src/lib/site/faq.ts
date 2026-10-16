@@ -44,7 +44,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     "official-api": {
       question: "Is this the official WhatsApp Business API?",
-      answer: `No. ${name} uses WhatsApp's linked-device mechanism (the one WhatsApp Web uses), not the official WhatsApp Business API. In practice that means no green tick, no template approval and no per-conversation fees from Meta, and the phone with the number must stay online. If you need the official API, this is not it.`,
+      answer: `No. ${name} uses WhatsApp's linked-device mechanism (the one WhatsApp Web uses), not the official WhatsApp Business API. In practice you don't get the green tick or Meta's template approval, Meta doesn't charge you per conversation, and the phone with the number must stay online. If you need the official API, this is not it.`,
     },
     "ban-risk": {
       question: "Can my number get banned?",

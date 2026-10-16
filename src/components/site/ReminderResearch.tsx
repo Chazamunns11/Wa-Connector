@@ -6,7 +6,7 @@ export function ReminderResearch({ headingClass }: { headingClass: string }) {
     <>
       <h2 className={headingClass}>Why reminders on WhatsApp</h2>
       <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
-        Two published trials on reminders and missed appointments.
+        Outside our own clients, two published trials on reminders and missed appointments.
       </p>
       <ul className="mt-10 grid list-none gap-0 p-0">
         {RESEARCH_FINDINGS.map((f) => (
