@@ -20,7 +20,8 @@ export function CustomerResults({
             <li key={r.business} className="grid gap-4 border-t border-border-strong py-8 md:grid-cols-[minmax(0,19rem)_minmax(0,1fr)] md:gap-12">
               <div>
                 <p className="font-display text-[3.0625rem] font-extrabold leading-none tracking-[-0.035em]">
-                  {r.showRateBefore}%<span className="mx-2 text-xl font-medium tracking-normal text-ink-dim">to</span>
+                  {r.showRateBefore}%{" "}
+                  <span className="mx-1 text-xl font-medium tracking-normal text-ink-dim">to</span>{" "}
                   {r.showRateAfter}%
                 </p>
                 <p className="mt-2 text-ink-dim">of booked clients showed up, {r.period}</p>

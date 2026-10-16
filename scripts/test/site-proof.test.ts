@@ -43,22 +43,28 @@ test("no 98% claim and no open-rate or read-rate phrasing anywhere in src", () =
 });
 
 test("the research band cites both studies with a link to each source", () => {
+  assert.equal(RESEARCH_FINDINGS.length, 2);
   const urls = RESEARCH_FINDINGS.map((f) => f.href);
   assert.ok(urls.includes("https://pmc.ncbi.nlm.nih.gov/articles/PMC5227159/"));
-  assert.ok(urls.includes("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7310733/"));
+  assert.ok(urls.includes("https://pmc.ncbi.nlm.nih.gov/articles/PMC7310733/"));
   const band = read("src/components/site/ReminderResearch.tsx");
   assert.match(band, /rel="noopener"/);
   const page = read("src/app/(site)/page.tsx");
-  assert.ok(page.indexOf("Live in three steps") < page.indexOf("<ReminderResearch") );
-  assert.ok(page.indexOf("<ReminderResearch") < page.indexOf("copy.keepWorkflows.heading"));
+  // Ruling W26: after "Keep your workflows", before the safety thread.
+  assert.ok(page.indexOf("copy.keepWorkflows.heading") < page.indexOf("<ReminderResearch"));
+  assert.ok(page.indexOf("<ReminderResearch") < page.indexOf("Built to be careful"));
   assert.match(page, /<CustomerResults/);
 });
 
 test("the research band states honest figures and the SMS-to-WhatsApp bridge", () => {
   const text = JSON.stringify(RESEARCH_FINDINGS);
-  assert.match(text, /38% to 24%/);
-  assert.match(text, /21% to 14%/);
+  assert.match(text, /"from":"38%","to":"24%"/);
+  assert.match(text, /"from":"21%","to":"14%"/);
+  assert.match(text, /about 170 patients/);
+  assert.match(text, /rewording the reminder/);
   const band = read("src/components/site/ReminderResearch.tsx");
   assert.match(band, /used SMS reminders/);
+  assert.match(band, /from your own\s+number, and replies land back in Conversations/);
+  assert.ok(!/most of your\s+contacts/.test(band));
   assert.ok(!/outperform|better than SMS|beats SMS/i.test(band + text));
 });

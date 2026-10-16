@@ -56,6 +56,13 @@ export default function HomePage() {
         </Container>
       </section>
 
+      <section className={`${SECTION} surface-dark`}>
+        <Container>
+          <h2 className={H2}>{copy.keepWorkflows.heading}</h2>
+          <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">{copy.keepWorkflows.body}</p>
+        </Container>
+      </section>
+
       <section className={`${SECTION} ${BAND}`}>
         <Container>
           <ReminderResearch headingClass={H2} />
@@ -63,13 +70,6 @@ export default function HomePage() {
       </section>
 
       <CustomerResults headingClass={H2} />
-
-      <section className={`${SECTION} surface-dark`}>
-        <Container>
-          <h2 className={H2}>{copy.keepWorkflows.heading}</h2>
-          <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">{copy.keepWorkflows.body}</p>
-        </Container>
-      </section>
 
       <section className={SECTION}>
         <Container>

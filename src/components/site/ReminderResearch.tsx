@@ -6,7 +6,7 @@ export function ReminderResearch({ headingClass }: { headingClass: string }) {
     <>
       <h2 className={headingClass}>Why reminders on WhatsApp</h2>
       <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
-        Two published trials on what a reminder does to missed appointments.
+        Two published trials on reminders and missed appointments.
       </p>
       <ul className="mt-10 grid list-none gap-0 p-0">
         {RESEARCH_FINDINGS.map((f) => (
@@ -16,8 +16,8 @@ export function ReminderResearch({ headingClass }: { headingClass: string }) {
           >
             <div>
               <p className="font-display text-[3.0625rem] font-extrabold leading-none tracking-[-0.035em]">
-                {f.from}
-                <span className="mx-2 text-xl font-medium tracking-normal text-ink-dim">to</span>
+                {f.from}{" "}
+                <span className="mx-1 text-xl font-medium tracking-normal text-ink-dim">to</span>{" "}
                 {f.to}
               </p>
               <p className="mt-2 text-ink-dim">{f.measure}</p>
@@ -38,8 +38,8 @@ export function ReminderResearch({ headingClass }: { headingClass: string }) {
       </ul>
       <div className="border-t border-border-strong pt-8">
         <p className="max-w-[60ch] text-lg">
-          Both studies used SMS reminders. PingWren sends the same GoHighLevel reminders on WhatsApp, the app most of your
-          contacts already use for messages.
+          Both studies used SMS reminders. PingWren sends the same GoHighLevel reminders on WhatsApp instead, from your own
+          number, and replies land back in Conversations.
         </p>
       </div>
     </>

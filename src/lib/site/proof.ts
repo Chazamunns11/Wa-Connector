@@ -27,8 +27,8 @@ export const RESEARCH_FINDINGS: ResearchFinding[] = [
     to: "24%",
     measure: "of appointments missed",
     claim:
-      "In a randomised trial at a children's clinic, adding a text-message reminder cut missed appointments from 38% to 24%.",
-    caveat: "A small study, 170 patients. The paper reports 38.1% falling to 23.5%.",
+      "In a randomised trial at a children's clinic, patients sent a text-message reminder missed fewer appointments than patients sent none.",
+    caveat: "A small study, about 170 patients. The paper reports 38.1% falling to 23.5%.",
     sourceTitle: "Text Message Reminders Increase Appointment Adherence in a Pediatric Clinic: A Randomized Controlled Trial",
     sourceId: "PMC5227159",
     href: "https://pmc.ncbi.nlm.nih.gov/articles/PMC5227159/",
@@ -36,12 +36,12 @@ export const RESEARCH_FINDINGS: ResearchFinding[] = [
   {
     from: "21%",
     to: "14%",
-    measure: "of patients who did not show",
-    claim: "In a trial with about 160,000 patients, the best-worded reminder cut no-shows from 21% to 14%.",
-    caveat: "The comparison was the health fund's usual reminder, so the gain came from the wording. The paper reports 21.1% falling to 14.2%.",
+    measure: "of appointments ended in a no-show",
+    claim: "In a trial covering about 160,000 appointments, rewording the reminder cut no-shows against the usual text.",
+    caveat: "Every patient got a reminder; only the wording changed, and the best wording is shown. The paper reports 21.1% falling to 14.2%.",
     sourceTitle: "It's how you say it: Systematic A/B testing of digital messaging cut hospital no-show rates",
     sourceId: "PMC7310733",
-    href: "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7310733/",
+    href: "https://pmc.ncbi.nlm.nih.gov/articles/PMC7310733/",
   },
 ];
 

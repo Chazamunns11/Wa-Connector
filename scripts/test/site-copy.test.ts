@@ -118,9 +118,11 @@ function websiteSources(): { file: string; text: string }[] {
 
 test("sales page sources carry no invented proof", () => {
   const re = /testimonial|trusted by|★|\d+%|\d+,\d{3}\+? (users|agencies|messages)|as seen in/i;
-  // proof.ts is the one place figures may live: Ruling W25 (cited research only; see site-proof.test.ts).
+  // proof.ts is the one place percentages may live (Ruling W25: cited research only; see site-proof.test.ts).
+  // It is still held to every other check.
+  const pct = /testimonial|trusted by|★|\d+,\d{3}\+? (users|agencies|messages)|as seen in/i;
   const hits = websiteSources()
-    .filter((s) => !s.file.endsWith("src/lib/site/proof.ts") && re.test(s.text))
+    .filter((s) => (s.file.endsWith("src/lib/site/proof.ts") ? pct : re).test(s.text))
     .map((s) => s.file);
   assert.deepEqual(hits, []);
 });
