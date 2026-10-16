@@ -1,11 +1,11 @@
 {
-  "name": "fitclosers-whatsapp-bridge",
+  "name": "wa-connector-whatsapp-bridge",
   "version": "0.1.0",
   "private": true,
-  "description": "Always-on WhatsApp Web bridge for FitClosers Hub (Railway). Holds each coach's Baileys session; the Next app on Vercel talks to it over an authenticated HTTP API. See README.md.",
+  "description": "Always-on WhatsApp Web bridge for WA Connector (Railway). Holds each GoHighLevel location's Baileys session; the Next app on Vercel talks to it over an authenticated HTTP API. See README.md.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

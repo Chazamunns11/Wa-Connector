@@ -1,17 +1,16 @@
-# FitClosers WhatsApp bridge
+# WA Connector WhatsApp bridge
 
-Always-on service holding each coach's WhatsApp Web session (Baileys), so the
-portal's future `whatsapp` sequence step can send follow-ups **from the
-coach's own number**. Replaces WAGHL ($19/mo per client) as part of the move
-off GoHighLevel. The portal (Next on Vercel) cannot hold a permanently-open
-WebSocket — see `src/lib/automations.ts`'s `keepAlive()` JSDoc in the main
-repo — so this runs on Railway instead.
+Always-on service holding each GoHighLevel location's WhatsApp Web session
+(Baileys), so the web app can send a location's messages **from that
+location's own linked number** and forward its replies to GHL. The web app
+(Next on Vercel) cannot hold a permanently-open WebSocket, so this runs on
+Railway instead. The product name shown to users comes from the web app's
+`BRAND_NAME` (default "WA Connector"); this package never shows it.
 
-**This package is the foundation only.** No UI, no `whatsapp` step type yet —
-those build against the HTTP contract in `src/server.ts`'s file header. The
-portal-side pieces are `src/lib/whatsapp-bridge.ts` (typed client),
-`Repository.getWhatsappSessionSummaries` (status reads), and
-`supabase/migrations/0046_whatsapp_sessions.sql`.
+Every tenant is a GHL location (`whatsapp_tenants.kind = 'ghl_location'`).
+The HTTP contract is in `src/server.ts`'s file header; the web-app side is
+`src/lib/whatsapp-bridge.ts` (typed client) in the repo root. Setup is in
+`docs/GO-LIVE-FOUNDATION.md` at the repo root.
 
 ## Baileys version
 
@@ -24,10 +23,16 @@ source (`src/Types/Auth.ts`, `src/Utils/use-multi-file-auth-state.ts` at
 v6.7.18): six key categories, `BufferJSON` serialisation,
 `AppStateSyncKeyData.fromObject` revival.
 
-## Node 22+ is REQUIRED, not a preference
+## Node 24 is the supported version
 
-Baileys opens its WhatsApp connection over a **global `WebSocket`**, which Node
-only exposes natively from **Node 22**. On Node 20 the process dies at startup
+Run the bridge, and its tests, on **Node 24** (`.nvmrc` is `24`,
+`engines.node` is `>=24`). The suite passes 279/279 on Node 24.11; tests run
+on older Node versions are not supported (for example `npx -y node@24 --test`
+or `nvm use` before `npm test`).
+
+The hard floor is Node 22: Baileys opens its WhatsApp connection over a
+**global `WebSocket`**, which Node only exposes natively from **Node 22**. On
+Node 20 the process dies at startup
 with:
 
 ```
@@ -40,16 +45,15 @@ container crash-looped. It never showed locally because the dev machine runs
 Node 24 — the classic "works on my machine" shape, caused by a manifest that
 understated its own requirement.
 
-So the version is now declared in **two** places, deliberately: `engines.node`
-(`>=22`, which Nixpacks and most hosts read) and `.nvmrc` (`22`, which the rest
-read). `@supabase/supabase-js` independently warns that Node 20 is deprecated,
-so this is the right floor regardless of Baileys.
+So the version is declared in **two** places, deliberately: `engines.node`
+(`>=24`, which Nixpacks and most hosts read) and `.nvmrc` (`24`, which the rest
+read). `@supabase/supabase-js` independently warns that Node 20 is deprecated.
 
 ## Run
 
 ```bash
 npm install
-npm test          # unit checks — no network, no WhatsApp, no Supabase needed
+npm test          # unit checks (run on Node 24) — no network, no WhatsApp, no Supabase needed
 npm run build     # tsc -> dist/
 npm start         # node dist/index.js
 ```
@@ -61,8 +65,8 @@ boot with any secret missing. **One Railway service, one replica** — the
 session lease (`src/lock.ts`) makes an accidental second replica harmless
 (it idles, unable to claim), but it is waste, not capacity.
 
-Deploy order for the first live run: apply migration `0046` → deploy bridge →
-set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
+Deploy order for the first live run: apply `supabase/migrations/0001_init.sql`
+→ deploy bridge → set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
 
 ## Key rotation (`WA_CREDS_KEY`)
 
@@ -81,10 +85,10 @@ set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
    ```
 3. Both zero → remove `WA_CREDS_KEY_PREVIOUS`, redeploy. Non-zero rows that
    never drain belong to idle/disconnected sessions — either reconnect them or
-   accept that those coaches re-scan a QR after the old key is dropped.
+   accept that those locations re-scan a QR after the old key is dropped.
 
 If the key is **lost** (not rotated): wipe `creds_enc`/`whatsapp_session_keys`
-for the affected coaches and have each re-scan a QR. Annoying, never dangerous.
+for the affected locations and have each re-scan a QR. Annoying, never dangerous.
 
 ## Ops: what the portal sees, what a human does
 
@@ -112,41 +116,27 @@ JID→E.164 mapping including WhatsApp's `@lid` routing). Two decisions worth
 knowing about if you're reading this before the rest of the package lands:
 
 - **The bridge writes reply rows directly to Supabase**
-  (`whatsapp_inbound_messages`, migration `0048`) with the same service-role
-  client already used for sessions/keys/the send ledger — there is no portal
+  (`whatsapp_inbound_messages`) with the same service-role
+  client already used for sessions/keys/the send ledger — there is no web-app
   HTTP endpoint that accepts reply *data*. The only thing this service ever
   sends the portal is a CONTENTLESS "drain now" poke (`src/poke.ts`,
   `PORTAL_INBOUND_URL` / `WA_INBOUND_POKE_SECRET`, both optional and unset by
   default). This makes a forged reply structurally impossible: the only way
   a row can exist is that this service's service-role key inserted it.
-- **The ledger gate**: a reply is only ever stored for a phone number this
-  coach's own send ledger (`whatsapp_messages`) shows a `status = 'sent'` row
-  to (`BridgeStore.wasProspectSent`, cached per-session by
-  `ProspectLedgerCache`). The linked number is the coach's real personal
-  phone — family, friends, and existing clients message it too; only threads
-  the portal itself opened are eligible to ever produce a row here.
-  **GHL PROVIDER PHASE 3 AMENDMENT** (docs/GHL-PROVIDER-PLAN.md, decision D4)
-  — this gate holds UNCONDITIONALLY for `kind = 'coach'` sessions; a
-  `kind = 'ghl_location'` session (`whatsapp_tenants.kind`, read once at
-  session start and cached — see `sessions.ts`'s `Session.tenantKind`)
-  bypasses it BY DESIGN, because the rationale above ("real personal phone")
-  simply does not apply to it: a GHL location's linked number is
-  contractually a DEDICATED BUSINESS number (never used personally — the
-  operator go-live checklist requires this in writing before connecting
-  one), and cold inbound from a prospect who was never messaged first is the
-  entire point of that number — WAGHL-parity two-way WhatsApp. See "Safety
-  invariants" below for exactly what changes and what doesn't, and
-  `src/inbound.ts`'s own in-code comment at the branch for the full
-  argument.
+- **No ledger gate**: every tenant is a GHL location whose linked number is
+  a dedicated business number, so cold inbound from a prospect who was never
+  messaged first is the point. Every reply that passes the filter chain
+  (`src/inbound.ts`) is stored and forwarded to GHL by the web app's drain;
+  nothing is dropped for lack of a prior outbound message. The GHL-side
+  rules (opt-in, dedicated-number disclosure) are operator policy, written
+  in `docs/GO-LIVE-FOUNDATION.md`, not enforced here.
 
-This batch is bridge-only: no portal-side drain, auto-stop, or
-`whatsapp_reply` automation trigger yet (those read `whatsapp_inbound_messages`
-in a later batch). Until then the table simply accumulates eligible replies
-and nothing polls it — safe and inert, and harmless even before the
-migration is applied: `processInboundBatch` wraps every message in its own
-try/catch, so a `recordInboundMessage` write failing (table doesn't exist
-yet, transient Supabase error, whatever) is logged and dropped, never a
-crash — the message still exists on the coach's phone regardless.
+Replies sit in `whatsapp_inbound_messages` until the web app's poke-triggered
+or hourly cron drain pushes them to GHL. This is safe and inert if the table
+is empty or the poke is unset: `processInboundBatch` wraps every message in
+its own try/catch, so a `recordInboundMessage` write failing (transient
+Supabase error, whatever) is logged and dropped, never a crash. The message
+still exists on the linked phone regardless.
 
 ## Safety invariants (do not weaken)
 
@@ -155,7 +145,7 @@ crash — the message still exists on the coach's phone regardless.
   byte-for-byte to the portal's `src/lib/phone.ts`).
 - Every dispatch is preceded by `onWhatsApp()` and sent to the JID WhatsApp
   returns; recipients without WhatsApp end `not_on_whatsapp`, terminal.
-- `(coach_id, idempotency_key)` is unique; the only path to the wire is the
+- `(coach_id, idempotency_key)` is unique (`coach_id` is the historical column name for the tenant id; for a GHL location it holds that location's tenant id); the only path to the wire is the
   atomic `accepted -> sending` claim. Interrupted `sending` rows are failed,
   never retried: at-most-once beats at-least-once when the recipient is human.
   `whatsapp_messages.dispatch_attempted` further splits a `failed` row into
@@ -163,7 +153,7 @@ crash — the message still exists on the coach's phone regardless.
   "dispatch was attempted, outcome UNCERTAIN — do not assume a retry is safe"
   (true, e.g. `sock.sendMessage` threw after the frame may already have hit
   WhatsApp).
-- Pacing (`WA_SEND_MIN_GAP_MS` + jitter + `WA_DAILY_CAP`) is per coach session
+- Pacing (`WA_SEND_MIN_GAP_MS` + jitter + `WA_DAILY_CAP`) is per tenant session
   and survives restarts (both the daily count AND the min-gap clock are
   seeded from the ledger — `store.getDailyActivity`). Budget is also
   RESERVED at accept time (`sentToday + queueLength`), not only counted at
@@ -172,7 +162,7 @@ crash — the message still exists on the coach's phone regardless.
   blow through the cap before any of them has actually dispatched. A ban
   lands on the client's real business number — that is why these defaults
   are conservative.
-- Two concurrent `/connect` calls for the same coach (a double-clicked
+- Two concurrent `/connect` calls for the same tenant (a double-clicked
   Connect button, or one landing mid-redeploy) collapse onto one in-flight
   attempt (`SessionManager.starting`) rather than racing two independent
   Baileys sockets — the split-brain lease alone cannot catch this because
@@ -184,22 +174,6 @@ crash — the message still exists on the coach's phone regardless.
 - Credentials: AES-256-GCM, key only in this service's env, AAD-bound per row.
   Nothing credential-adjacent is ever logged (`LOG_LEVEL` floor for the
   Baileys child logger is `warn` for this reason).
-- The inbound ledger gate (see "Inbound replies" above) holds
-  UNCONDITIONALLY for every `kind = 'coach'` session — this bridge never
-  stores or forwards a reply from a number the portal itself hasn't
-  messaged first, for a coach's real personal phone, full stop. **The ONE
-  scoped, documented exception** (GHL custom conversation provider Phase 3,
-  docs/GHL-PROVIDER-PLAN.md decision D4): a `kind = 'ghl_location'` session
-  bypasses this gate by design, because the number is contractually a
-  dedicated business number the client is paying specifically for
-  WAGHL-parity two-way WhatsApp, not a personal line family/friends also use
-  — see `src/inbound.ts`'s in-code justification at the branch and this
-  file's "Inbound replies" section above for the full argument, and
-  `docs/GHL-PROVIDER-GO-LIVE.md` for the written-disclosure requirement that
-  must go to the client before a GHL location's number is ever connected.
-  Every OTHER invariant on this list, and every other step of the inbound
-  filter chain (`src/inbound.ts`), is untouched by this exception and
-  remains identical for both session kinds.
 
 ## Why outbound messages never render link previews
 
