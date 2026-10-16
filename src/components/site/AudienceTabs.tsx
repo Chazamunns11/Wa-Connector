@@ -100,6 +100,7 @@ export function AudienceTabs({
             id={`panel-${a}`}
             aria-labelledby={`tab-${a}`}
             hidden={a !== active}
+            tabIndex={0}
             className="mt-8"
           >
             {panels[a]}

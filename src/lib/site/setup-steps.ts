@@ -33,6 +33,14 @@ export const SETUP_STEP_IDS: readonly DiagramId[] = [
 export const QR_WARNING =
   "Only scan the code yourself, on your own business phone. Whoever scans it can read and send messages as your business, so treat it like a password.";
 
+export const ALT_PATH_NOTE =
+  "Some accounts label this Settings → Phone Numbers → Advanced Settings → SMS Provider. It is the same setting.";
+
+const NOT_ACTIVE =
+  "If the page says \"WhatsApp isn't active for this sub-account\", activate it from your dashboard, or ask your account owner to.";
+const TRIAL_FIRST =
+  "If it offers \"Start your 7-day free trial\", follow that first. The sub-account is installed but not yet on an account.";
+
 /** The seven setup steps, in SETUP_STEP_IDS order, with the brand name filled in. */
 export function setupSteps(brand: BrandConfig): SetupStep[] {
   const { name } = brand;
@@ -40,7 +48,7 @@ export function setupSteps(brand: BrandConfig): SetupStep[] {
   const copy: Record<DiagramId, Omit<SetupStep, "id" | "diagram">> = {
     install: {
       title: `Install ${name}`,
-      summary: `Add ${name} to your HighLevel account. This is a one-off.`,
+      summary: `Add ${name} to your GoHighLevel account. This is a one-off.`,
       detail: {
         agency: [
           `Open the ${name} install link, or find ${name} in the Marketplace.`,
@@ -61,21 +69,24 @@ export function setupSteps(brand: BrandConfig): SetupStep[] {
         agency: [
           `Switch into a sub-account (Sub-Account view) and choose ${name} in the left menu.`,
           "The page does not work from Agency view, because there is no active sub-account to connect.",
+          NOT_ACTIVE,
         ],
-        business: [`In your sub-account, choose ${name} in the left menu.`],
+        business: [`In your sub-account, choose ${name} in the left menu.`, TRIAL_FIRST, NOT_ACTIVE],
       },
     },
     telephony: {
       title: "Set the Telephony Provider",
-      summary: `This is the step people miss. It tells HighLevel to send its text messages through ${name}.`,
+      summary: `This is the step people miss. It tells GoHighLevel to send its text messages through ${name}.`,
       detail: {
         agency: [
           `In the sub-account, go to ${path}.`,
           `Do this in every sub-account you connect. Until it is set, a connected number will not send anything.`,
+          ALT_PATH_NOTE,
         ],
         business: [
           `In your sub-account, go to ${path}.`,
           "Until it is set, a connected number will not send anything.",
+          ALT_PATH_NOTE,
         ],
       },
     },
@@ -85,13 +96,16 @@ export function setupSteps(brand: BrandConfig): SetupStep[] {
       detail: {
         agency: [
           `On the ${name} page, click Connect WhatsApp. A QR code appears.`,
-          "On the phone: WhatsApp → Settings → Linked Devices → Link a Device, then scan this code.",
+          NOT_ACTIVE,
+          "On your phone: WhatsApp → Settings → Linked devices → Link a device, then scan this code.",
           QR_WARNING,
           "If the phone belongs to your client, they need to be the one holding it when you scan.",
         ],
         business: [
           `On the ${name} page, click Connect WhatsApp. A QR code appears.`,
-          "On your phone: WhatsApp → Settings → Linked Devices → Link a Device, then scan this code.",
+          TRIAL_FIRST,
+          NOT_ACTIVE,
+          "On your phone: WhatsApp → Settings → Linked devices → Link a device, then scan this code.",
           QR_WARNING,
           "Use a dedicated business number if you can, and keep the phone switched on and online.",
         ],
@@ -101,8 +115,8 @@ export function setupSteps(brand: BrandConfig): SetupStep[] {
       title: "Check it says Connected",
       summary: "The status at the top of the page changes once the scan works.",
       detail: {
-        agency: ["The page shows Connected. If it still says Waiting for QR scan, scan the code again."],
-        business: ["The page shows Connected. If it still says Waiting for QR scan, scan the code again."],
+        agency: ["The page shows Connected. If it still says Waiting for QR scan, click Get a new QR code and scan the new one."],
+        business: ["The page shows Connected. If it still says Waiting for QR scan, click Get a new QR code and scan the new one."],
       },
     },
     "test-send": {
@@ -112,18 +126,18 @@ export function setupSteps(brand: BrandConfig): SetupStep[] {
         agency: [
           "Create a contact whose phone number is your own mobile. Use a different phone from the one you just linked.",
           "Run a workflow with a Send SMS step on that contact.",
-          "Sending is paced, so give the first message a minute. It arrives on WhatsApp, and HighLevel marks it delivered.",
+          "Sending is paced, so give the first message a minute or two. It arrives on WhatsApp, and GoHighLevel marks it delivered.",
         ],
         business: [
           "Create a contact whose phone number is your own mobile. Use a different phone from the one you just linked.",
           "Run a workflow with a Send SMS step on that contact.",
-          "Sending is paced, so give the first message a minute. It arrives on WhatsApp, and HighLevel marks it delivered.",
+          "Sending is paced, so give the first message a minute or two. It arrives on WhatsApp, and GoHighLevel marks it delivered.",
         ],
       },
     },
     reply: {
       title: "Reply and see it in Conversations",
-      summary: "Replies come back into the same HighLevel conversation.",
+      summary: "Replies come back into the same GoHighLevel conversation.",
       detail: {
         agency: ["Reply from that WhatsApp chat. The reply shows up in the contact's thread under Conversations."],
         business: ["Reply from that WhatsApp chat. The reply shows up in the contact's thread under Conversations."],
@@ -149,7 +163,8 @@ export function troubleshooting(brand: BrandConfig): { id: string; title: string
       id: "connected-not-sending",
       title: "It says Connected but nothing sends",
       body: [
-        `Check the Telephony Provider first: ${path}. If another provider is selected, HighLevel is still sending through that one.`,
+        `Check the Telephony Provider first: ${path}. If another provider is selected, GoHighLevel is still sending through that one.`,
+        ALT_PATH_NOTE,
         "Then check that the contact has a phone number and that the workflow step is Send SMS.",
       ],
     },
@@ -165,8 +180,8 @@ export function troubleshooting(brand: BrandConfig): { id: string; title: string
       title: "Messages are waiting and not going out",
       body: [
         "The phone has disconnected, usually because it is offline or WhatsApp was logged out on it. Messages for that number are held, not lost.",
-        `Open the ${name} page. If it says Disconnected, click Reconnect and the held messages send.`,
-        "Messages over the number's daily cap are different. They are reported to HighLevel as not sent, and the number starts again at midnight UTC.",
+        `Open the ${name} page. If it says Disconnected, click Reconnect (scan the QR again if one appears) and the held messages send.`,
+        "Messages over the number's daily cap are different. They are reported to GoHighLevel as not sent, and the number starts again at midnight UTC.",
       ],
     },
     {
@@ -181,7 +196,7 @@ export function troubleshooting(brand: BrandConfig): { id: string; title: string
       id: "linked-device-limit",
       title: "WhatsApp says the number has too many linked devices",
       body: [
-        "WhatsApp caps how many devices one number can have linked. On the phone, go to WhatsApp → Settings → Linked Devices, open one you no longer use and log it out. Then connect again.",
+        "WhatsApp caps how many devices one number can have linked. On the phone, go to WhatsApp → Settings → Linked devices, open one you no longer use and log it out. Then connect again.",
       ],
     },
   ];

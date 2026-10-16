@@ -1,7 +1,7 @@
 import { H_FLOW_HEIGHT, HFlow, NARROW, VFlow, WIDE, clip, vFlowHeight } from "@/components/site/diagram-parts";
 
 export function InstallDiagram({ brandName }: { brandName: string }) {
-  const label = `Diagram: the install link or the Marketplace, then approving the permissions, adds ${brandName} to your HighLevel account`;
+  const label = `Diagram: the install link or the Marketplace, then approving the permissions, adds ${brandName} to your GoHighLevel account`;
   const nodes = [
     { title: "Install link", sub: "or Marketplace" },
     { title: "Approve", sub: "Permissions screen" },

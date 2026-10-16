@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { AudienceTabs } from "@/components/site/AudienceTabs";
 import { Container } from "@/components/site/Container";
@@ -13,6 +14,21 @@ export function generateMetadata(): Metadata {
     title: `Set up ${name} in GoHighLevel`,
     description: `Step-by-step setup for ${name}: install, set the Telephony Provider, scan the QR code and send a test message. About ten minutes.`,
   };
+}
+
+function withSupportLink(text: string, email: string | null): ReactNode {
+  const marker = "get in touch";
+  const i = text.indexOf(marker);
+  if (!email || i < 0) return text;
+  return (
+    <>
+      {text.slice(0, i)}
+      <a href={`mailto:${email}`} className="underline underline-offset-2">
+        {marker}
+      </a>
+      {text.slice(i + marker.length)}
+    </>
+  );
 }
 
 function parseAudience(value: string | string[] | undefined): Audience {
@@ -35,14 +51,14 @@ export default async function SetupPage({
       a,
       <div key={a}>
         <h2 className="font-display text-[clamp(24px,4vw,32px)] font-bold leading-tight">{AUDIENCE_LABELS[a]}</h2>
-        <ol className="mt-4 list-none p-0 [counter-reset:step] [&>li]:[counter-increment:step]">
-          {steps.map((s) => (
-            <SetupStep key={s.id} step={s} audience={a} brandName={brand.name} />
+        <ol role="list" className="mt-4 list-none p-0">
+          {steps.map((s, i) => (
+            <SetupStep key={s.id} index={i} step={s} audience={a} brandName={brand.name} />
           ))}
         </ol>
       </div>,
     ]),
-  ) as Record<Audience, React.ReactNode>;
+  ) as Record<Audience, ReactNode>;
 
   return (
     <>
@@ -59,13 +75,14 @@ export default async function SetupPage({
             <div className="mt-6 rounded-lg border bg-raised p-4">
               <h2 className="font-display text-lg font-semibold">Before you start</h2>
               <ul className="mt-2 grid list-disc gap-1 pl-5 text-ink-dim marker:text-ink-faint">
-                <li>A HighLevel account with at least one sub-account.</li>
+                <li>A GoHighLevel account with at least one sub-account.</li>
+                <li>A {brand.name} account (start the free trial first).</li>
                 <li>The phone that has the WhatsApp number you want to send from, with you.</li>
                 <li>A second phone to receive the test message.</li>
               </ul>
             </div>
             <div className="mt-8">
-              <AudienceTabs panels={panels} initial={initial} />
+              <AudienceTabs key={initial} panels={panels} initial={initial} />
             </div>
 
             <h2 id="troubleshooting" className="mt-16 scroll-mt-4 font-display text-[clamp(24px,4vw,32px)] font-bold">
@@ -85,7 +102,7 @@ export default async function SetupPage({
                   </summary>
                   <div className="grid max-w-[62ch] gap-3 pb-4 text-ink-dim">
                     {t.body.map((p) => (
-                      <p key={p}>{p}</p>
+                      <p key={p}>{withSupportLink(p, brand.supportEmail)}</p>
                     ))}
                   </div>
                 </details>

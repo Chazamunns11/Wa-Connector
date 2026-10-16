@@ -32,16 +32,19 @@ export function SetupStep({
   step,
   audience,
   brandName,
+  index,
 }: {
+  index: number;
   step: Step;
   audience: Audience;
   brandName: string;
 }) {
   const headingId = `${audience}-${step.id}`;
   return (
-    <li className="grid gap-4 border-t py-6" aria-labelledby={headingId}>
+    <li className="grid gap-4 border-t py-6">
       <div>
-        <h3 id={headingId} className="font-display text-lg font-semibold before:mr-2 before:text-accent-text before:content-[counter(step)'.']">
+        <h3 id={headingId} className="font-display text-lg font-semibold">
+          <span className="mr-2 text-accent-text">{index + 1}.</span>
           {step.title}
         </h3>
         <p className="mt-2 text-ink-dim">{step.summary}</p>

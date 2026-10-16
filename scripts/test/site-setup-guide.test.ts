@@ -43,9 +43,22 @@ test("telephony step states the exact GHL path ending in the brand name and Save
 test("qr step gives the Linked Devices path", () => {
   const q = setupSteps(acme).find((s) => s.id === "qr")!;
   for (const a of ["agency", "business"] as const) {
-    assert.ok(q.detail[a].some((d) => d.includes("WhatsApp → Settings → Linked Devices → Link a Device")), a);
+    assert.ok(q.detail[a].some((d) => d.includes("On your phone: WhatsApp → Settings → Linked devices → Link a device")), a);
   }
   assert.ok(JSON.stringify(q.detail).includes("read and send messages as your business"));
+});
+
+test("telephony step and troubleshooting mention the alternative SMS Provider label (W15)", () => {
+  const t = setupSteps(acme).find((s) => s.id === "telephony")!;
+  assert.ok(JSON.stringify(t.detail).includes("Phone Numbers → Advanced Settings → SMS Provider"));
+  const c = troubleshooting(acme).find((x) => x.id === "connected-not-sending")!;
+  assert.ok(c.body.join(" ").includes("SMS Provider"));
+});
+
+test("menu step covers activation and trial states (W17)", () => {
+  const m = setupSteps(acme).find((s) => s.id === "menu")!;
+  assert.ok(m.detail.agency.join(" ").includes("isn't active for this sub-account"));
+  assert.ok(m.detail.business.join(" ").includes("Start your 7-day free trial"));
 });
 
 test("troubleshooting covers the five spec cases", () => {
