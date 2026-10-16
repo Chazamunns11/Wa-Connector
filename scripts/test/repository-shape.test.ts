@@ -56,17 +56,21 @@ const METHODS = [
   "getLocationStats",
   "recordStripeEvent",
   "deleteStripeEvent",
+  "recordOptOut",
+  "clearOptOut",
+  "isOptedOut",
+  "countOptOutsByTenant",
 ] as const;
 
-test("SupabaseGhlRepository implements all 48 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 48);
-  assert.equal(new Set(METHODS).size, 48);
+test("SupabaseGhlRepository implements all 52 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 52);
+  assert.equal(new Set(METHODS).size, 52);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 48", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 52", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });

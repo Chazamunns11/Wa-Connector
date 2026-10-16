@@ -634,6 +634,20 @@ export interface GhlRepository {
   getWhatsappSessionSummariesForTenants(tenantIds: string[]): Promise<WhatsappSessionSummary[]>;
   /** Per-location outbound stats since sinceIso; every requested id appears in the result. */
   getLocationStats(locationIds: string[], sinceIso: string): Promise<Record<string, LocationStats>>;
+  /**
+   * Records that `phone` opted out on this tenant's number (W10: one number
+   * only). Upsert on (tenant_id, phone), refreshing `opted_out_at`, so a
+   * repeated STOP is harmless. The phone is normalised with
+   * `normalisePhoneE164(phone, "GB")` like every other phone in the portal;
+   * one that cannot be normalised throws (never stored as a guess).
+   */
+  recordOptOut(input: { tenantId: string; phone: string; keyword: string; ghlContactId: string | null }): Promise<void>;
+  /** Opt-in (START): deletes the (tenant, phone) opt-out; a no-op when absent or when the phone cannot be normalised. */
+  clearOptOut(tenantId: string, phone: string): Promise<void>;
+  /** True iff this (tenant, phone) has opted out. An unnormalisable phone is never opted out. */
+  isOptedOut(tenantId: string, phone: string): Promise<boolean>;
+  /** Opt-out counts per tenant; every requested id appears (0 when none). */
+  countOptOutsByTenant(tenantIds: string[]): Promise<Map<string, number>>;
   /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */
   recordStripeEvent(eventId: string, type: string): Promise<boolean>;
   /** Releases a recorded Stripe event id after a processing failure so Stripe's retry is handled, not dropped as a duplicate. */

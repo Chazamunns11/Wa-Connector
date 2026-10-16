@@ -8,6 +8,7 @@
  * lazily (importing this module needs no env; the first query does).
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { DEFAULT_PHONE_REGION, normalisePhoneE164 } from "@/lib/phone";
 import type {
   Account,
   AccountBillingPatch,
@@ -1386,6 +1387,67 @@ export class SupabaseGhlRepository implements GhlRepository {
       );
     }
     return result;
+  }
+
+  async recordOptOut(input: { tenantId: string; phone: string; keyword: string; ghlContactId: string | null }) {
+    const phone = normalisePhoneE164(input.phone, DEFAULT_PHONE_REGION);
+    if (!phone) throw new Error("recordOptOut: phone is not a valid number");
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("whatsapp_opt_outs").upsert(
+      {
+        tenant_id: input.tenantId,
+        phone,
+        keyword: input.keyword,
+        ghl_contact_id: input.ghlContactId,
+        // merge-duplicates only rewrites the columns we send, so refresh the timestamp explicitly.
+        opted_out_at: new Date().toISOString(),
+      },
+      { onConflict: "tenant_id,phone" }
+    );
+    if (error) throw error;
+  }
+
+  async clearOptOut(tenantId: string, phone: string) {
+    const normalised = normalisePhoneE164(phone, DEFAULT_PHONE_REGION);
+    if (!normalised) return;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("whatsapp_opt_outs").delete().eq("tenant_id", tenantId).eq("phone", normalised);
+    if (error) throw error;
+  }
+
+  async isOptedOut(tenantId: string, phone: string) {
+    const normalised = normalisePhoneE164(phone, DEFAULT_PHONE_REGION);
+    if (!normalised) return false;
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_opt_outs")
+      .select("phone")
+      .eq("tenant_id", tenantId)
+      .eq("phone", normalised)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async countOptOutsByTenant(tenantIds: string[]) {
+    const counts = new Map<string, number>(tenantIds.map((id) => [id, 0]));
+    if (tenantIds.length === 0) return counts;
+    const supabase = getServiceClient();
+    const PAGE_SIZE = 1000;
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from("whatsapp_opt_outs")
+        .select("tenant_id")
+        .in("tenant_id", tenantIds)
+        .order("tenant_id", { ascending: true })
+        .order("phone", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      const page = (data ?? []) as { tenant_id: string }[];
+      for (const r of page) counts.set(r.tenant_id, (counts.get(r.tenant_id) ?? 0) + 1);
+      if (page.length < PAGE_SIZE) break;
+    }
+    return counts;
   }
 
   async recordStripeEvent(eventId: string, type: string) {
