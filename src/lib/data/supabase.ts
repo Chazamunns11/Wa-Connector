@@ -26,7 +26,7 @@ import type {
   WhatsappSessionStatus,
   WhatsappSessionSummary,
 } from "@/lib/types";
-import { normaliseHex } from "@/lib/brand";
+import { LOGO_BUCKET, LOGO_EXTENSION, normaliseHex, type SafeLogoType } from "@/lib/brand";
 import { ghlTenantKeyQueryFilters } from "@/lib/ghl";
 import {
   buildGhlHealthSnapshot,
@@ -1075,5 +1075,80 @@ export class SupabaseGhlRepository implements GhlRepository {
     }));
 
     return buildGhlHealthSnapshot(locations, outboundRows, inboundRows, Date.now(), waitingRows);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GHL location logo storage — copied from PortalHub supabase.ts (the
+// `saveGhlAccountBrandingAction` path, src/app/admin/actions.ts).
+// ---------------------------------------------------------------------------
+
+/**
+ * W-CONNECT-BRAND (migration 0076) — put a GHL location's logo bytes in the
+ * SHARED `client-logos` bucket and return the PATH to store on
+ * `ghl_accounts.brand_logo_path`. Same ordering/uniqueness/cleanup structure
+ * as `uploadCoachLogoService` immediately above (upload the new object
+ * first, best-effort-delete the location's previous ones after — see that
+ * function's own JSDoc for the full "why this order" reasoning, which
+ * applies verbatim here), with two differences, both explained in migration
+ * 0076's own header:
+ *
+ *   - The object path is prefixed `ghl/<locationId>/`, not bare
+ *     `<locationId>/` — collision safety against `coaches.id` (0076, "WHY
+ *     THIS SHARES `client-logos`... COLLISION SAFETY").
+ *   - The return value is the PATH itself (`getPublicUrl` is never called
+ *     here), not a URL — `brand_logo_path` stores a path, resolved to a URL
+ *     on READ by `resolveLogoPath` (src/lib/brand.ts), not on write. See
+ *     0076's header, "WHY A PATH, NOT A URL".
+ */
+export async function uploadGhlAccountLogoService(
+  locationId: string,
+  bytes: Uint8Array,
+  contentType: SafeLogoType,
+): Promise<string> {
+  const supabase = getServiceClient();
+  const prefix = `ghl/${locationId}`;
+  const path = `${prefix}/${crypto.randomUUID()}.${LOGO_EXTENSION[contentType]}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(LOGO_BUCKET)
+    .upload(path, bytes, { contentType, cacheControl: "31536000" });
+  if (uploadError) throw uploadError;
+
+  // Best-effort cleanup of this location's PREVIOUS logos — scoped to
+  // `ghl/<locationId>/`, so it can never touch a coach's objects (which sit
+  // at bare `<coachId>/...`, a disjoint namespace) even if the listing were
+  // somehow wrong.
+  try {
+    const { data: existing } = await supabase.storage.from(LOGO_BUCKET).list(prefix);
+    const stale = (existing ?? [])
+      .map((o) => `${prefix}/${o.name}`)
+      .filter((p) => p !== path);
+    if (stale.length > 0) await supabase.storage.from(LOGO_BUCKET).remove(stale);
+  } catch {
+    // Deliberately swallowed — see `uploadCoachLogoService`'s identical note.
+  }
+
+  return path;
+}
+
+/**
+ * W-CONNECT-BRAND — remove every stored logo object for one GHL location,
+ * the `ghl/<locationId>/` twin of `deleteCoachLogoObjectsService` above. Same
+ * best-effort posture: `brand_logo_path` going back to `null` is what
+ * actually takes the logo off the connect page, and that write is the
+ * caller's next step (`saveGhlAccountBrandingAction`,
+ * src/app/owner/setup-links/actions.ts) — a failure to tidy the bucket must
+ * not block it.
+ */
+export async function deleteGhlAccountLogoObjectsService(locationId: string): Promise<void> {
+  try {
+    const supabase = getServiceClient();
+    const prefix = `ghl/${locationId}`;
+    const { data: existing } = await supabase.storage.from(LOGO_BUCKET).list(prefix);
+    const paths = (existing ?? []).map((o) => `${prefix}/${o.name}`);
+    if (paths.length > 0) await supabase.storage.from(LOGO_BUCKET).remove(paths);
+  } catch {
+    // See above — tidying the bucket is never the operation the user asked for.
   }
 }

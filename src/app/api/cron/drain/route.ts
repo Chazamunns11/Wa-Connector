@@ -1,0 +1,103 @@
+/**
+ * GET /api/cron/drain — the hourly backstop for the GHL provider's drains
+ * (vercel.json schedules it). Assembled from PortalHub
+ * `src/app/api/cron/reminders/route.ts`'s three WhatsApp/GHL passes and
+ * `src/app/api/cron/weekly/route.ts`'s `CRON_SECRET` guard; everything else
+ * those routes did (reminder emails, sequence runs, the coach reply drain,
+ * Slack summaries) is Hub-only.
+ *
+ * The bridge's pokes (`/api/webhooks/crm-outbound-status`,
+ * `/api/webhooks/whatsapp-replies`) are the latency path; this unconditional
+ * pass is what guarantees an unreported row is never stuck longer than an
+ * hour even if every poke silently fails.
+ *
+ * ORDER (copied from the reminders route): outbound statuses, then inbound
+ * replies, then the 90-day inbound purge — a row must be fully processed
+ * before it's ever eligible to be deleted. Each pass is non-fatal: its own
+ * try/catch, so one failing never stops the others.
+ *
+ * AUTH: `CRON_SECRET`, constant-time Bearer compare. Unset -> 503, never
+ * processes an unauthenticated request (there is no demo mode here).
+ */
+import { timingSafeEqual } from "crypto";
+import { NextResponse, type NextRequest } from "next/server";
+import { repo } from "@/lib/data";
+import { drainGhlOutboundStatuses } from "@/lib/ghl-provider";
+import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
+
+export const dynamic = "force-dynamic";
+
+/** Same explicit budget as PortalHub's reminders cron — the outbound drain carries its own wall-clock budget inside it, see `DRAIN_TIME_BUDGET_MS` (src/lib/ghl-provider.ts). */
+export const maxDuration = 300;
+
+/** Adversarial-review fix (lens 3, finding 1) — 0048's own file header always documented a 90-day purge of `whatsapp_inbound_messages`; this constant + the pass below is what actually implements it. See `Repository.purgeOldWhatsappInboundMessages`'s JSDoc. */
+const WHATSAPP_INBOUND_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** L1 fix (security/correctness audit) — constant-time Bearer-header compare, mirrors `GET /api/cron/weekly`'s identical helper. Length check first (a mismatch there is "not even shaped right"). */
+function constantTimeEqualStr(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf8");
+  const bBuf = Buffer.from(b, "utf8");
+  return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
+}
+
+export async function GET(request: NextRequest) {
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (cronSecret) {
+    const authHeader = request.headers.get("authorization");
+    if (!authHeader || !constantTimeEqualStr(authHeader, `Bearer ${cronSecret}`)) {
+      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+    }
+  } else {
+    // No secret configured: never process unauthenticated requests.
+    return NextResponse.json({ ok: false, error: "CRON_SECRET not configured" }, { status: 503 });
+  }
+
+  const now = Date.now();
+
+  let ghlOutboundStatuses = {
+    candidates: 0,
+    delivered: 0,
+    failed: 0,
+    retried: 0,
+    stillPending: 0,
+    unresolved: 0,
+    reportFailed: 0,
+    timeBudgetExceeded: false,
+  };
+  try {
+    ghlOutboundStatuses = await drainGhlOutboundStatuses(repo);
+    if (ghlOutboundStatuses.candidates > 0) {
+      console.log(
+        `[cron/drain] ghl outbound statuses: ${ghlOutboundStatuses.candidates} candidate(s), delivered ${ghlOutboundStatuses.delivered}, failed ${ghlOutboundStatuses.failed}, retried ${ghlOutboundStatuses.retried}, still pending ${ghlOutboundStatuses.stillPending}${ghlOutboundStatuses.timeBudgetExceeded ? " (time budget exceeded — remaining rows left for next pass)" : ""}.`
+      );
+    }
+  } catch (err) {
+    console.error("[cron/drain] ghl outbound-status drain failed (non-fatal):", err);
+  }
+
+  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, blockedUnconfigured: false };
+  try {
+    ghlInboundReplies = await drainGhlInboundReplies(repo);
+    if (ghlInboundReplies.candidates > 0) {
+      console.log(
+        `[cron/drain] ghl inbound replies: ${ghlInboundReplies.candidates} candidate(s), pushed ${ghlInboundReplies.pushed}, rejected ${ghlInboundReplies.rejected}, failed ${ghlInboundReplies.failed}, uncertain ${ghlInboundReplies.uncertain}, retried ${ghlInboundReplies.retried}.`
+      );
+    }
+  } catch (err) {
+    console.error("[cron/drain] ghl inbound-reply drain failed (non-fatal):", err);
+  }
+
+  let whatsappInboundPurged = 0;
+  try {
+    const cutoffIso = new Date(now - WHATSAPP_INBOUND_RETENTION_MS).toISOString();
+    whatsappInboundPurged = await repo.purgeOldWhatsappInboundMessages(cutoffIso);
+    if (whatsappInboundPurged > 0) {
+      console.log(`[cron/drain] purged ${whatsappInboundPurged} whatsapp inbound row(s) older than 90 days.`);
+    }
+  } catch (err) {
+    console.error("[cron/drain] whatsapp-inbound purge failed (non-fatal):", err);
+  }
+
+  return NextResponse.json({ ok: true, ghlOutboundStatuses, ghlInboundReplies, whatsappInboundPurged });
+}

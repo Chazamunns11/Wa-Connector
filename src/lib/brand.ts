@@ -164,6 +164,19 @@ export function inkFor(accentHex: string): string {
     : BRAND_WHITE;
 }
 
+/**
+ * Is this colour so close to the page background that a button filled with it
+ * would visually disappear? Used ONLY to warn in the editor — never to block
+ * a save. A client's brand colour is theirs; the job here is to tell them
+ * before their prospects see it, not to overrule them.
+ *
+ * `#0B0C0D` ink-on-ink is the motivating case: contrast 1.0 against the dark
+ * portal ground. Below 1.5 the fill is essentially invisible as a shape.
+ */
+export function isNearlyInvisibleOn(accentHex: string, backgroundHex: string): boolean {
+  return contrastRatio(accentHex, backgroundHex) < 1.5;
+}
+
 /** The branding actually in force for one page/email, after coach → page resolution. */
 export interface ResolvedBranding {
   /** The logo to show, or `null` when this client has no logo uploaded. */

@@ -55,7 +55,9 @@ import {
   verifyGhlEmbedToken,
 } from "@/lib/ghl-embed";
 import { signKindedState, verifyKindedState } from "@/lib/signed-state";
+import { authorizeGhlEmbedRequest, type GhlEmbedGuardRepo } from "@/app/api/crm/embed/guard";
 import { isValidGhlEmbedFrameAncestor, parseGhlEmbedFrameAncestors } from "@/lib/csp";
+import type { GhlAccount } from "@/lib/types";
 
 const SECRET = "correct-shared-secret";
 const WRONG_SECRET = "a-completely-different-secret";
@@ -406,6 +408,145 @@ test("mintGhlEmbedToken: throws when ONBOARD_STATE_SECRET is unset, rather than 
     else process.env.ONBOARD_STATE_SECRET = previousOnboard;
     if (previousCron === undefined) delete process.env.CRON_SECRET;
     else process.env.CRON_SECRET = previousCron;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// authorizeGhlEmbedRequest (src/app/api/crm/embed/guard.ts) — the shared
+// bearer-token + fresh-account-re-read guard the three embed WhatsApp routes
+// run on EVERY call. Deps-injected (a fake repo), same pattern as
+// `scripts/test/ghl.test.ts`'s `createFakeRepo`.
+// ---------------------------------------------------------------------------
+
+const TENANT_ID = "33333333-3333-4333-8333-333333333333";
+const LOCATION_ID = "loc-guard-1";
+
+function makeAccount(overrides: Partial<GhlAccount> = {}): GhlAccount {
+  return {
+    locationId: LOCATION_ID,
+    tenantId: TENANT_ID,
+    label: "Guard Test Location",
+    companyId: null,
+    conversationProviderId: null,
+    accessToken: "access-token",
+    accessTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    refreshToken: "refresh-token",
+    status: "active",
+    lastError: null,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function fakeGuardRepo(accounts: GhlAccount[]): GhlEmbedGuardRepo & { calls: string[] } {
+  const byLocation = new Map(accounts.map((a) => [a.locationId, a]));
+  const calls: string[] = [];
+  return {
+    calls,
+    async getGhlAccountByLocationId(locationId: string) {
+      calls.push(locationId);
+      return byLocation.get(locationId) ?? null;
+    },
+  };
+}
+
+test("guard: no Authorization header at all -> 401 missing_token", async () => {
+  const repo = fakeGuardRepo([makeAccount()]);
+  const result = await authorizeGhlEmbedRequest(repo, null);
+  assert.deepEqual(result, { ok: false, status: 401, error: "missing_token" });
+  assert.equal(repo.calls.length, 0, "the repo must never be consulted when there is no token to verify first");
+});
+
+test("guard: a header without the Bearer scheme -> 401 missing_token", async () => {
+  const repo = fakeGuardRepo([makeAccount()]);
+  const token = mintGhlEmbedToken(LOCATION_ID);
+  const result = await authorizeGhlEmbedRequest(repo, token); // no "Bearer " prefix
+  assert.deepEqual(result, { ok: false, status: 401, error: "missing_token" });
+});
+
+test("guard: a syntactically-present but garbage token -> 401 invalid_token", async () => {
+  const repo = fakeGuardRepo([makeAccount()]);
+  const result = await authorizeGhlEmbedRequest(repo, "Bearer not-a-real-token");
+  assert.deepEqual(result, { ok: false, status: 401, error: "invalid_token" });
+});
+
+test("guard: an expired token -> 401 invalid_token", async () => {
+  const repo = fakeGuardRepo([makeAccount()]);
+  const expired = signKindedState("ghl-embed", { locationId: LOCATION_ID }, -1);
+  const result = await authorizeGhlEmbedRequest(repo, `Bearer ${expired}`);
+  assert.deepEqual(result, { ok: false, status: 401, error: "invalid_token" });
+});
+
+test("guard: a valid token for a location with NO installed ghl_accounts row -> 403 unknown_location", async () => {
+  const repo = fakeGuardRepo([]); // nothing installed anywhere
+  const token = mintGhlEmbedToken("loc-never-installed");
+  const result = await authorizeGhlEmbedRequest(repo, `Bearer ${token}`);
+  assert.deepEqual(result, { ok: false, status: 403, error: "unknown_location" });
+});
+
+test("guard: a valid token for a DISABLED account -> 403 account_disabled", async () => {
+  const repo = fakeGuardRepo([makeAccount({ status: "disabled" })]);
+  const token = mintGhlEmbedToken(LOCATION_ID);
+  const result = await authorizeGhlEmbedRequest(repo, `Bearer ${token}`);
+  assert.deepEqual(result, { ok: false, status: 403, error: "account_disabled" });
+});
+
+test("guard: a valid token for an active account -> ok, tenant resolved, and the repo is re-read (not cached from the token)", async () => {
+  const repo = fakeGuardRepo([makeAccount()]);
+  const token = mintGhlEmbedToken(LOCATION_ID);
+  const result = await authorizeGhlEmbedRequest(repo, `Bearer ${token}`);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.account.tenantId, TENANT_ID);
+  assert.deepEqual(repo.calls, [LOCATION_ID], "must call getGhlAccountByLocationId — the revocation lever this guard exists for");
+});
+
+test("guard: needs_reauth is NOT refused here — only 'missing' and 'disabled' are (GHL OAuth health is orthogonal to the WhatsApp bridge session)", async () => {
+  const repo = fakeGuardRepo([makeAccount({ status: "needs_reauth" })]);
+  const token = mintGhlEmbedToken(LOCATION_ID);
+  const result = await authorizeGhlEmbedRequest(repo, `Bearer ${token}`);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.account.status, "needs_reauth");
+});
+
+test("guard: RE-READ ON EVERY CALL — an account that was active when the token was minted but is disabled by the time this call runs is refused (the actual revocation lever)", async () => {
+  const account = makeAccount({ status: "active" });
+  const repo = fakeGuardRepo([account]);
+  const token = mintGhlEmbedToken(LOCATION_ID);
+
+  const before = await authorizeGhlEmbedRequest(repo, `Bearer ${token}`);
+  assert.equal(before.ok, true);
+
+  account.status = "disabled"; // an owner disables the location in GhlAccountsPanel between two polls
+  const after = await authorizeGhlEmbedRequest(repo, `Bearer ${token}`); // SAME token, never re-minted
+  assert.deepEqual(after, { ok: false, status: 403, error: "account_disabled" });
+});
+
+// ---------------------------------------------------------------------------
+// THE KILL-SWITCH GAP (adversarial review lens 4, finding 3 — MAJOR). Before
+// this fix, `authorizeGhlEmbedRequest` checked only the token + a DB
+// re-read — `isGhlEmbedConfigured()`/`isLiveMode()` lived ONLY on
+// `POST /api/crm/embed/session`, so an already-minted token (up to 15
+// minutes old) kept working on these three routes even after an operator
+// flipped `GHL_SSO_SHARED_SECRET` off as an emergency kill switch, or a
+// deployment's env drifted out of live mode mid-flight. These tests use a
+// STILL-VALID token/account pair — the config gate must refuse BEFORE the
+// token or the repo are ever consulted.
+// ---------------------------------------------------------------------------
+
+test("guard: GHL_SSO_SHARED_SECRET unset -> 503 embed_not_configured, even with a perfectly valid token and account (the kill-switch case)", async () => {
+  const repo = fakeGuardRepo([makeAccount()]);
+  const token = mintGhlEmbedToken(LOCATION_ID); // minted while still configured
+
+  const previous = process.env.GHL_SSO_SHARED_SECRET;
+  delete process.env.GHL_SSO_SHARED_SECRET; // the emergency kill switch
+  try {
+    const result = await authorizeGhlEmbedRequest(repo, `Bearer ${token}`);
+    assert.deepEqual(result, { ok: false, status: 503, error: "embed_not_configured" });
+    assert.equal(repo.calls.length, 0, "must refuse before the repo is ever consulted");
+  } finally {
+    if (previous === undefined) delete process.env.GHL_SSO_SHARED_SECRET;
+    else process.env.GHL_SSO_SHARED_SECRET = previous;
   }
 });
 
