@@ -19,6 +19,9 @@ export interface PlanStatus {
 
 export function planStatus(account: AccountSummary, now: Date): PlanStatus {
   switch (account.billingStatus) {
+    case "pending":
+      // Checkout abandoned: Task 9 wires the working "add a card" button.
+      return { label: "Card needed", tone: "warn", banner: "Add a card to start your trial" };
     case "trialing": {
       const n = trialDaysLeft(account.trialEndsAt, now);
       if (n === 0) return { label: "Trial ended", tone: "warn", banner: null };

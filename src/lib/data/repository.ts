@@ -2,11 +2,15 @@
  * The data-access contract for the standalone GHL WhatsApp provider.
  *
  * Copied from PortalHub's `Repository`/`WebhookRepository` (src/lib/data/index.ts),
- * reduced to the 27 methods the provider slice uses. There is exactly one
+ * reduced to the 27 methods (plus the 16 accounts/billing methods of migration 0002) the provider slice uses. There is exactly one
  * implementation (service-role Supabase, `SupabaseGhlRepository`) and no
  * user-session repo: every method here is service-role by design.
  */
 import type {
+  Account,
+  AccountAdminRow,
+  AccountBillingPatch,
+  AccountDraft,
   GhlAccount,
   GhlAccountBrandingPatch,
   GhlAccountDraft,
@@ -19,6 +23,8 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  LocationStats,
+  Role,
   Scope,
   WhatsappInboundMessage,
   WhatsappSessionSummary,
@@ -549,4 +555,41 @@ export interface GhlRepository {
    * defeat the panel's entire purpose.
    */
   getGhlHealthSnapshot(): Promise<GhlHealthSnapshot>;
+
+  // -------------------------------------------------------------------------
+  // Accounts and billing (migration 0002)
+  // -------------------------------------------------------------------------
+
+  /** One account by id, or null. */
+  getAccountById(id: string): Promise<Account | null>;
+  /** The account holding this Stripe customer id, or null. */
+  getAccountByStripeCustomerId(customerId: string): Promise<Account | null>;
+  /** Inserts an account with billingStatus 'pending' and returns it. */
+  createAccount(draft: AccountDraft): Promise<Account>;
+  /** Applies only the fields present in the patch. */
+  updateAccountBilling(id: string, patch: AccountBillingPatch): Promise<void>;
+  /** Every account with its location and activated-number counts, oldest first. */
+  listAccountsForAdmin(): Promise<AccountAdminRow[]>;
+  /** Accounts with cancelled_at < iso AND cleaned_up_at IS NULL. */
+  listAccountsCancelledBefore(iso: string): Promise<Account[]>;
+  /** Inserts a portal profile row for an existing auth user. */
+  createProfile(draft: { id: string; role: Role; email: string; accountId: string | null }): Promise<void>;
+  /** Case-insensitive (lower(email)) profile lookup, or null. */
+  getProfileByEmail(email: string): Promise<{ id: string; role: Role; accountId: string | null } | null>;
+  /** The redacted summaries of an account's locations, ordered by label. */
+  listGhlAccountsForAccount(accountId: string): Promise<GhlAccountSummary[]>;
+  /** Claims an unowned location (UPDATE ... WHERE account_id IS NULL); true iff exactly one row changed. */
+  claimGhlAccount(locationId: string, accountId: string): Promise<boolean>;
+  /** Sets or clears (null) activated_at on a location. */
+  setGhlActivated(locationId: string, activatedAt: string | null): Promise<void>;
+  /** Number of activated locations owned by this account. */
+  countActivatedForAccount(accountId: string): Promise<number>;
+  /** Number of activated locations across all accounts. */
+  countActivatedAll(): Promise<number>;
+  /** Session summaries for exactly these tenant ids (no role scope; callers authorise first). */
+  getWhatsappSessionSummariesForTenants(tenantIds: string[]): Promise<WhatsappSessionSummary[]>;
+  /** Per-location outbound stats since sinceIso; every requested id appears in the result. */
+  getLocationStats(locationIds: string[], sinceIso: string): Promise<Record<string, LocationStats>>;
+  /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */
+  recordStripeEvent(eventId: string, type: string): Promise<boolean>;
 }

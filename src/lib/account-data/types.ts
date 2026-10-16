@@ -1,5 +1,6 @@
-export type BillingStatus = "trialing" | "active" | "past_due" | "paused" | "cancelled" | "comped";
-export type AccountKind = "agency" | "business";
+import type { AccountKind, BillingStatus } from "@/lib/types";
+
+export type { AccountKind, BillingStatus };
 
 export interface AccountSummary {
   id: string;
