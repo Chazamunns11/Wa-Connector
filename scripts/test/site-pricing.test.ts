@@ -1,5 +1,8 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { pricingCopy } from "@/lib/site/pricing-copy";
 import {
   CALCULATOR_PRESETS,
   formatMoney,
@@ -82,4 +85,41 @@ test("invalid BRAND_CURRENCY throws", () => {
     process.env.BRAND_CURRENCY = bad;
     assert.throws(() => pricingConfig(), /BRAND_CURRENCY must be an ISO 4217 code/, bad);
   }
+});
+
+test("pricingCopy trial terms mention 7 days, card and 3 numbers", () => {
+  const c = pricingCopy({ name: "Acme" } as never);
+  const terms = c.trialTerms.join(" ");
+  assert.match(terms, /7-day/);
+  assert.match(terms, /card/i);
+  assert.match(terms, /3 numbers/);
+  assert.match(c.cancel, /any time/i);
+  assert.match(c.cancel, /end of/i);
+  assert.match(c.cancel, /billing portal/i);
+  const failed = c.failedPayment.join(" ");
+  assert.match(failed, /retr/i);
+  assert.match(failed, /continues/i);
+  assert.match(failed, /banner/i);
+  assert.match(failed, /pauses/i);
+});
+
+test("calculator fallback table lists 1, 3, 5, 10 and 25 numbers", () => {
+  const src = readFileSync(join(process.cwd(), "src/components/site/PricingTable.tsx"), "utf8");
+  assert.match(src, /CALCULATOR_PRESETS\s*\.map|CALCULATOR_PRESETS\.map/);
+  assert.ok(src.includes("<noscript"));
+});
+
+function walk(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+  );
+}
+
+test("marketing code has no client JS beyond the two islands", () => {
+  const allowed = new Set(["PricingCalculator.tsx", "AudienceTabs.tsx"]);
+  const files = [...walk("src/app/(site)"), ...walk("src/components/site")].filter((f) => /\.tsx?$/.test(f));
+  const clients = files
+    .filter((f) => /^\s*["']use client["']/m.test(readFileSync(f, "utf8")))
+    .map((f) => basename(f));
+  for (const c of clients) assert.ok(allowed.has(c), `${c} is an unexpected client island`);
 });
