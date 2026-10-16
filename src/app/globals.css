@@ -220,3 +220,57 @@ h6 {
     animation: none;
   }
 }
+
+/* ---- website ---- */
+
+/* Skip link: off-screen until focused, then pinned top-left above the header. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -64px;
+  z-index: 50;
+  padding: 12px 16px;
+  border-radius: 4px;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
+/* Prose spacing for long reading pages (docs, legal). Lines stay under ~62ch. */
+.prose-flow > * + * {
+  margin-top: 16px;
+}
+
+.prose-flow > h2 {
+  margin-top: 48px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.prose-flow > h3 {
+  margin-top: 32px;
+  font-size: 18px;
+}
+
+.prose-flow p,
+.prose-flow li {
+  max-width: 62ch;
+  line-height: 1.6;
+}
+
+.prose-flow ul,
+.prose-flow ol {
+  padding-left: 24px;
+}
+
+.prose-flow ul {
+  list-style: disc;
+}
+
+.prose-flow ol {
+  list-style: decimal;
+}
