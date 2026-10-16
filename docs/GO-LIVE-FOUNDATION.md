@@ -108,8 +108,8 @@ Without the redirect entry the emailed link lands on the wrong place or is
 rejected, and `/login?error=auth_callback` is what you see. Add
 `http://localhost:3000/auth/callback` too if you will run it locally.
 
-There is **no sign-out button yet**. To sign out, clear the site's cookies
-for `<app>` in the browser.
+Customers sign out with **Log out** on their dashboard. The owner panel at
+`/admin` has no sign-out button yet: clear the site's cookies for `<app>`.
 
 ---
 
