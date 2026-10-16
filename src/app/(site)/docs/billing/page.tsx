@@ -42,16 +42,15 @@ export default function BillingHelpPage() {
             ))}
           </div>
 
-          <h2 className={h2}>Cancelling</h2>
-          <p className="mt-3 max-w-[62ch] text-ink-dim">{copy.cancel}</p>
-
           <h2 className={h2}>Changing your card or cancelling</h2>
+          <p className="mt-3 max-w-[62ch] text-ink-dim">{copy.cancel}</p>
           <p className="mt-3 max-w-[62ch] text-ink-dim">
-            Both are done in the billing portal, which is available once your account is live. Until then, the{" "}
+            Changing your card and cancelling are both done in the billing portal, which is available once your account
+            is live. Until then, the{" "}
             <Link href={SITE_ROUTES.pricing} className="underline underline-offset-2">
               pricing page
             </Link>{" "}
-            has the full terms.
+            has the trial and billing terms.
           </p>
         </div>
       </Container>

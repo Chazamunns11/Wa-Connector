@@ -47,3 +47,12 @@ test("draft notice text is fixed", () => {
     "Draft — this page is a placeholder outline and will be replaced by the real legal text before launch.",
   );
 });
+
+test("privacy summary states 90-day deletion including media files, and legal pages are indexable", () => {
+  const src = read("src/app/(site)/docs/privacy-and-data/page.tsx").replace(/\s+/g, " ");
+  assert.match(src, /photo, video, voice note or document/);
+  assert.match(src, /including the file, 90 days after it arrives/);
+  for (const k of ["terms", "privacy"]) {
+    assert.equal(/index:\s*false/.test(read(`src/app/(site)/legal/${k}/page.tsx`)), false);
+  }
+});

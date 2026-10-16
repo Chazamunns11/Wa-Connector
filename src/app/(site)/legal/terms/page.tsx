@@ -7,7 +7,7 @@ import { LEGAL_OUTLINE } from "@/lib/site/legal-outline";
 const outline = LEGAL_OUTLINE.terms;
 
 export function generateMetadata(): Metadata {
-  return { title: `${outline.title} | ${brandConfig().name}`, robots: { index: false } };
+  return { title: `${outline.title} | ${brandConfig().name}`, description: `Draft outline of the ${outline.title.toLowerCase()} for ${brandConfig().name}. The full text is coming before launch.` };
 }
 
 export default function TermsPage() {

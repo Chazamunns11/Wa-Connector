@@ -39,21 +39,20 @@ export default function PrivacyAndDataPage() {
               For each message we send: the recipient&apos;s number, its status and WhatsApp&apos;s message ID. The
               message text is not kept in that record.
             </li>
-            <li>The access tokens GoHighLevel gives us for the sub-accounts you install {name} on.</li>
+            <li>The access and refresh tokens GoHighLevel gives us for the sub-accounts you install {name} on.</li>
           </ul>
 
           <h2 className={h2}>Message text while it waits</h2>
           <p className="mt-3 max-w-[62ch] text-ink-dim">
-            Text passes through on its way to WhatsApp. If a message cannot go out straight away, for example because
-            the phone is disconnected, the text is held so it can be sent later, and it is cleared as soon as the
-            message is no longer waiting.
+            Text passes through on its way to WhatsApp. If a message can&apos;t go out straight away, its text (and any
+            attachment link) is held so it can be retried, and cleared as soon as it is no longer waiting.
           </p>
 
           <h2 className={h2}>Replies</h2>
           <p className="mt-3 max-w-[62ch] text-ink-dim">
             When someone replies, we keep the first 500 characters of a text reply, their number and the message type,
-            and any photo or voice note, just long enough to pass it on to the conversation in GoHighLevel. We delete
-            the whole record 90 days after it arrives.
+            and any photo, video, voice note or document they send. We delete the whole record, including the file, 90
+            days after it arrives.
           </p>
 
           <h2 className={h2}>When you leave</h2>
