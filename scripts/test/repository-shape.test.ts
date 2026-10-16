@@ -63,3 +63,19 @@ test("importing the repo and constructing it does not require Supabase env (clie
     if (saved.key !== undefined) process.env.SUPABASE_SERVICE_ROLE_KEY = saved.key;
   }
 });
+
+test("getWhatsappSessionSummaries: non-owner scope resolves to [] without querying (no Supabase env needed)", async () => {
+  const saved = { url: process.env.NEXT_PUBLIC_SUPABASE_URL, key: process.env.SUPABASE_SERVICE_ROLE_KEY };
+  delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  try {
+    const r = new SupabaseGhlRepository();
+    // A query would throw on the missing env; resolving to [] proves none was attempted.
+    assert.deepEqual(await r.getWhatsappSessionSummaries({ role: "account" }), []);
+    assert.deepEqual(await r.getWhatsappSessionSummaries({ role: "client" } as never), []);
+    await assert.rejects(() => r.getWhatsappSessionSummaries({ role: "owner" }), /SUPABASE_SERVICE_ROLE_KEY/);
+  } finally {
+    if (saved.url !== undefined) process.env.NEXT_PUBLIC_SUPABASE_URL = saved.url;
+    if (saved.key !== undefined) process.env.SUPABASE_SERVICE_ROLE_KEY = saved.key;
+  }
+});

@@ -39,7 +39,7 @@ export interface GhlRepository {
   // Phase 3 follow-on: a prospect's WhatsApp reply pushed into the client's
   // GHL conversation). Driven exclusively by `src/lib/ghl-inbound.ts`'s
   // `drainGhlInboundReplies`, called from the SAME poke route + reminders
-  // cron as the coach drain below — see that module's file header for the
+  // cron as the inbound poke route — see that module's file header for the
   // full claim/retry contract. Schema: `supabase/migrations/0072_ghl_inbound_push.sql`
   // adds `push_attempts`/`push_error` to the EXISTING `whatsapp_inbound_messages`
   // table (0048) — no new table. `getGhlAccountByTenantId` is the one method
@@ -475,20 +475,12 @@ export interface GhlRepository {
   // -------------------------------------------------------------------------
 
   /**
-   * Every coach's WhatsApp session summary, SCOPE-REQUIRED (hard rule 2 fix,
-   * WhatsApp UI package 29 Jul 2026 — this method used to take no argument at
-   * all and return every coach's linked number to any caller; there was no UI
-   * caller yet to design the scoping against, so it shipped unscoped
-   * deliberately in Phase 1. There is a caller now, so this closes that gap).
-   * `scope` is REQUIRED, not optional, precisely so a future caller can never
-   * forget to say who's asking — mirrors `getCoaches(scope)`'s live semantics
-   * exactly:
-   *   - `scope.role === 'owner'` -> every coach's row.
-   *   - `scope.role === 'client'` with `scope.coachId` set -> that one row
-   *     only (or `[]` if they have none).
-   *   - anything else (`'closer'`, or a missing id) -> `[]`, fail-safe deny —
-   *     a closer session has no legitimate reason to see WhatsApp link status
-   *     for ANY coach, let alone all of them.
+   * Every WhatsApp session summary, SCOPE-REQUIRED: `scope` is REQUIRED, not
+   * optional, precisely so a caller can never forget to say who's asking.
+   *   - `scope.role === 'owner'` -> every row.
+   *   - any other role (`'account'`) -> `[]` WITHOUT querying, fail-safe deny:
+   *     accounts have no ownership column yet, so there is nothing safe to
+   *     filter them down to until a later plan adds an account filter.
    * The reads underneath are still ALWAYS service-role in live mode
    * regardless of scope: 0046 enables RLS with NO policies on these tables
    * (so no browser-scoped client could select a credential column via

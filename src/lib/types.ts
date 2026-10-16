@@ -8,12 +8,10 @@
  * `call_id` column; nothing in this repo reads it).
  */
 
-export type Role = "owner" | "closer" | "client";
+export type Role = "owner" | "account";
 
 export interface Scope {
   role: Role;
-  coachId?: string;
-  closerId?: string;
 }
 
 
@@ -165,7 +163,7 @@ export interface GhlAccount {
    * (see 0076's own header, "DEPLOY ORDER").
    */
   brandLogoPath: string | null;
-  /** Per-client connect-page branding (migration 0076) — `#RRGGBB`, normalised by `normaliseHex` at write time, or `null` for the default FitClosers teal. Same "null means unset OR pre-migration, and both read the same way" posture as `brandLogoPath` above. */
+  /** Per-client connect-page branding (migration 0076) — `#RRGGBB`, normalised by `normaliseHex` at write time, or `null` for the default brand colour. Same "null means unset OR pre-migration, and both read the same way" posture as `brandLogoPath` above. */
   brandAccentColor: string | null;
 }
 

@@ -982,18 +982,14 @@ export class SupabaseGhlRepository implements GhlRepository {
   }
 
   async getWhatsappSessionSummaries(scope: Scope) {
-    // Hard rule 2 fix — CODE-level scoping (0046 has no RLS policies to lean
-    // on, so this can't be "just add a policy"). Fail-safe deny: any role
-    // other than 'owner' or a properly-identified 'client' gets `[]` rather
-    // than the base rows, mirroring `getCoaches(scope)`'s live semantics.
-    if (scope.role === "closer") return [];
-    if (scope.role === "client" && !scope.coachId) return [];
+    // CODE-level scoping (0046 has no RLS policies to lean on). Deny by
+    // default: only 'owner' sees rows; every other role gets `[]` WITHOUT a
+    // query. Accounts have no ownership column yet, so there is nothing safe
+    // to filter them down to until a later plan adds one.
+    if (scope.role !== "owner") return [];
 
     const supabase = getServiceClient();
-    let query = supabase.from("whatsapp_sessions").select(WHATSAPP_SESSION_SUMMARY_COLUMNS).order("coach_id", { ascending: true });
-    if (scope.role === "client") {
-      query = query.eq("coach_id", scope.coachId as string);
-    }
+    const query = supabase.from("whatsapp_sessions").select(WHATSAPP_SESSION_SUMMARY_COLUMNS).order("coach_id", { ascending: true });
     const { data, error } = await query;
     if (error) throw error;
     const rows = (data ?? []) as unknown as WhatsappSessionSummaryRow[];
