@@ -49,6 +49,8 @@ export function decideNotConnected(
 /** True once `maxHours` have passed since GoHighLevel asked (`created_at`). */
 export function isHeldExpired(createdAtIso: string, nowMs: number, maxHours: number): boolean {
   const created = Date.parse(createdAtIso);
-  if (Number.isNaN(created)) return false;
+  // An unreadable date can never expire on its own, so treat it as expired
+  // and fail it honestly instead of holding it forever.
+  if (Number.isNaN(created)) return true;
   return nowMs - created > maxHours * 3_600_000;
 }

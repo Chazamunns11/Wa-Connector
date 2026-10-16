@@ -52,5 +52,5 @@ test("isHeldExpired", () => {
   const created = "2026-10-15T00:00:00Z";
   assert.equal(isHeldExpired(created, Date.parse("2026-10-16T00:00:01Z"), 24), true);
   assert.equal(isHeldExpired(created, Date.parse("2026-10-15T23:59:59Z"), 24), false);
-  assert.equal(isHeldExpired("garbage", Date.parse("2026-10-16T00:00:01Z"), 24), false);
+  assert.equal(isHeldExpired("garbage", Date.parse("2026-10-16T00:00:01Z"), 24), true);
 });
