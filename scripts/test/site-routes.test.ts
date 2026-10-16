@@ -32,7 +32,6 @@ const PAGE_FILES: Record<string, string> = {
 // entries; an empty set means every page exists.
 const PENDING = new Set<string>([
   SITE_ROUTES.docs,
-  SITE_ROUTES.setup,
   SITE_ROUTES.faq,
   SITE_ROUTES.billingHelp,
   SITE_ROUTES.privacySummary,
