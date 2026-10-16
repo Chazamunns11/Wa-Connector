@@ -180,7 +180,7 @@ export function troubleshooting(brand: BrandConfig): { id: string; title: string
       title: "Messages are waiting and not going out",
       body: [
         "The phone has disconnected, usually because it is offline or WhatsApp was logged out on it. Messages for that number are held for up to 24 hours.",
-        `Open the ${name} page. If it says Disconnected, click Reconnect (scan the QR again if one appears) and the held messages go out. Anything older than 24 hours is reported to GoHighLevel as not sent. Picture and file messages aren't held.`,
+        `Open the ${name} page. If it says Disconnected, click Reconnect (scan the QR again if one appears) and the held messages go out. Anything older than 24 hours is reported to GoHighLevel as not sent.`,
         "Messages over the number's daily cap are different. They are reported to GoHighLevel as not sent, and the number starts again at midnight UTC.",
       ],
     },

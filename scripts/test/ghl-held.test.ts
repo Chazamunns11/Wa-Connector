@@ -8,8 +8,8 @@ import assert from "node:assert/strict";
 import { releaseHeldOutboundMessages, type GhlHeldRepo } from "@/lib/ghl-held";
 import { GHL_PROVIDER_REASONS, type GhlProviderDeps } from "@/lib/ghl-provider";
 import { heldExpiredReason } from "@/lib/ghl-held-rules";
-import type { Account, GhlAccount, GhlOutboundMessage } from "@/lib/types";
-import type { BridgeSendResult, SendWhatsappInput } from "@/lib/whatsapp-bridge";
+import type { Account, GhlAccount, GhlOutboundAttachment, GhlOutboundMessage } from "@/lib/types";
+import type { BridgeSendResult, SendWhatsappAttachmentInput, SendWhatsappInput } from "@/lib/whatsapp-bridge";
 
 const REASON_CAP_REACHED = GHL_PROVIDER_REASONS.capReached;
 const TENANT = "11111111-1111-4111-8111-111111111111";
@@ -38,6 +38,7 @@ function setup(rowList: GhlOutboundMessage[]) {
   const rows = new Map(rowList.map((r) => [r.id, r]));
   const optOuts = new Set<string>();
   const ledger = new Set<string>();
+  const parts = new Map<string, GhlOutboundAttachment>();
   let failListTenants = false;
   let onIsOptedOut: (() => void) | undefined;
   let onLedgerRead: (() => void) | undefined;
@@ -75,6 +76,15 @@ function setup(rowList: GhlOutboundMessage[]) {
     async listHeldGhlOutboundMessages(tenantId: string, limit = 50) {
       return [...rows.values()].filter((r) => r.tenantId === tenantId && r.sendState === "held").sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, limit).map((r) => ({ ...r }));
     },
+    async listGhlOutboundAttachmentsForMessages(ids: string[]) {
+      return [...parts.values()].filter((a) => ids.includes(a.outboundMessageId)).sort((a, b) => a.seq - b.seq).map((a) => ({ ...a }));
+    },
+    async updateGhlOutboundAttachmentSendState(id: string, patch: { sendState: GhlOutboundAttachment["sendState"]; refusalReason?: string }) {
+      const part = parts.get(id)!;
+      part.sendState = patch.sendState;
+      if (patch.sendState !== "pending_send") part.pendingUrl = null;
+      if (patch.sendState === "refused" && patch.refusalReason !== undefined) part.refusalReason = patch.refusalReason;
+    },
     async listExpiredHeldGhlOutboundMessages(cutoffIso: string, limit = 50) {
       return [...rows.values()].filter((r) => r.createdAt < cutoffIso).filter((r) => r.sendState === "held" || r.sendState === "accepted").sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, limit).map((r) => ({ ...r, sendState: "held" as const }));
     },
@@ -86,15 +96,22 @@ function setup(rowList: GhlOutboundMessage[]) {
     ok: true, replay: false,
     message: { id: "b", idempotencyKey: input.idempotencyKey, toPhone: input.to, status: "accepted", waMessageId: null, error: null, createdAt: "x", sentAt: null },
   });
+  const attachCalls: SendWhatsappAttachmentInput[] = [];
+  let attachImpl: (input: SendWhatsappAttachmentInput, n: number) => BridgeSendResult = (input) => ({
+    ok: true, replay: false,
+    message: { id: "b", idempotencyKey: input.idempotencyKey, toPhone: input.to, status: "accepted", waMessageId: null, error: null, createdAt: "x", sentAt: null },
+  });
   const deps = {
-    sendWhatsapp: async (input: SendWhatsappInput) => { sendCalls.push(input); return sendImpl(input, sendCalls.length); },
+    sendWhatsapp: async (input: SendWhatsappInput) => { sendCalls.push(input); const r = sendImpl(input, sendCalls.length); if (r.ok) ledger.add(input.idempotencyKey); return r; },
+    sendAttachment: async (input: SendWhatsappAttachmentInput) => { attachCalls.push(input); const r = attachImpl(input, attachCalls.length); if (r.ok) ledger.add(input.idempotencyKey); return r; },
     updateStatus: async (_t: string, messageId: string, status: string, errorMessage?: string) => { statusCalls.push({ messageId, status, errorMessage }); return { ok: true }; },
     refreshToken: async () => ({ ok: false, kind: "invalid_grant" }),
     refreshWaitMs: 1,
     notify: () => {},
   } as unknown as GhlProviderDeps;
   return {
-    repo, deps, rows, optOuts, ledger, sendCalls, statusCalls,
+    repo, deps, rows, parts, optOuts, ledger, sendCalls, attachCalls, statusCalls,
+    setAttach(fn: typeof attachImpl) { attachImpl = fn; },
     setSend(fn: typeof sendImpl) { sendImpl = fn; },
     failTenants() { failListTenants = true; },
     onIsOptedOut(fn: () => void) { onIsOptedOut = fn; },
@@ -228,4 +245,110 @@ test("never throws when listHeldTenantIds rejects", async () => {
   const res = await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {}).finally(() => { console.error = orig; });
   assert.equal(res.released, 0);
   assert.equal(s.sendCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// F2 — held picture/file messages: released text first, then attachments in
+// seq order; a re-drop mid-message keeps the remaining parts held and the
+// bridge ledger stops any part going out twice.
+// ---------------------------------------------------------------------------
+function mediaRow(n: number, ageHours: number, over: Partial<GhlOutboundMessage> = {}): GhlOutboundMessage {
+  return heldRow(n, ageHours, { hadAttachments: true, ...over });
+}
+function addParts(s: ReturnType<typeof setup>, rowId: string, key: string, count: number) {
+  for (let seq = 0; seq < count; seq++) {
+    const id = `${rowId}-att-${seq}`;
+    s.parts.set(id, { id, outboundMessageId: rowId, seq, idempotencyKey: `${key}-att-${seq}`, pendingUrl: `https://x/${seq}.jpg`, fileName: null, sendState: "pending_send", refusalReason: null, sendAttempts: 0, createdAt: "x" });
+  }
+}
+const partStates = (s: ReturnType<typeof setup>) => [...s.parts.values()].sort((a, b) => a.seq - b.seq).map((p) => p.sendState);
+const notConnected = fail("session_not_connected");
+
+test("F2 release: held media message goes out text then attachments in seq order, then parent and parts are accepted", async () => {
+  const s = setup([mediaRow(1, 3)]);
+  addParts(s, "row-1", "key-1", 2);
+  const res = await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.deepEqual(s.sendCalls.map((c) => c.text), ["text 1"]);
+  assert.deepEqual(s.attachCalls.map((c) => c.attachment.url), ["https://x/0.jpg", "https://x/1.jpg"]);
+  assert.equal(s.rows.get("row-1")!.sendState, "accepted");
+  assert.deepEqual(partStates(s), ["accepted", "accepted"]);
+  assert.equal(res.released, 1);
+  assert.equal(s.statusCalls.length, 0, "delivery is reported later by the status drain");
+});
+
+test("F2 release: attachments-only held message (no text) sends the attachments and the parent ends with the internal no-text marker", async () => {
+  const s = setup([mediaRow(1, 3, { pendingText: null })]);
+  addParts(s, "row-1", "key-1", 1);
+  await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.sendCalls.length, 0);
+  assert.equal(s.attachCalls.length, 1);
+  assert.equal(s.rows.get("row-1")!.sendState, "refused");
+  assert.match(s.rows.get("row-1")!.refusalReason!, /media plan internal/);
+});
+
+test("F2 release: re-drop mid-message keeps the rest held; next pass sends only what is missing (no duplicate)", async () => {
+  const s = setup([mediaRow(1, 3), heldRow(2, 2)]);
+  addParts(s, "row-1", "key-1", 3);
+  s.setAttach((input, n) => (n === 2 ? notConnected : { ok: true, replay: false, message: { id: "b", idempotencyKey: input.idempotencyKey, toPhone: input.to, status: "accepted", waMessageId: null, error: null, createdAt: "x", sentAt: null } }));
+  const first = await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(first.stillHeld, 1);
+  assert.equal(s.rows.get("row-1")!.sendState, "held");
+  assert.equal(s.rows.get("row-1")!.pendingText, "text 1");
+  assert.equal(s.rows.get("row-2")!.sendState, "held", "the later message waits behind the interrupted one");
+  assert.deepEqual(partStates(s), ["accepted", "pending_send", "pending_send"]);
+  s.setAttach((input) => ({ ok: true, replay: false, message: { id: "b", idempotencyKey: input.idempotencyKey, toPhone: input.to, status: "accepted", waMessageId: null, error: null, createdAt: "x", sentAt: null } }));
+  await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  const everySentKey = [...s.sendCalls.map((c) => c.idempotencyKey), ...s.attachCalls.map((c) => c.idempotencyKey)];
+  const sentCounts = new Map<string, number>();
+  for (const k of everySentKey) sentCounts.set(k, (sentCounts.get(k) ?? 0) + 1);
+  // the one failed attachment attempt (key-1-att-1) is the only key seen twice: once refused offline, once accepted
+  assert.deepEqual([...sentCounts].filter(([, c]) => c > 1).map(([k]) => k), ["key-1-att-1"]);
+  assert.equal(s.sendCalls.filter((c) => c.idempotencyKey === "key-1").length, 1, "text part never re-sent");
+  assert.equal(s.attachCalls.filter((c) => c.idempotencyKey === "key-1-att-0").length, 1, "accepted attachment never re-sent");
+  assert.equal(s.rows.get("row-1")!.sendState, "accepted");
+  assert.equal(s.rows.get("row-2")!.sendState, "accepted");
+  assert.deepEqual(partStates(s), ["accepted", "accepted", "accepted"]);
+});
+
+test("F2 release: a drop on the text part sends no attachment and leaves everything held", async () => {
+  const s = setup([mediaRow(1, 3)]);
+  addParts(s, "row-1", "key-1", 2);
+  s.setSend(() => notConnected);
+  await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.attachCalls.length, 0);
+  assert.equal(s.rows.get("row-1")!.sendState, "held");
+  assert.deepEqual(partStates(s), ["pending_send", "pending_send"]);
+});
+
+test("F2 release: expired media message is refused with every pending part, reported failed, nothing sent", async () => {
+  const s = setup([mediaRow(1, 30)]);
+  addParts(s, "row-1", "key-1", 2);
+  const res = await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(res.expired, 1);
+  assert.equal(s.sendCalls.length + s.attachCalls.length, 0);
+  assert.equal(s.rows.get("row-1")!.sendState, "refused");
+  assert.deepEqual(partStates(s), ["refused", "refused"]);
+  assert.deepEqual(s.statusCalls.map((c) => [c.status, c.errorMessage]), [["failed", heldExpiredReason(24)]]);
+});
+
+test("F2 release: contact opted out while held -> refused optedOut, parts refused, nothing sent", async () => {
+  const s = setup([mediaRow(1, 3)]);
+  addParts(s, "row-1", "key-1", 2);
+  s.optOuts.add(`${TENANT}:+447700900123`);
+  await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.sendCalls.length + s.attachCalls.length, 0);
+  assert.deepEqual(partStates(s), ["refused", "refused"]);
+  assert.deepEqual(s.statusCalls.map((c) => [c.status, c.errorMessage]), [["failed", GHL_PROVIDER_REASONS.optedOut]]);
+});
+
+test("F2 release: opted out after the text part already went -> remaining parts refused, no failed report (the status drain reports the partial delivery)", async () => {
+  const s = setup([mediaRow(1, 3)]);
+  addParts(s, "row-1", "key-1", 2);
+  s.ledger.add("key-1");
+  s.optOuts.add(`${TENANT}:+447700900123`);
+  await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.sendCalls.length + s.attachCalls.length, 0);
+  assert.deepEqual(partStates(s), ["refused", "refused"]);
+  assert.equal(s.rows.get("row-1")!.sendState, "accepted");
+  assert.equal(s.statusCalls.length, 0);
 });

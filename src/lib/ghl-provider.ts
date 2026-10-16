@@ -310,7 +310,7 @@ const REASON_PARTIAL_DELIVERY = "message partially delivered on WhatsApp — som
  * state is encoded this way rather than adding a new DB column/CHECK value
  * to a migration (0069/0073) already written and NOT to be altered.
  */
-const TEXT_PART_NOT_APPLICABLE = "media plan internal: no text part — attachments only, never reported to GHL";
+export const TEXT_PART_NOT_APPLICABLE = "media plan internal: no text part — attachments only, never reported to GHL";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -362,10 +362,9 @@ export function mapBridgeFailureReason(code: string): string {
  */
 const TERMINAL_BRIDGE_FAILURE_CODES = new Set<string>([
   "daily_cap_reached",
-  // Terminal for the bridge call itself; the single-text paths turn it into a
-  // HOLD via `resolveNotConnected` for a previously linked number. The
-  // multipart/media paths still refuse it (holding multipart rows is out of
-  // scope while WA_MEDIA_OUTBOUND_ENABLED is off by default).
+  // Terminal for the bridge call itself; every path (single text, multipart
+  // text part, attachment parts) turns it into a HOLD via `resolveNotConnected`
+  // for a previously linked number, and refuses it otherwise.
   "session_not_connected",
   "idempotency_conflict",
   "invalid_phone",
@@ -931,14 +930,31 @@ async function handleMediaSplitOutbound(
   }));
   const attachmentRows: GhlOutboundAttachment[] = await repo.recordGhlOutboundAttachments(drafts);
 
+  // Ordering: older messages for this number still waiting (held) go first.
+  // The whole message waits (parent held, parts pending_send) for the release pass.
+  if (await holdBehindHeldRows(repo, account.tenantId, row)) return { kind: "held" };
+
   const partOutcomes: PartOutcome[] = [];
   let anyTransientRetry = false;
+  // The parent row's own state describes the TEXT part. Its "accepted" (or the
+  // vacuous no-text marker) is written only once no later part has put the
+  // whole message on hold, because holding keeps `pending_text` and a later
+  // release must be able to resume from the parent row.
+  let deferredTextWrite: (() => Promise<void>) | null = null;
+  // Once the text part is terminally refused the parent can no longer be held.
+  let textTerminal = false;
 
   if (hasTextPart && textResult.ok) {
     const sendResult = await deps.sendWhatsapp({ coachId: account.tenantId, to: toPhone, text: textResult.text, idempotencyKey: row.idempotencyKey });
     if (sendResult.ok) {
-      await repo.updateGhlOutboundSendState(row.id, { sendState: "accepted" });
+      deferredTextWrite = () => repo.updateGhlOutboundSendState(row.id, { sendState: "accepted" }).then(() => undefined);
       partOutcomes.push({ resolved: false });
+    } else if (sendResult.code === "session_not_connected") {
+      const decision = await resolveNotConnected(repo, account, row);
+      if (decision.kind === "hold") return { kind: "held" };
+      textTerminal = true;
+      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: decision.reason });
+      partOutcomes.push({ resolved: true, sent: false, reason: decision.reason });
     } else if (isTransientBridgeFailure(sendResult.code)) {
       // Row stays 'pending_send' (the DB default — nothing to write); the
       // drain retries it (`resolveTextPartOutcome`/`retryTextPart`).
@@ -946,6 +962,7 @@ async function handleMediaSplitOutbound(
       partOutcomes.push({ resolved: false });
     } else {
       const reason = mapBridgeFailureReason(sendResult.code);
+      textTerminal = true;
       await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
       partOutcomes.push({ resolved: true, sent: false, reason });
     }
@@ -958,7 +975,7 @@ async function handleMediaSplitOutbound(
     // supposed to happen) or a genuine reported refusal (which would tell
     // GHL this message failed, when it may fully succeed via its
     // attachments).
-    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: TEXT_PART_NOT_APPLICABLE });
+    deferredTextWrite = () => repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: TEXT_PART_NOT_APPLICABLE }).then(() => undefined);
     // QA Minor 7 fix — `vacuous: true`: this is not real delivered content,
     // see `PartOutcome`'s own JSDoc.
     partOutcomes.push({ resolved: true, sent: true, reason: null, vacuous: true });
@@ -987,6 +1004,17 @@ async function handleMediaSplitOutbound(
     if (sendResult.ok) {
       await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "accepted" });
       partOutcomes.push({ resolved: false });
+    } else if (sendResult.code === "session_not_connected") {
+      // The phone dropped part-way through. Hold the whole message (parent
+      // held, this and every later part left pending_send) unless the text
+      // part already ended the parent's life or the number is banned/unlinked.
+      const decision = textTerminal
+        ? decideNotConnected(await repo.getWhatsappSessionSummary(account.tenantId), REASON_NOT_CONNECTED)
+        : await resolveNotConnected(repo, account, row);
+      if (decision.kind === "hold" && !textTerminal) return { kind: "held" };
+      const partReason = decision.kind === "refuse" ? decision.reason : REASON_NOT_CONNECTED;
+      await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: partReason });
+      partOutcomes.push({ resolved: true, sent: false, reason: partReason });
     } else if (isTransientBridgeFailure(sendResult.code)) {
       anyTransientRetry = true;
       partOutcomes.push({ resolved: false });
@@ -997,6 +1025,9 @@ async function handleMediaSplitOutbound(
       partOutcomes.push({ resolved: true, sent: false, reason });
     }
   }
+
+  // No part put the message on hold: settle the parent's own (text-part) state.
+  if (deferredTextWrite) await deferredTextWrite();
 
   // QA Major 6 fix — content-preserving fallback for a portal=true/bridge=false
   // config mismatch. Without this, a mismatch is STRICTLY WORSE than both
@@ -1067,10 +1098,13 @@ async function handleMediaSplitOutbound(
  * summary: a number that was linked once and is offline is HELD (the row's
  * `send_state` becomes `held`, `pending_text` kept, nothing reported to
  * GoHighLevel); banned or never-linked is refused with a fixed reason.
- * Attachment rows have no `held` state and stay `pending_send` while their
- * parent is held. Exported for the release pass.
+ * A multipart (picture/file) message is held as a whole: the PARENT row is
+ * `held` and its attachment rows stay `pending_send` (no `held` state on
+ * `ghl_outbound_attachments` — the drain never sees a held parent, so the
+ * parts are never retried behind its back, and the release pass resumes them
+ * in order using the bridge ledger). Exported for the release pass.
  */
-export async function resolveNotConnected(repo: GhlProviderRepo, account: GhlAccount, row: GhlOutboundMessage): Promise<NotConnectedDecision> {
+export async function resolveNotConnected(repo: GhlProviderRepo, account: Pick<GhlAccount, "tenantId">, row: GhlOutboundMessage): Promise<NotConnectedDecision> {
   const summary = await repo.getWhatsappSessionSummary(account.tenantId);
   const decision = decideNotConnected(summary, REASON_NOT_CONNECTED);
   if (decision.kind === "hold") await repo.updateGhlOutboundSendState(row.id, { sendState: "held" });
@@ -1311,10 +1345,17 @@ async function drainMultipartRow(
   bridgeStatusByKey: Map<string, { status: string; error: string | null }>,
   result: DrainGhlOutboundStatusesResult
 ): Promise<void> {
-  const textOutcome = await resolveTextPartOutcome(repo, deps, row, bridgeStatusByKey, result);
+  const hold = { held: false };
+  const textOutcome = await resolveTextPartOutcome(repo, deps, row, bridgeStatusByKey, result, hold);
   const attachmentOutcomes: PartOutcome[] = [];
   for (const part of parts) {
-    attachmentOutcomes.push(await resolveAttachmentPartOutcome(repo, deps, row, part, bridgeStatusByKey, result));
+    if (hold.held) break;
+    attachmentOutcomes.push(await resolveAttachmentPartOutcome(repo, deps, row, part, bridgeStatusByKey, result, hold));
+  }
+  if (hold.held) {
+    // The phone is offline: the parent is now `held` and leaves the drain until the release pass finishes it.
+    result.held++;
+    return;
   }
 
   const aggregate = aggregatePartOutcomes([textOutcome, ...attachmentOutcomes]);
@@ -1349,7 +1390,8 @@ async function resolveTextPartOutcome(
   deps: GhlProviderDeps,
   row: GhlOutboundMessage,
   bridgeStatusByKey: Map<string, { status: string; error: string | null }>,
-  result: DrainGhlOutboundStatusesResult
+  result: DrainGhlOutboundStatusesResult,
+  hold: { held: boolean }
 ): Promise<PartOutcome> {
   if (row.sendState === "refused") {
     // QA Minor 7 fix — `vacuous: true`: not real delivered content, see
@@ -1368,7 +1410,7 @@ async function resolveTextPartOutcome(
   // same column/bound the legacy `drainPendingSend` uses — reused verbatim
   // here since this IS that same column on this SAME row, just scoped to the
   // text part specifically within a multipart message).
-  return retryTextPart(repo, deps, row, result);
+  return retryTextPart(repo, deps, row, result, hold);
 }
 
 /**
@@ -1385,7 +1427,7 @@ export async function outboundRefusalReason(repo: GhlProviderRepo, account: GhlA
   return null;
 }
 
-async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage, result: DrainGhlOutboundStatusesResult): Promise<PartOutcome> {
+async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage, result: DrainGhlOutboundStatusesResult, hold: { held: boolean }): Promise<PartOutcome> {
   if (row.sendAttempts >= PENDING_SEND_MAX_ATTEMPTS) {
     // Same finding-4 check as `drainPendingSend`: the send may genuinely
     // have reached the bridge even though every response back to US timed
@@ -1419,6 +1461,15 @@ async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: 
     await repo.updateGhlOutboundSendState(row.id, { sendState: "accepted" });
     return { resolved: false };
   }
+  if (sendResult.code === "session_not_connected") {
+    const decision = await resolveNotConnected(repo, row, row);
+    if (decision.kind === "hold") {
+      hold.held = true;
+      return { resolved: false };
+    }
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: decision.reason });
+    return { resolved: true, sent: false, reason: decision.reason };
+  }
   if (isTransientBridgeFailure(sendResult.code)) {
     await repo.updateGhlOutboundSendState(row.id, { sendState: "pending_send", sendAttempts: row.sendAttempts + 1 });
     result.stillPending++;
@@ -1448,7 +1499,8 @@ async function resolveAttachmentPartOutcome(
   row: GhlOutboundMessage,
   part: GhlOutboundAttachment,
   bridgeStatusByKey: Map<string, { status: string; error: string | null }>,
-  result: DrainGhlOutboundStatusesResult
+  result: DrainGhlOutboundStatusesResult,
+  hold: { held: boolean }
 ): Promise<PartOutcome> {
   if (part.sendState === "refused") {
     return { resolved: true, sent: false, reason: part.refusalReason ?? REASON_GENERIC_REFUSED };
@@ -1499,6 +1551,16 @@ async function resolveAttachmentPartOutcome(
   if (sendResult.ok) {
     await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "accepted" });
     return { resolved: false };
+  }
+  if (sendResult.code === "session_not_connected") {
+    // A parent whose text part already failed cannot be held; refuse just this part.
+    const decision = row.sendState === "refused" ? ({ kind: "refuse", reason: REASON_NOT_CONNECTED } as const) : await resolveNotConnected(repo, row, row);
+    if (decision.kind === "hold") {
+      hold.held = true;
+      return { resolved: false };
+    }
+    await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: decision.reason });
+    return { resolved: true, sent: false, reason: decision.reason };
   }
   if (isTransientBridgeFailure(sendResult.code)) {
     await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "pending_send", sendAttempts: part.sendAttempts + 1 });

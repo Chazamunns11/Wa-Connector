@@ -2465,3 +2465,121 @@ test("drain pending_send: tenant already has a held row -> pending row is held b
   assert.equal(pending.sendState, "held");
   assert.equal(result.held, 1);
 });
+
+// ---------------------------------------------------------------------------
+// F2 — picture/file (media) messages are held while a phone is offline,
+// exactly like text. The parent row owns the hold; attachment rows stay
+// `pending_send` until the release pass sends them.
+// ---------------------------------------------------------------------------
+
+const offlineAttachment: Partial<GhlProviderDeps> = {
+  sendAttachment: async () => ({ ok: false, code: "session_not_connected", message: "not connected" }),
+};
+const MEDIA_URLS = ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"];
+
+test("F2 media: offline linked number -> whole text+attachments message held, parts untouched, nothing reported", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo, rows, attachments, sessionsByTenant } = createFakeRepo([makeAccount()]);
+    sessionsByTenant.set(TENANT_ID, sessionSummary());
+    const { deps, statusCalls } = makeDeps({ ...notConnectedSend, ...offlineAttachment });
+    const out = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "f2-a", message: "look", attachments: MEDIA_URLS }), deps);
+    assert.deepEqual(out, { kind: "held" });
+    const row = [...rows.values()][0];
+    assert.equal(row.sendState, "held");
+    assert.equal(row.pendingText, "look");
+    assert.deepEqual([...attachments.values()].map((a) => [a.seq, a.sendState, a.pendingUrl]), [[0, "pending_send", MEDIA_URLS[0]], [1, "pending_send", MEDIA_URLS[1]]]);
+    assert.equal(statusCalls.length, 0);
+  });
+});
+
+test("F2 media: attachments-only message to an offline linked number is held with no text", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo, rows, attachments, sessionsByTenant } = createFakeRepo([makeAccount()]);
+    sessionsByTenant.set(TENANT_ID, sessionSummary());
+    const { deps, statusCalls } = makeDeps(offlineAttachment);
+    const out = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "f2-b", message: "", attachments: MEDIA_URLS }), deps);
+    assert.deepEqual(out, { kind: "held" });
+    const row = [...rows.values()][0];
+    assert.equal(row.sendState, "held");
+    assert.equal(row.pendingText, null);
+    assert.equal(attachments.size, 2);
+    assert.equal(statusCalls.length, 0);
+  });
+});
+
+test("F2 media: text accepted then the phone drops on attachment 1 -> parent held (text kept), remaining parts pending, no double state", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo, rows, attachments, sessionsByTenant } = createFakeRepo([makeAccount()]);
+    sessionsByTenant.set(TENANT_ID, sessionSummary());
+    let n = 0;
+    const { deps, statusCalls } = makeDeps({
+      sendAttachment: async (input) => (++n === 2 ? { ok: false, code: "session_not_connected", message: "x" } : makeSendResult({ idempotencyKey: input.idempotencyKey, toPhone: input.to })),
+    });
+    const out = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "f2-c", message: "look", attachments: MEDIA_URLS }), deps);
+    assert.deepEqual(out, { kind: "held" });
+    const row = [...rows.values()][0];
+    assert.equal(row.sendState, "held");
+    assert.equal(row.pendingText, "look");
+    assert.deepEqual([...attachments.values()].map((a) => a.sendState), ["accepted", "pending_send"]);
+    assert.equal(statusCalls.length, 0);
+  });
+});
+
+test("F2 media: never-linked and banned numbers still refuse media messages", async () => {
+  await withMediaOutboundEnabled(async () => {
+    for (const [summary, reason] of [
+      [sessionSummary({ lastConnectedAt: null, status: "waiting_qr" }), GHL_PROVIDER_REASONS.notConnected],
+      [sessionSummary({ status: "banned" }), GHL_PROVIDER_REASONS.numberBanned],
+    ] as const) {
+      const { repo, rows, sessionsByTenant } = createFakeRepo([makeAccount()]);
+      sessionsByTenant.set(TENANT_ID, summary);
+      const { deps, statusCalls } = makeDeps({ ...notConnectedSend, ...offlineAttachment });
+      const out = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "f2-d", message: "look", attachments: MEDIA_URLS }), deps);
+      assert.deepEqual(out, { kind: "refused", reason });
+      assert.equal([...rows.values()][0].sendState, "refused");
+      assert.equal(statusCalls[0].status, "failed");
+    }
+  });
+});
+
+test("F2 media: an opted-out contact is refused, never held", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo, rows, sessionsByTenant, optOuts } = createFakeRepo([makeAccount()]);
+    sessionsByTenant.set(TENANT_ID, sessionSummary());
+    optOuts.add(`${TENANT_ID}:+447700900123`);
+    const { deps, sendAttachmentCalls } = makeDeps(offlineAttachment);
+    const out = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "f2-e", attachments: MEDIA_URLS }), deps);
+    assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOut });
+    assert.equal([...rows.values()][0].sendState, "refused");
+    assert.equal(sendAttachmentCalls.length, 0);
+  });
+});
+
+test("F2 media: a new media message waits behind an older held row (hold-behind ordering), sends nothing", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = createFakeRepo([makeAccount()]);
+    bundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+    bundle.repo.listHeldGhlOutboundMessages = async () => [{ id: "older" } as GhlOutboundMessage];
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps();
+    const out = await handleProviderOutboundMessage(bundle.repo, samplePayloadFor({ messageId: "f2-f", message: "look", attachments: MEDIA_URLS }), deps);
+    assert.deepEqual(out, { kind: "held" });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+    assert.equal([...bundle.rows.values()][0].sendState, "held");
+  });
+});
+
+test("F2 media drain: a pending_send multipart row whose attachment now says session_not_connected is held, not refused", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo, rows, attachments, sessionsByTenant } = createFakeRepo([makeAccount()]);
+    sessionsByTenant.set(TENANT_ID, sessionSummary());
+    // Intake: bridge unreachable on the text part -> row and parts stay pending_send.
+    const intake = makeDeps({ sendWhatsapp: async () => ({ ok: false, code: "unreachable", message: "x" }), sendAttachment: async () => ({ ok: false, code: "unreachable", message: "x" }) });
+    await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "f2-g", message: "look", attachments: MEDIA_URLS }), intake.deps);
+    const { deps, statusCalls } = makeDeps({ ...notConnectedSend, ...offlineAttachment });
+    const res = await drainGhlOutboundStatuses(repo, deps);
+    assert.equal(res.held, 1);
+    assert.equal([...rows.values()][0].sendState, "held");
+    assert.ok([...attachments.values()].every((a) => a.sendState === "pending_send"));
+    assert.equal(statusCalls.length, 0);
+  });
+});

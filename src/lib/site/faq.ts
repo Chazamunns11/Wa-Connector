@@ -59,7 +59,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     disconnected: {
       question: "What happens if the phone goes offline?",
       answer:
-        "If a phone is offline, messages wait for up to 24 hours and go out at the usual paced rate once it reconnects; anything older is reported back to GoHighLevel as not sent. The dashboard shows which numbers are disconnected and how many messages are waiting. Picture and file messages aren't held while a phone is offline.",
+        "If a phone is offline, messages wait for up to 24 hours and go out at the usual paced rate once it reconnects; anything older is reported back to GoHighLevel as not sent. The dashboard shows which numbers are disconnected and how many messages are waiting.",
     },
     stop: {
       question: "What if someone replies STOP?",
