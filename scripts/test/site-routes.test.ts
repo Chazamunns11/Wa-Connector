@@ -31,7 +31,6 @@ const PAGE_FILES: Record<string, string> = {
 // Routes whose pages later tasks create (4-10). Each task removes its own
 // entries; an empty set means every page exists.
 const PENDING = new Set<string>([
-  SITE_ROUTES.signup,
   SITE_ROUTES.dashboard,
   SITE_ROUTES.billing,
 ]);
