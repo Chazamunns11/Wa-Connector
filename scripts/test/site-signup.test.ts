@@ -67,7 +67,13 @@ test("signup action only emails a link: no account, profile or admin user before
   const src = read("src/app/(site)/signup/actions.ts");
   assert.match(src, /prepareSignup\(/);
   assert.match(src, /shouldCreateUser: true/);
-  assert.match(src, /data: prepared\.data/);
+  assert.doesNotMatch(src, /\bdata:\s*prepared/, "no user_metadata: a squatter could pre-set it");
+  assert.match(src, /signSignupToken\(/);
+  assert.match(src, /httpOnly: true/);
+  assert.match(src, /sameSite: "lax"/);
+  assert.match(src, /path: "\/auth\/callback"/);
+  assert.match(src, /maxAge: SIGNUP_COOKIE_MAX_AGE_S/);
+  assert.match(src, /secure: process\.env\.NODE_ENV === "production"/);
   assert.match(src, /redirect\("\/signup\/check-email"\)/);
   assert.doesNotMatch(src, /createAccount|createProfile|admin\.createUser|createCheckoutSession|startSignup\(/);
   assert.doesNotMatch(src, /api\.stripe\.com/);
@@ -84,8 +90,18 @@ test("auth callback completes a pending signup after the exchange, with fixed re
   assert.match(src, /decideCallback\(/);
   assert.match(src, /completeSignup\(/);
   assert.match(src, /verifyClaim: verifyClaimToken/);
+  assert.match(src, /pendingFromSignupToken\(/);
+  assert.doesNotMatch(src, /user_metadata/, "pending signup never comes from user metadata");
+  assert.match(src, /cookieStore\.delete\(SIGNUP_COOKIE/);
+  assert.match(src, /link_expired/);
+  assert.match(src, /error=failed/);
   assert.doesNotMatch(src, /searchParams\.get\("(next|redirect|returnTo)/);
   assert.doesNotMatch(src, /console\.\w+\(/);
+});
+
+test("signup page explains an expired link honestly; check-email says to use the same browser", () => {
+  assert.match(read("src/app/(site)/signup/page.tsx"), /link_expired: "That sign-in link has expired or was opened in a different browser\. Start again below\."/);
+  assert.match(read("src/app/(site)/signup/check-email/page.tsx"), /Open the link in this same browser\./);
 });
 
 test("check-email page exists and is noindex", () => {

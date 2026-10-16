@@ -59,10 +59,11 @@ same organisation**.
    (`shouldCreateUser: false`). The sign-up form does (`shouldCreateUser:
    true`), but the account and profile are only made after the emailed link is
    opened, so nobody can sign up with an address they cannot read. Keep
-   **Confirm email** on. In **Authentication → Email Templates**, the
-   "Magic Link" template is used for both sign-in and sign-up links, so keep
-   its wording neutral, for example "Follow this link to continue:", rather
-   than "Sign in".
+   **Confirm email** on. In **Authentication → Email Templates**,
+   new people get Supabase's "Confirm signup" template and returning people
+   get "Magic Link". Customise both, and keep the wording neutral, for example
+   "Follow this link to continue:", rather than "Sign in". Part 6 checks which
+   one arrives.
 6. **Custom SMTP, before any real sign-up.** Supabase's built-in sender is
    rate-limited to a handful of emails an hour and is not for production. Set
    up Resend on the brand domain, then **Project Settings → Authentication →
@@ -224,7 +225,8 @@ Use a spare GHL sub-account and your own number. Use Stripe test cards.
    You should see "Check your email to continue". Nothing exists yet: no
    account in `/admin`, no row in `profiles`.
 2. Open the emailed link in the same browser (it comes from the SMTP you set
-   up). It confirms the address, creates the account and sends you straight to
+   up). Check which template it used: a new address gets "Confirm signup",
+   a returning one "Magic Link", and both should be customised. It confirms the address, creates the account and sends you straight to
    Stripe Checkout. Pay with `4242 4242 4242 4242`, any future date, any CVC.
    You then land on "You're nearly there"; the button takes you to the
    dashboard. Try the form again with the same address: it should say you

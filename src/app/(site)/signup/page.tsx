@@ -8,6 +8,7 @@ import { startSignupAction } from "./actions";
 
 const PAGE_ERRORS: Record<string, string> = {
   unavailable: "Signups aren't open yet.",
+  link_expired: "That sign-in link has expired or was opened in a different browser. Start again below.",
   failed: "We couldn't send your email. Check the address and try again, or contact support.",
 };
 

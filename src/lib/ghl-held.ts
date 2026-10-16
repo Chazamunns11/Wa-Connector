@@ -106,7 +106,7 @@ export async function releaseHeldOutboundMessages(
     const anySent = sent.size > 0 || parts.some((p) => p.sendState === "accepted");
     if (!anySent) {
       const won = await refuseAndReport(row, reason);
-      if (won || (await repo.listGhlOutboundAttachmentsForMessages([row.id])).length > 0) {
+      if (won) {
         for (const p of parts) if (p.sendState === "pending_send") await repo.updateGhlOutboundAttachmentSendState(p.id, { sendState: "refused", refusalReason: reason });
       }
       return;

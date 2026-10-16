@@ -3,6 +3,7 @@ import type { Account } from "@/lib/types";
 import type { createCheckoutSession, StripeCheckoutSession } from "@/lib/stripe/billing";
 import type { AccountKind } from "@/lib/account-data/types";
 import type { SignupInput } from "@/lib/site/signup";
+import { signKindedState, verifyKindedState } from "@/lib/signed-state";
 import { mapStripeSubscriptionStatus } from "./status";
 
 export type OnboardRepo = Pick<
@@ -23,7 +24,7 @@ export type SignupOutcome =
   | { kind: "unavailable" }
   | { kind: "failed" };
 
-/** The signup details parked in the user's metadata until the email is proven. */
+/** The signup details carried in the signed `wa_signup` cookie until the email is proven. */
 export interface PendingSignup {
   accountName: string;
   kind: AccountKind;
@@ -33,28 +34,47 @@ export interface PendingSignup {
 
 const KINDS: readonly AccountKind[] = ["agency", "business"];
 
-/**
- * Reads the pending signup back out of auth user metadata. The user can edit
- * their own metadata, so this is display input only: name and kind. The claim
- * token proves itself by its signature.
- */
-export function parsePendingSignup(meta: unknown): PendingSignup | null {
-  if (!meta || typeof meta !== "object") return null;
-  const m = meta as Record<string, unknown>;
-  const accountName = typeof m.accountName === "string" ? m.accountName.trim() : "";
-  if (accountName.length < 2 || accountName.length > 80) return null;
-  if (!KINDS.includes(m.kind as AccountKind)) return null;
-  const claim = typeof m.claim === "string" && m.claim.length > 0 && m.claim.length <= 200 ? m.claim : null;
-  return { accountName, kind: m.kind as AccountKind, claim };
+/** Cookie holding the signed pending signup; scoped to the callback path. */
+export const SIGNUP_COOKIE = "wa_signup";
+export const SIGNUP_COOKIE_MAX_AGE_S = 60 * 60;
+
+/** Signs the pending signup, bound to the address the link is sent to. */
+export function signSignupToken(email: string, pending: PendingSignup): string {
+  return signKindedState(
+    "signup",
+    {
+      email: email.trim().toLowerCase(),
+      accountName: pending.accountName,
+      kind: pending.kind,
+      ...(pending.claim ? { claim: pending.claim } : {}),
+      iat: Date.now(),
+    },
+    SIGNUP_COOKIE_MAX_AGE_S * 1000,
+  );
 }
 
-export type PrepareOutcome =
-  | { kind: "send"; email: string; data: { accountName: string; kind: AccountKind; claim?: string } }
-  | { kind: "exists" };
+/**
+ * Reads the pending signup from the signed cookie. Null unless the signature,
+ * kind and expiry hold AND the token was minted for the verified user's email.
+ * Supabase user metadata is never consulted: anyone can pre-set it.
+ */
+export function pendingFromSignupToken(token: string | undefined, verifiedEmail: string | undefined): PendingSignup | null {
+  if (!token || !verifiedEmail) return null;
+  const d = verifyKindedState("signup", token);
+  if (!d) return null;
+  if (typeof d.email !== "string" || d.email !== verifiedEmail.trim().toLowerCase()) return null;
+  const accountName = typeof d.accountName === "string" ? d.accountName.trim() : "";
+  if (accountName.length < 2 || accountName.length > 80) return null;
+  if (!KINDS.includes(d.kind as AccountKind)) return null;
+  const claim = typeof d.claim === "string" && d.claim.length > 0 && d.claim.length <= 200 ? d.claim : null;
+  return { accountName, kind: d.kind as AccountKind, claim };
+}
+
+export type PrepareOutcome = { kind: "send"; email: string; pending: PendingSignup } | { kind: "exists" };
 
 /**
  * Step 1 of signup. Creates NOTHING: it only checks the email is free and
- * returns what to put in the sign-in link's user metadata.
+ * returns the pending signup to sign into the cookie.
  */
 export async function prepareSignup(
   repo: Pick<GhlRepository, "getProfileByEmail">,
@@ -62,11 +82,7 @@ export async function prepareSignup(
 ): Promise<PrepareOutcome> {
   const email = input.email.trim().toLowerCase();
   if (await repo.getProfileByEmail(email)) return { kind: "exists" };
-  return {
-    kind: "send",
-    email,
-    data: { accountName: input.accountName, kind: input.kind, ...(input.claim ? { claim: input.claim } : {}) },
-  };
+  return { kind: "send", email, pending: { accountName: input.accountName, kind: input.kind, claim: input.claim || null } };
 }
 
 export type CallbackDecision = "owner" | "dashboard" | "complete_signup" | "reject";

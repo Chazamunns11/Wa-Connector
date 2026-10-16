@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createServerClient } from "@supabase/ssr";
 import { brandConfig } from "@/lib/brand-config";
-import { applyCheckoutSession, prepareSignup } from "@/lib/billing/onboard";
+import { applyCheckoutSession, prepareSignup, signSignupToken, SIGNUP_COOKIE, SIGNUP_COOKIE_MAX_AGE_S } from "@/lib/billing/onboard";
 import { repo } from "@/lib/data";
 import { signupRedirectQuery, validateSignup } from "@/lib/site/signup";
 import { isStripeConfigured } from "@/lib/stripe/client";
@@ -68,13 +68,21 @@ export async function startSignupAction(formData: FormData): Promise<void> {
     options: {
       emailRedirectTo: `${brandConfig().appUrl}/auth/callback`,
       shouldCreateUser: true,
-      data: prepared.data,
     },
   });
   if (error) {
     console.warn("[signup] signInWithOtp refused:", error.message);
     redirect(signupUrl(new URLSearchParams({ error: "failed" }), claim));
   }
+  // The pending signup lives in a signed, HttpOnly cookie, never in Supabase
+  // user metadata (which only the first request for an address can set).
+  cookieStore.set(SIGNUP_COOKIE, signSignupToken(prepared.email, prepared.pending), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/auth/callback",
+    maxAge: SIGNUP_COOKIE_MAX_AGE_S,
+  });
   redirect("/signup/check-email");
 }
 

@@ -94,8 +94,8 @@ that has no auth user simply never gets a link. Create the user first:
    ```
 
    Check it inserted exactly one row. `/admin` and every admin action require
-   `profiles.role = 'owner'`; a signed-in user with no profiles row is bounced
-   back to `/login`.
+   `profiles.role = 'owner'`; a signed-in user with no profiles row is signed out
+   and sent to `/signup`.
 
 ### 1c. Auth URLs (do this once the Vercel domain is known)
 

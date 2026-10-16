@@ -15,7 +15,7 @@ export default function SignupCheckEmailPage() {
     >
       <div role="status" className="flex flex-col gap-3 text-ink-dim">
         <p>
-          Open it in this same browser. It confirms the address is yours, creates your account and takes you
+          Open the link in this same browser. It confirms the address is yours, creates your account and takes you
           straight to checkout. Nothing is set up until you do.
         </p>
         <p>

@@ -6,10 +6,10 @@
  *
  * `decideCallback` (src/lib/billing/onboard.ts) picks the route: an owner goes
  * to `/admin`, an account with an `account_id` to `/dashboard`. A verified
- * user with NO profile but a pending signup in their metadata is a new
- * customer: the account and profile are created here, for the verified email
- * only, and they go on to Stripe Checkout. Anything else is signed out and
- * sent to `/signup`. A missing code or failed exchange goes to
+ * user with NO profile but a valid signed `wa_signup` cookie minted for their
+ * email is a new customer: the account and profile are created here, for the
+ * verified email only, and they go on to Stripe Checkout. User metadata is
+ * never read. Anything else is signed out and sent to `/signup`. A missing code or failed exchange goes to
  * `/login?error=auth_callback`. Every redirect target is a fixed path on this
  * origin or the Checkout URL Stripe returned: no `next=` parameter, so no
  * open redirect.
@@ -20,7 +20,7 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { getProfile } from "@/lib/auth";
 import { brandConfig } from "@/lib/brand-config";
-import { completeSignup, decideCallback, parsePendingSignup } from "@/lib/billing/onboard";
+import { completeSignup, decideCallback, pendingFromSignupToken, SIGNUP_COOKIE } from "@/lib/billing/onboard";
 import { repo } from "@/lib/data";
 import { verifyClaimToken } from "@/lib/ghl-claim";
 import { isStripeConfigured } from "@/lib/stripe/client";
@@ -54,7 +54,10 @@ export async function GET(request: NextRequest) {
         data: { user },
       } = await supabase.auth.getUser();
       const profile = user ? await getProfile(user.id) : null;
-      const pending = user ? parsePendingSignup(user.user_metadata) : null;
+      const cookieToken = cookieStore.get(SIGNUP_COOKIE)?.value;
+      // One use: clear it whatever happens next.
+      if (cookieToken !== undefined) cookieStore.delete(SIGNUP_COOKIE);
+      const pending = pendingFromSignupToken(cookieToken, user?.email);
       const decision = decideCallback(profile, pending);
 
       if (decision === "owner") return NextResponse.redirect(`${origin}/admin`);
@@ -65,19 +68,26 @@ export async function GET(request: NextRequest) {
           await supabase.auth.signOut();
           return NextResponse.redirect(`${origin}/signup?error=unavailable`);
         }
-        const outcome = await completeSignup(
-          repo,
-          { checkout: createCheckoutSession, appUrl: brandConfig().appUrl, verifyClaim: verifyClaimToken },
-          { userId: user.id, email: user.email, pending },
-        );
+        let outcome;
+        try {
+          outcome = await completeSignup(
+            repo,
+            { checkout: createCheckoutSession, appUrl: brandConfig().appUrl, verifyClaim: verifyClaimToken },
+            { userId: user.id, email: user.email, pending },
+          );
+        } catch {
+          await supabase.auth.signOut();
+          return NextResponse.redirect(`${origin}/signup?error=failed`);
+        }
         if (outcome.kind === "checkout") return NextResponse.redirect(outcome.url);
         // The account exists but Checkout failed: the dashboard offers "Add a card".
         return NextResponse.redirect(`${origin}/dashboard`);
       }
 
-      // Signed in but belongs to nothing: drop the session rather than leave a dangling login.
+      // Signed in but belongs to nothing (or the signup cookie is missing, expired
+      // or from another browser): drop the session rather than leave a dangling login.
       await supabase.auth.signOut();
-      return NextResponse.redirect(`${origin}/signup`);
+      return NextResponse.redirect(`${origin}/signup?error=link_expired`);
     }
   }
 

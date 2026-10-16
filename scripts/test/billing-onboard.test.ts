@@ -5,10 +5,13 @@ import {
   completeSignup,
   createCheckoutForAccount,
   decideCallback,
-  parsePendingSignup,
+  pendingFromSignupToken,
   prepareSignup,
+  signSignupToken,
   type OnboardRepo,
 } from "@/lib/billing/onboard";
+process.env.ONBOARD_STATE_SECRET ||= "test-secret-not-used-anywhere-real";
+import { signKindedState } from "@/lib/signed-state";
 import type { Account } from "@/lib/types";
 import type { StripeCheckoutSession, StripeSubscription } from "@/lib/stripe/billing";
 
@@ -78,17 +81,17 @@ function deps(log: string[], over: { checkoutOk?: boolean } = {}) {
 const pending = { accountName: "Acme", kind: "business" as const, claim: null as string | null };
 const who = { userId: "u1", email: "A@B.co", pending };
 
-test("prepareSignup creates nothing: it only checks the email and returns the link metadata", async () => {
+test("prepareSignup creates nothing: it only checks the email and returns the pending signup", async () => {
   const { repo, log } = fakeRepo();
   const out = await prepareSignup(repo, { accountName: "Acme", kind: "business", email: " A@B.co " });
-  assert.deepEqual(out, { kind: "send", email: "a@b.co", data: { accountName: "Acme", kind: "business" } });
+  assert.deepEqual(out, { kind: "send", email: "a@b.co", pending: { accountName: "Acme", kind: "business", claim: null } });
   assert.deepEqual(log, ["getProfileByEmail"]);
 });
 
-test("prepareSignup carries the claim token in the metadata when given", async () => {
+test("prepareSignup carries the claim token when given", async () => {
   const { repo } = fakeRepo();
   const out = await prepareSignup(repo, { accountName: "Acme", kind: "agency", email: "a@b.co", claim: "tok" });
-  assert.deepEqual(out, { kind: "send", email: "a@b.co", data: { accountName: "Acme", kind: "agency", claim: "tok" } });
+  assert.deepEqual(out, { kind: "send", email: "a@b.co", pending: { accountName: "Acme", kind: "agency", claim: "tok" } });
 });
 
 test("prepareSignup stops at an existing profile", async () => {
@@ -97,17 +100,26 @@ test("prepareSignup stops at an existing profile", async () => {
   assert.deepEqual(log, ["getProfileByEmail"]);
 });
 
-test("parsePendingSignup accepts only well-formed metadata", () => {
-  assert.deepEqual(parsePendingSignup({ accountName: " Acme ", kind: "agency", claim: "t" }), { accountName: "Acme", kind: "agency", claim: "t" });
-  assert.deepEqual(parsePendingSignup({ accountName: "Acme", kind: "business" }), { accountName: "Acme", kind: "business", claim: null });
-  assert.equal(parsePendingSignup(null), null);
-  assert.equal(parsePendingSignup("x"), null);
-  assert.equal(parsePendingSignup({}), null);
-  assert.equal(parsePendingSignup({ accountName: "A", kind: "business" }), null);
-  assert.equal(parsePendingSignup({ accountName: "x".repeat(81), kind: "business" }), null);
-  assert.equal(parsePendingSignup({ accountName: "Acme", kind: "owner" }), null);
-  assert.equal(parsePendingSignup({ accountName: "Acme", kind: "business", claim: 5 })?.claim, null);
-  assert.equal(parsePendingSignup({ accountName: "Acme", kind: "business", claim: "y".repeat(201) })?.claim, null);
+test("a signup token round-trips for the same email, whatever its case", () => {
+  const token = signSignupToken("a@b.co", { accountName: " Acme ", kind: "agency", claim: "t" });
+  assert.deepEqual(pendingFromSignupToken(token, "A@B.co"), { accountName: "Acme", kind: "agency", claim: "t" });
+  const noClaim = signSignupToken("a@b.co", { accountName: "Acme", kind: "business", claim: null });
+  assert.deepEqual(pendingFromSignupToken(noClaim, "a@b.co"), { accountName: "Acme", kind: "business", claim: null });
+});
+
+test("a signup token is refused for another email, when missing, tampered, expired or of another kind", () => {
+  const token = signSignupToken("a@b.co", { accountName: "Acme", kind: "business", claim: null });
+  assert.equal(pendingFromSignupToken(token, "victim@b.co"), null);
+  assert.equal(pendingFromSignupToken(undefined, "a@b.co"), null);
+  assert.equal(pendingFromSignupToken("", "a@b.co"), null);
+  assert.equal(pendingFromSignupToken(`${token}x`, "a@b.co"), null);
+  assert.equal(pendingFromSignupToken(token, undefined), null);
+  const d = { email: "a@b.co", accountName: "Acme", kind: "business", iat: Date.now() };
+  assert.ok(pendingFromSignupToken(signKindedState("signup", d, 1000), "a@b.co"));
+  assert.equal(pendingFromSignupToken(signKindedState("signup", d, -1), "a@b.co"), null);
+  assert.equal(pendingFromSignupToken(signKindedState("ghl-claim", d, 1000), "a@b.co"), null);
+  assert.equal(pendingFromSignupToken(signKindedState("signup", { ...d, kind: "owner" }, 1000), "a@b.co"), null);
+  assert.equal(pendingFromSignupToken(signKindedState("signup", { ...d, accountName: "A" }, 1000), "a@b.co"), null);
 });
 
 test("decideCallback routes by profile first, then by a pending signup, else rejects", () => {
