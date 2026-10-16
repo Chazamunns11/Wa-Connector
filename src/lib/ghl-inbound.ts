@@ -184,6 +184,7 @@ import {
   type GhlTokenRefreshRepo,
 } from "@/lib/ghl-provider";
 import type { GhlRepository } from "@/lib/data";
+import { classifyOptOutMessage } from "@/lib/opt-out";
 import type { WhatsappInboundMessage } from "@/lib/types";
 
 /** Repo slice this module needs — `GhlTokenRefreshRepo`'s four methods (shared with `resolveGhlAccessToken`) plus this phase's own four, plus the media plan's signed-URL mint. All sessionless — driven exclusively via `webhookRepo` (the whatsapp-replies poke route and the reminders cron, neither carries a user session). */
@@ -196,6 +197,8 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     | "recordGhlInboundPushFailure"
     | "resolveGhlInboundMessage"
     | "createWhatsappMediaSignedUrl"
+    | "recordOptOut"
+    | "clearOptOut"
   >;
 
 /**
@@ -262,6 +265,10 @@ export interface DrainGhlInboundRepliesResult {
   retried: number;
   /** Rows this pass lost the claim race on (another poke/cron pass already claimed it) — untouched, no error. */
   claimLost: number;
+  /** Rows this pass whose text was a STOP-type keyword and recorded an opt-out (idempotent, so a retried row can count again). */
+  optedOut: number;
+  /** Rows this pass whose text was a START-type keyword and cleared an opt-out. */
+  optedIn: number;
   /** `true` iff `GHL_CONVERSATION_PROVIDER_ID` is unset — see this file's STEP 0 note. Every other counter is `0` when this is `true`. */
   blockedUnconfigured: boolean;
 }
@@ -318,6 +325,8 @@ export async function drainGhlInboundReplies(
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    optedOut: 0,
+    optedIn: 0,
     blockedUnconfigured: false,
   };
 
@@ -362,6 +371,28 @@ export async function drainGhlInboundReplies(
   return result;
 }
 
+/**
+ * Classify one inbound text and persist the opt-out / opt-in for that
+ * (tenant, number). Whole-message keyword match only (`classifyOptOutMessage`).
+ * Idempotent: recording an opt-out twice or clearing an absent one is
+ * harmless, so a row retried after a failed GHL push is safe. The message
+ * itself is still delivered to GHL by the caller.
+ */
+export async function applyOptOutKeyword(
+  repo: Pick<GhlInboundRepo, "recordOptOut" | "clearOptOut">,
+  row: WhatsappInboundMessage,
+  ghlContactId: string | null
+): Promise<"opt_out" | "opt_in" | null> {
+  const decision = classifyOptOutMessage(row.body);
+  if (!decision) return null;
+  if (decision.kind === "opt_out") {
+    await repo.recordOptOut({ tenantId: row.coachId, phone: row.fromPhone, keyword: decision.keyword, ghlContactId });
+    return "opt_out";
+  }
+  await repo.clearOptOut(row.coachId, row.fromPhone);
+  return "opt_in";
+}
+
 /** One row's full pipeline — see this file's header for the sequence and retry table. */
 async function processGhlInboundRow(
   repo: GhlInboundRepo,
@@ -388,6 +419,12 @@ async function processGhlInboundRow(
     result.failed++;
     return;
   }
+
+  // STOP/START: persist the opt-out before any GHL call or claim, so it holds
+  // even if the push below fails; idempotent, so a retried row is harmless.
+  const optOutOutcome = await applyOptOutKeyword(repo, row, null);
+  if (optOutOutcome === "opt_out") result.optedOut++;
+  else if (optOutOutcome === "opt_in") result.optedIn++;
 
   // PUSH_ATTEMPTS LOST-UPDATE UNDER CONCURRENT PASSES (adversarial-review
   // finding 3, accepted — same call Phase 1-2 already made for

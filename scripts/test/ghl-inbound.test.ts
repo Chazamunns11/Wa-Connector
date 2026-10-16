@@ -140,6 +140,8 @@ function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessag
   const rowsById = new Map(rows.map((r) => [r.id, { ...r }]));
   const calls: FakeCall[] = [];
   let claimedAt: number | null = null;
+  /** Opt-out store keyed `tenant:phone` — mirrors the (tenant_id, phone) upsert/delete contract. */
+  const optOuts = new Map<string, { keyword: string; ghlContactId: string | null }>();
 
   function accountForTenant(tenantId: string): GhlAccount | undefined {
     return [...accountsByLocation.values()].find((a) => a.tenantId === tenantId);
@@ -211,6 +213,14 @@ function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessag
       row.resolution = patch.resolution;
       row.pushError = patch.pushError;
     },
+    async recordOptOut(input: { tenantId: string; phone: string; keyword: string; ghlContactId: string | null }) {
+      calls.push({ method: "recordOptOut", args: [input] });
+      optOuts.set(`${input.tenantId}:${input.phone}`, { keyword: input.keyword, ghlContactId: input.ghlContactId });
+    },
+    async clearOptOut(tenantId: string, phone: string) {
+      calls.push({ method: "clearOptOut", args: [tenantId, phone] });
+      optOuts.delete(`${tenantId}:${phone}`);
+    },
     /** Media plan (docs/MEDIA-PLAN.md §6.2) — deterministic fake: "signs" any path into a fixed-shape URL, unless the path starts with FAIL_SIGN_PREFIX (a per-test opt-in for the signing-failure branch). */
     async createWhatsappMediaSignedUrl(path: string) {
       calls.push({ method: "createWhatsappMediaSignedUrl", args: [path] });
@@ -219,7 +229,7 @@ function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessag
     },
   };
 
-  return { repo, accountsByLocation, rowsById, calls };
+  return { repo, accountsByLocation, rowsById, calls, optOuts };
 }
 
 /** Media plan test fixture marker — see `createFakeRepo`'s `createWhatsappMediaSignedUrl` fake above. */
@@ -276,6 +286,8 @@ test("drainGhlInboundReplies: GHL_CONVERSATION_PROVIDER_ID unset -> zero repo re
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    optedOut: 0,
+    optedIn: 0,
     blockedUnconfigured: true,
   });
   assert.equal(calls.length, 0, "no repo method may be called at all when the provider id is unset");
@@ -660,6 +672,8 @@ test("drainGhlInboundReplies: the LIST call itself throwing -> an all-zero resul
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    optedOut: 0,
+    optedIn: 0,
     blockedUnconfigured: false,
   });
 });
@@ -771,4 +785,83 @@ test("describeStoredMediaLabel / describeTooLargeMediaPlaceholder — pure, dire
     describeTooLargeMediaPlaceholder("imageMessage"),
     "[Photo received on WhatsApp (too large to transfer — view it on the connected phone)]"
   );
+});
+
+// ---------------------------------------------------------------------------
+// 11. STOP / START opt-outs (reliability T9)
+// ---------------------------------------------------------------------------
+
+const PHONE = "+447700900123";
+const OTHER_TENANT_ID = "33333333-3333-4333-8333-333333333333";
+
+test("STOP reply: opt-out recorded for (tenant, phone) with keyword STOP, reply still pushed to GHL", async () => {
+  const row = makeRow({ body: "STOP" });
+  const { repo, rowsById, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.deepEqual(optOuts.get(`${TENANT_ID}:${PHONE}`), { keyword: "STOP", ghlContactId: null });
+  assert.equal(result.optedOut, 1);
+  assert.equal(result.optedIn, 0);
+  assert.equal(postCalls.length, 1);
+  assert.equal(postCalls[0]?.body, "STOP");
+  assert.equal(rowsById.get(row.id)!.resolution, "ghl_pushed");
+});
+
+test("START after STOP clears the opt-out; a later 'stop' re-records it (final state opted out), all three rows pushed", async () => {
+  const rows = [
+    makeRow({ body: "STOP", createdAt: new Date(2026, 6, 1, 10, 0).toISOString() }),
+    makeRow({ body: "START", createdAt: new Date(2026, 6, 1, 10, 1).toISOString() }),
+    makeRow({ body: "stop", createdAt: new Date(2026, 6, 1, 10, 2).toISOString() }),
+  ];
+  const { repo, optOuts, calls } = createFakeRepo([makeAccount()], rows);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(optOuts.get(`${TENANT_ID}:${PHONE}`)?.keyword, "STOP");
+  assert.deepEqual(
+    calls.filter((c) => c.method === "recordOptOut" || c.method === "clearOptOut").map((c) => c.method),
+    ["recordOptOut", "clearOptOut", "recordOptOut"]
+  );
+  assert.equal(result.optedOut, 2);
+  assert.equal(result.optedIn, 1);
+  assert.equal(result.pushed, 3);
+  assert.equal(postCalls.length, 3);
+});
+
+test("STOP for tenant A does not opt the phone out on tenant B", async () => {
+  const row = makeRow({ body: "STOP" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(optOuts.has(`${TENANT_ID}:${PHONE}`), true);
+  assert.equal(optOuts.has(`${OTHER_TENANT_ID}:${PHONE}`), false);
+});
+
+test("non-keyword reply writes nothing to opt-outs", async () => {
+  const rows = [makeRow({ body: "please stop calling me" }), makeRow({ body: "cancel" }), makeRow({ body: null, messageType: "imageMessage" })];
+  const { repo, calls, optOuts } = createFakeRepo([makeAccount()], rows);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(optOuts.size, 0);
+  assert.equal(calls.some((c) => c.method === "recordOptOut" || c.method === "clearOptOut"), false);
+  assert.equal(result.optedOut, 0);
+  assert.equal(result.optedIn, 0);
+});
+
+test("opt-out is recorded even when the GHL push later fails (ordering: before upsert/claim)", async () => {
+  const row = makeRow({ body: "STOP" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps } = makeDeps({ upsertContact: async () => ({ ok: false, kind: "unreachable", error: "GHL contact upsert failed (HTTP 503)" }) });
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.retried, 1);
+  assert.equal(optOuts.get(`${TENANT_ID}:${PHONE}`)?.keyword, "STOP");
 });

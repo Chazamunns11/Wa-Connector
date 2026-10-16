@@ -548,7 +548,7 @@ launch publicly until each of these is built or the copy is changed to match:
 
 - **(a) Held messages while a phone is disconnected.** The site promises that
   messages are held and retried when a number is offline (reliability plan).
-- **(b) STOP opt-outs.** Honouring a contact's STOP reply (reliability plan).
+- **(b) STOP opt-outs.** Built — `src/lib/opt-out.ts` + `src/lib/ghl-inbound.ts`. Whole-message, case-insensitive keywords. Opt-out: STOP, STOPALL, STOP ALL, UNSUBSCRIBE, END, QUIT, OPT OUT, OPTOUT (CANCEL is deliberately excluded: it cancels appointments). Opt-in: START, UNSTOP, SUBSCRIBE, OPT IN, OPTIN. The reply is still delivered to GoHighLevel.
 - **(e) Real legal text.** Replace the draft notice and the "(drafts)" label
   on the privacy, terms and related pages with reviewed legal text.
 

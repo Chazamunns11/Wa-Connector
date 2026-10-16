@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] ghl outbound-status drain failed (non-fatal):", err);
   }
 
-  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, blockedUnconfigured: false };
+  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, optedOut: 0, optedIn: 0, blockedUnconfigured: false };
   try {
     ghlInboundReplies = await drainGhlInboundReplies(repo);
     if (ghlInboundReplies.candidates > 0) {
