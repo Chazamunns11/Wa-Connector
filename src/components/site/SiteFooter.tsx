@@ -15,7 +15,7 @@ export function SiteFooter() {
         <div className="grid max-w-[62ch] gap-4">
           <BrandMark surface="dark" size={36} />
           <p>
-            {name} is a linked-device connector, not the official WhatsApp Business API. {name} is
+            {name} connects to WhatsApp as a linked device, not through the official WhatsApp Business API. {name} is
             not affiliated with or endorsed by Meta, WhatsApp or HighLevel.
           </p>
         </div>

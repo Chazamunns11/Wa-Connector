@@ -48,7 +48,7 @@ export default function HomePage() {
   const home = faqEntries(brand).filter((e) => (HOME_FAQ_IDS as readonly string[]).includes(e.id));
   return (
     <>
-      <section className="surface-dark pb-16 pt-12 md:pb-24 md:pt-20">
+      <section className="surface-dark pb-16 pt-12 md:pb-20 md:pt-14 lg:pb-16">
         <Container>
           <div className="grid items-start gap-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.08fr)] lg:gap-12">
             <div>
@@ -57,14 +57,14 @@ export default function HomePage() {
                 <span className="mt-2 block">{result.headingTail}</span>{" "}
                 <span className="block text-[3.5rem] leading-[0.95] tracking-[-0.04em] [font-variant-numeric:tabular-nums] md:text-[6rem]">
                   {result.after}
-                  <sup className="ml-1.5 align-super text-xl font-bold tracking-normal">
-                    <a href="#own-result" aria-label="Footnote 1" className="text-accent-text underline">
-                      1
-                    </a>
-                  </sup>
                 </span>
               </h1>
-              <p className="mt-8 max-w-[44ch] text-[1.1875rem] leading-snug text-ink-dim md:text-[1.375rem]">{copy.heroSub}</p>
+              <p className="mt-3 text-[0.9375rem]">
+                <a href="#own-result" className="inline-flex min-h-6 items-center text-accent-text underline underline-offset-2">
+                  Our own average<sup className="ml-0.5 text-xs font-bold">1</sup>
+                </a>
+              </p>
+              <p className="mt-6 max-w-[44ch] text-[1.1875rem] leading-snug text-ink-dim md:text-[1.375rem]">{copy.heroSub}</p>
               <div className="mt-8">
                 <Cta label={copy.ctaLabel} secondary={{ href: SITE_ROUTES.setup, label: "Read the setup guide" }} note={copy.ctaNote} />
               </div>

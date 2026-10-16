@@ -25,7 +25,7 @@ export interface SalesCopy {
 export function salesCopy(brand: BrandConfig): SalesCopy {
   const { name } = brand;
   return {
-    heroSub: `${name} takes the reminders your GoHighLevel workflows already send and sends them on WhatsApp, from your own number. Replies come back into Conversations.`,
+    heroSub: `${name} takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.`,
     ctaNote:
       "We take a card up front. The trial covers up to 3 numbers, and you can cancel from the billing portal whenever you like.",
     why: {
@@ -60,7 +60,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
       caption: "Sample screen, sample businesses.",
     },
     safetyHeading: "How it treats your number",
-    safetyIntro: "Three things happen on every number. They are not settings; they're always on.",
+    safetyIntro: "Three things happen on every number, and none of them can be switched off.",
     safety: [
       {
         title: "Paced sending",
@@ -78,7 +78,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     disclosure: {
       heading: "Read this before you sign up",
       paragraphs: [
-        `${name} works as a linked device on your WhatsApp number, the same mechanism WhatsApp Web uses. It is not the official WhatsApp Business API. You don't get a green tick or Meta's template approval, Meta doesn't charge you per conversation, and the phone that holds the number has to stay switched on and online.`,
+        `${name} works as a linked device on your WhatsApp number, the same mechanism WhatsApp Web uses. It is not the official WhatsApp Business API. You don't get the verified badge or Meta's template approval, Meta doesn't charge you per message, and the phone that holds the number has to stay switched on and online.`,
         "WhatsApp can restrict or ban any number it decides is misusing the service, and automated sending through a linked device is the kind of thing it looks at. The pacing, the daily cap and STOP handling lower that risk. They cannot remove it, and we can't promise a number will never be restricted.",
         "Use a dedicated business number rather than your personal one, and only message people who expect to hear from you. If you need the official API, this isn't it, and we'd rather say so now.",
       ],

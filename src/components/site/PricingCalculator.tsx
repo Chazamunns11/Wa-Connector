@@ -25,6 +25,7 @@ export function PricingCalculator({ pricePerNumber, currency }: { pricePerNumber
           If I connect{" "}
           <input
             id={id}
+            aria-label="How many numbers"
             type="number"
             min={CALC_MIN}
             max={CALC_MAX}

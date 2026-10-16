@@ -60,14 +60,14 @@ export const COMPARISON = {
   native: [
     `${GHL_NATIVE.monthlyPerSubAccount} per sub-account, per month, paid to HighLevel.`,
     `Plus a charge for every delivered template message at Meta's rate for the recipient's country. HighLevel's own example is ${GHL_NATIVE.perMessageExample} ${GHL_NATIVE.perMessageExampleLabel}, and an agency can add its own mark-up.`,
-    "The official WhatsApp Business API: Meta business verification, a green tick if you qualify, and templates that Meta approves before they send.",
+    "The official WhatsApp Business API: Meta business verification, a verified badge if you qualify, and templates that Meta approves before they send.",
     "No phone to keep online.",
   ],
   sourceLine: sourceParts()
     .map((p) => (typeof p === "string" ? p : p.text))
     .join(""),
   closing:
-    "If you send a lot of marketing templates, or you need the green tick, their option may suit you better. If you want the workflows you already have on your own number for a flat price, that's us.",
+    "If you send a lot of marketing templates, or you need the verified badge, their option may suit you better. If you want the workflows you already have on your own number for a flat price, that's us.",
 };
 
 /** Our column. The price comes from pricingConfig(), formatted by the caller. */
@@ -76,7 +76,7 @@ export function ourColumn(price: string): string[] {
     `${price} per number, per month.`,
     "No charge per message.",
     "Your own number, connected as a linked device.",
-    "No green tick and no template approval, because it isn't the official API.",
+    "No verified badge and no template approval, because it isn't the official API.",
     "A ban risk, explained on the home page, that we can't remove.",
   ];
 }

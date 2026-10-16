@@ -79,7 +79,7 @@ export default async function SetupPage({
                 <ul className="mt-3 grid list-disc gap-2 pl-5 marker:text-ink-faint">
                   <li>A GoHighLevel account with at least one sub-account.</li>
                   <li>A {brand.name} account. The free trial is fine.</li>
-                  <li>The phone that has the WhatsApp number you want to send from, with you.</li>
+                  <li>The phone with the WhatsApp number you&apos;ll send from. You need it in your hand for the scan.</li>
                   <li>A second phone to receive the test message.</li>
                 </ul>
               </div>

@@ -40,7 +40,7 @@ test("official-api answer says linked device and not the official Business API",
   const a = faqEntries(brand).find((e) => e.id === "official-api")!.answer;
   assert.match(a, /linked.device/i);
   assert.match(a, /not the official WhatsApp Business API/i);
-  assert.match(a, /green tick/i);
+  assert.match(a, /verified badge/i);
 });
 
 test("daily-cap, stop and white-label answers state the real behaviour", () => {

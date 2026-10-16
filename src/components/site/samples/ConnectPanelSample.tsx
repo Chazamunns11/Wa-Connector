@@ -97,7 +97,7 @@ export function ConnectPanelSample({ connectedStrip = false }: { connectedStrip?
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t bg-raised px-5 py-3 text-[15px]">
             <Chip tone="win">Connected</Chip>
             <span>
-              Connected as <span className="font-mono-nums">+44 7700 900101</span>
+              as <span className="font-mono-nums">+44 7700 900101</span>
             </span>
           </div>
         ) : null}

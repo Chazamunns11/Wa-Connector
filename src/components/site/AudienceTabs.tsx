@@ -83,7 +83,7 @@ export function AudienceTabs({
               onKeyDown={(e) => onKeyDown(e, a)}
               className={`inline-flex min-h-11 items-center rounded border px-5 font-semibold ${
                 selected
-                  ? "border-accent bg-accent text-accent-ink"
+                  ? "border-ink bg-ink text-bg"
                   : "border-ink-faint text-ink-dim hover:border-ink hover:text-ink"
               }`}
             >

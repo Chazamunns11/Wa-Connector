@@ -118,7 +118,7 @@ Thread bubbles (aria-hidden, unchanged from Task 9c): `Hi Sam, your call is book
 
 h2: `Read this before you sign up`
 
-> {name} works as a linked device on your WhatsApp number, the same mechanism WhatsApp Web uses. It is not the official WhatsApp Business API. You don't get a green tick or Meta's template approval, Meta doesn't charge you per conversation, and the phone that holds the number has to stay switched on and online.
+> {name} works as a linked device on your WhatsApp number, the same mechanism WhatsApp Web uses. It is not the official WhatsApp Business API. You don't get a verified badge or Meta's template approval, Meta doesn't charge you per message, and the phone that holds the number has to stay switched on and online.
 
 > WhatsApp can restrict or ban any number it decides is misusing the service, and automated sending through a linked device is the kind of thing it looks at. The pacing, the daily cap and STOP handling lower that risk. They cannot remove it, and we can't promise a number will never be restricted.
 
@@ -194,13 +194,13 @@ Column h3: `{name}`
 - `{price} per number, per month.`
 - `No charge per message.`
 - `Your own number, connected as a linked device.`
-- `No green tick and no template approval, because it isn't the official API.`
+- `No verified badge and no template approval, because it isn't the official API.`
 - `A ban risk, explained on the home page, that we can't remove.`
 
 Column h3: `GoHighLevel's WhatsApp`
 - `$10 per sub-account, per month, paid to HighLevel.`
 - `Plus a charge for every delivered template message at Meta's rate for the recipient's country. HighLevel's own example is $0.0263 per marketing message in the US, and an agency can add its own mark-up.`
-- `The official WhatsApp Business API: Meta business verification, a green tick if you qualify, and templates that Meta approves before they send.`
+- `The official WhatsApp Business API: Meta business verification, a verified badge if you qualify, and templates that Meta approves before they send.`
 - `No phone to keep online.`
 
 Source line (small):
@@ -209,7 +209,7 @@ Source line (small):
 Links: https://help.gohighlevel.com/support/solutions/articles/155000001428-whatsapp-pricing-billing-and-rebilling-guide and https://help.gohighlevel.com/support/solutions/articles/155000007602-whatsapp-platform-pricing-feature-comparison
 
 Closing line:
-> If you send a lot of marketing templates, or you need the green tick, their option may suit you better. If you want the workflows you already have on your own number for a flat price, that's us.
+> If you send a lot of marketing templates, or you need the verified badge, their option may suit you better. If you want the workflows you already have on your own number for a flat price, that's us.
 
 ### Billing questions
 
@@ -243,7 +243,7 @@ Not verified, so not on the page: which HighLevel plans include the add-on; any 
 > You scan a QR code with the phone, the same way you'd link WhatsApp Web, and {name} then acts as a linked device on that number. The phone has to stay switched on and online.
 
 **official-api** — `Is this the official WhatsApp Business API?`
-> No. {name} uses WhatsApp's linked-device mechanism, the one WhatsApp Web uses, not the official WhatsApp Business API. You don't get the green tick or Meta's template approval, Meta doesn't charge you per conversation, and the phone with the number must stay online. If you need the official API, this is not it. [pinned: "linked device", "not the official WhatsApp Business API", "green tick"; must not contain "no green tick, no template approval"]
+> No. {name} uses WhatsApp's linked-device mechanism, the one WhatsApp Web uses, not the official WhatsApp Business API. You don't get the verified badge or Meta's template approval, Meta doesn't charge you per message, and the phone with the number must stay online. If you need the official API, this is not it. [pinned: "linked device", "not the official WhatsApp Business API", "verified badge"; must not contain "no verified badge, no template approval"]
 
 **ban-risk** — `Can my number get banned?`
 > Yes, it can. WhatsApp can restrict or ban any number it decides is misusing the service, and automated messaging through a linked device is the kind of thing it looks at. Pacing, the daily cap and STOP handling lower the risk, but they cannot remove it, and we can't promise a number will never be restricted. Use a dedicated business number rather than your personal one, and only message people who expect to hear from you. [pinned: ban|restrict, can't|cannot, dedicated]
@@ -296,6 +296,6 @@ Tabs: `Agency owner`, `Single sub-account` (unchanged). Everything below the tab
 
 ## 7. Self-scrub record
 
-Checked against the human-writing checklist (the installed skill has no `ai-tells.md`, so the SKILL.md list was applied): no banned puffery vocabulary; no "not just / not only / no X, no Y" shapes (the old FAQ triple was rewritten in Task 12b and the new copy has none; "No green tick and no template approval, because..." in the comparison is a factual list of two absences with a reason, kept deliberately); no "-ing" tails claiming significance; one rule-of-three per page at most ("the pacing, the daily cap and STOP handling" on home; "install, set the Telephony Provider, scan..." only in the setup metadata); em dashes: none in customer-facing prose (the W12 sentence and the dashboard's own chip text are the app's); no summarising final paragraphs; straight quotes.
+Checked against the human-writing checklist (the installed skill has no `ai-tells.md`, so the SKILL.md list was applied): no banned puffery vocabulary; no "not just / not only / no X, no Y" shapes (the old FAQ triple was rewritten in Task 12b and the new copy has none; "No verified badge and no template approval, because..." in the comparison is a factual list of two absences with a reason, kept deliberately); no "-ing" tails claiming significance; one rule-of-three per page at most ("the pacing, the daily cap and STOP handling" on home; "install, set the Telephony Provider, scan..." only in the setup metadata); em dashes: none in customer-facing prose (the W12 sentence and the dashboard's own chip text are the app's); no summarising final paragraphs; straight quotes.
 
 Hedges removed: the old "we can't promise" appears once (the disclosure block, and again in the ban-risk FAQ on a different page), not after every claim. The brand name appears at most once per paragraph.

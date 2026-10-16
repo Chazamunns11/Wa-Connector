@@ -461,8 +461,15 @@ h2 {
     0 32px 56px -28px rgba(0, 0, 0, 0.7);
 }
 
+/* Below 1024px the SMS phone is cropped to its top: the reminder and the
+   stamp, not 250px of empty thread. */
+.phone-sms {
+  height: 260px;
+}
+
 @media (min-width: 1024px) {
-  .phone {
+  .phone,
+  .phone-sms {
     height: 548px;
   }
 }

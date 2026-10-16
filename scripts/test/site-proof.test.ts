@@ -101,7 +101,7 @@ test("walkthrough fixes: menu item named after the brand, no triple negative, pr
   assert.ok(!/Open the WhatsApp page in the left menu/.test(read("src/lib/site/sales-copy.ts")));
   assert.match(read("src/lib/site/sales-copy.ts"), /left menu/);
   assert.ok(!/The WhatsApp page lives in the left menu/.test(read("src/lib/site/setup-steps.ts")));
-  assert.ok(!/no green tick, no template approval/.test(read("src/lib/site/faq.ts")));
+  assert.ok(!/no verified badge, no template approval/.test(read("src/lib/site/faq.ts")));
   assert.match(read("src/app/(site)/pricing/page.tsx"), /There is no setup fee, and \{brand\.name\} does not charge per message\./);
   const shell = read("src/components/auth/AuthShell.tsx");
   assert.match(shell, /<Link[^>]*href="\/"[^>]*aria-label=\{`\$\{brandConfig\(\)\.name\} home`\}/s);

@@ -22,7 +22,7 @@ export function SameReminderTwice() {
           </div>
         </PhoneFrame>
 
-        <PhoneFrame title="Sam" variant="whatsapp" composer="Message" className="z-10 lg:-ml-5">
+        <PhoneFrame title="Sam" variant="whatsapp" composer="Message" className="z-10 lg:-ml-3">
           <div className="flex flex-col items-end">
             <p className="hero-bubble bubble bubble-out text-[15px]">
               {REMINDER}

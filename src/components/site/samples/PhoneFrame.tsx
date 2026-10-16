@@ -28,7 +28,7 @@ export function PhoneFrame({
       <span className="phone-island" />
       <div className="phone-screen">
         <div className="phone-status">
-          <span>9:41</span>
+          <span>10:24</span>
           <svg width="40" height="11" viewBox="0 0 40 11" fill="currentColor">
             <rect x="0" y="7" width="3" height="4" rx="0.5" />
             <rect x="5" y="5" width="3" height="6" rx="0.5" />

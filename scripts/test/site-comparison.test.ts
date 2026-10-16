@@ -19,8 +19,8 @@ test("GHL_NATIVE carries two dated, HighLevel-hosted sources and the US dollar f
 test("the comparison makes no cheaper/better claim and states what native has that we do not", () => {
   const all = JSON.stringify({ GHL_NATIVE, COMPARISON });
   assert.doesNotMatch(all, /cheaper|better than|beats/i);
-  assert.match(COMPARISON.closing, /green tick/);
-  assert.match(COMPARISON.native.join(" "), /green tick/);
+  assert.match(COMPARISON.closing, /verified badge/);
+  assert.match(COMPARISON.native.join(" "), /verified badge/);
   assert.match(COMPARISON.native.join(" "), /templates/);
   assert.match(COMPARISON.native.join(" "), /No phone to keep online/);
 });

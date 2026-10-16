@@ -9,7 +9,7 @@ import { SITE_ROUTES } from "@/lib/site/routes";
 export function generateMetadata(): Metadata {
   const { name } = brandConfig();
   return {
-    title: `FAQ | ${name}`,
+    title: `FAQ — ${name}`,
     description: `Answers on how ${name} connects to WhatsApp, the risks, the daily cap, the free trial and cancelling.`,
   };
 }

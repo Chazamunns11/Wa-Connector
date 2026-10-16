@@ -45,7 +45,7 @@ test("ConnectPanelSample uses the app's strings and the guide's warning", () => 
   assert.ok(t.includes("On your phone: WhatsApp → Settings → Linked devices → Link a device, then scan this code."));
   assert.match(t, /import \{[^}]*QR_WARNING[^}]*\} from "@\/lib\/site\/setup-steps"/);
   assert.match(t, /connectedStrip/);
-  assert.ok(t.includes("Connected as +44 7700 900101"));
+  assert.ok(t.includes("+44 7700 900101"));
 });
 
 test("DashboardSample carries the preview dashboard's rows and wording", () => {
