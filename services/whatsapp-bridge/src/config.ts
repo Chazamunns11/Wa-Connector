@@ -27,6 +27,8 @@ export interface BridgeConfig {
   sendJitterMs: number;
   /** Max sends per coach per UTC day. */
   dailyCap: number;
+  /** Ramp a newly linked number's daily cap up over 14 days (src/pacing.ts WARMUP_SCHEDULE). Off by default. */
+  warmupEnabled: boolean;
   /** Show "typing…" before each outbound text part (src/typing.ts). */
   typingIndicatorEnabled: boolean;
   /** Longest single typing window (ms); 0 disables typing like the flag does. */
@@ -188,6 +190,7 @@ export function loadConfig(): BridgeConfig {
     sendMinGapMs: intWithDefault("WA_SEND_MIN_GAP_MS", 45_000),
     sendJitterMs: intWithDefault("WA_SEND_JITTER_MS", 30_000),
     dailyCap: intWithDefault("WA_DAILY_CAP", 150),
+    warmupEnabled: boolWithDefault("WA_WARMUP_ENABLED", false),
     typingIndicatorEnabled: boolWithDefault("WA_TYPING_INDICATOR_ENABLED", true),
     typingMaxMs: intWithDefault("WA_TYPING_MAX_MS", 4_000),
     lockHeartbeatMs: intWithDefault("WA_LOCK_HEARTBEAT_MS", 10_000),

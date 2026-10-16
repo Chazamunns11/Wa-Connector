@@ -66,6 +66,8 @@ session lease (`src/lock.ts`) makes an accidental second replica harmless
 (it idles, unable to claim), but it is waste, not capacity.
 
 Deploy order for the first live run: apply `supabase/migrations/0001_init.sql`
+then every later migration in number order (`0002_…` adds
+`whatsapp_sessions.phone_linked_at`, which `wipeCreds` writes)
 → deploy bridge → set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
 
 ## Key rotation (`WA_CREDS_KEY`)
@@ -162,6 +164,14 @@ still exists on the linked phone regardless.
   blow through the cap before any of them has actually dispatched. A ban
   lands on the client's real business number — that is why these defaults
   are conservative.
+- Warm-up (`WA_WARMUP_ENABLED`, off by default): a newly linked number's
+  daily cap ramps up with its age (`WARMUP_SCHEDULE` in `src/pacing.ts`:
+  20/day for days 0-2, 50 for 3-6, 100 for 7-13, then `WA_DAILY_CAP`). Age
+  comes from `whatsapp_sessions.phone_linked_at`, kept while the same number
+  reconnects and cleared by `wipeCreds`. On connect the pacer assumes "linked
+  now" until that read lands, so the gap is stricter, never looser. Leave it
+  off while moving established numbers across: a re-scanned number counts as
+  new.
 - Before each outbound text part the worker shows "typing…" in the
   recipient's chat (`src/typing.ts`, `WA_TYPING_INDICATOR_ENABLED`,
   `WA_TYPING_MAX_MS`): 1s plus 30ms per character, ±20%, capped at 4s by

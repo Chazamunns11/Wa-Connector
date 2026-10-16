@@ -68,6 +68,10 @@ two are filled in a second pass once both domains exist. That is expected.
    table, the updated_at triggers, RLS (no policies; everything is
    service-role only) and the two storage buckets (`wa-media`, private, and
    `client-logos`).
+   Then run each later file in `supabase/migrations/` in number order
+   (`0002_whatsapp_sessions_phone_linked_at.sql` onwards), once each. The
+   bridge writes `whatsapp_sessions.phone_linked_at` on every logout, so
+   0002 must be applied before the bridge is deployed.
 3. **Project Settings → API**. Note three values for Vercel and Railway:
    - Project URL → `NEXT_PUBLIC_SUPABASE_URL` (Vercel), `SUPABASE_URL` (Railway)
    - `anon` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY` (Vercel)
@@ -507,6 +511,7 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_SEND_MIN_GAP_MS` | No | `45000` | Minimum gap between sends on one number |
 | `WA_SEND_JITTER_MS` | No | `30000` | Random jitter added to the gap |
 | `WA_DAILY_CAP` | No | `150` | Max sends per number per UTC day |
+| `WA_WARMUP_ENABLED` | No | `false` | Ramp a newly linked number's daily cap: 20/day for days 0-2, 50 for 3-6, 100 for 7-13, then `WA_DAILY_CAP`. Leave off while moving established numbers across |
 | `WA_TYPING_INDICATOR_ENABLED` | No | `true` | Show "typing…" before each outbound text |
 | `WA_TYPING_MAX_MS` | No | `4000` | Longest typing window per message (ms) |
 | `WA_LOCK_HEARTBEAT_MS` | No | `10000` | Session lease heartbeat |

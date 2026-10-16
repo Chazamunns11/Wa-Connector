@@ -1007,7 +1007,20 @@ export class SessionManager {
         const rawId = sock.user?.id ?? "";
         const number = rawId.split(":")[0]?.split("@")[0] ?? "";
         session.phoneNumber = number ? `+${number}` : null;
-        void this.persistStatus(session, "connected", { phoneNumber: session.phoneNumber, touchLastConnected: true, disconnectReason: null });
+        if (this.config.warmupEnabled && session.phoneNumber) {
+          // Warm-up (src/pacing.ts): assume brand new until the ledger says
+          // otherwise, so the window before the read lands is stricter, never
+          // looser. markPhoneLinked compares against the stored number, so it
+          // runs before the status write replaces it.
+          session.pacer.setLinkedAt(Date.now());
+          const phoneNumber = session.phoneNumber;
+          void (async () => {
+            await this.safely(session.coachId, async () => session.pacer.setLinkedAt(await this.store.markPhoneLinked(session.coachId, phoneNumber)));
+            await this.persistStatus(session, "connected", { phoneNumber, touchLastConnected: true, disconnectReason: null });
+          })();
+        } else {
+          void this.persistStatus(session, "connected", { phoneNumber: session.phoneNumber, touchLastConnected: true, disconnectReason: null });
+        }
         void this.drainQueue(session);
       }
 
@@ -1254,8 +1267,8 @@ export class SessionManager {
     }
     // Each part (text OR attachment) is one cap unit and one pacer slot
     // (plan §5.6 decision O3 — "the pacer must count what WhatsApp counts").
-    if (session.pacer.atDailyCap() || session.pacer.sentTodayCount() + session.queue.length >= this.config.dailyCap) {
-      return { kind: "daily_cap_reached", cap: this.config.dailyCap };
+    if (session.pacer.atDailyCap() || session.pacer.sentTodayCount() + session.queue.length >= session.pacer.effectiveDailyCap()) {
+      return { kind: "daily_cap_reached", cap: session.pacer.effectiveDailyCap() };
     }
 
     const { record, fresh } = await this.store.acceptMessage(coachId, idempotencyKey, to, kind);
@@ -1449,7 +1462,7 @@ export class SessionManager {
       phoneNumber: session.phoneNumber,
       qr: session.status === "waiting_qr" && qrFresh ? session.qr : null,
       sentToday: session.pacer.sentTodayCount(),
-      dailyCap: this.config.dailyCap,
+      dailyCap: session.pacer.effectiveDailyCap(),
       queueLength: session.queue.length,
     };
   }

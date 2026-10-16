@@ -170,6 +170,30 @@ export class BridgeStore {
   }
 
   /**
+   * Warm-up (src/pacing.ts `WARMUP_SCHEDULE`): returns when `phoneNumber`
+   * was first linked on this tenant, in ms. Keeps the stored
+   * `phone_linked_at` when the row already holds this same number; stamps
+   * now() when the number is new or the date is missing. Must run BEFORE the
+   * 'connected' status write replaces `phone_number`, since it compares
+   * against the stored number. `wipeCreds` clears the date, so a number
+   * linked after a logout or ban always starts its warm-up again.
+   */
+  async markPhoneLinked(coachId: string, phoneNumber: string): Promise<number> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_sessions")
+      .select("phone_number, phone_linked_at")
+      .eq("coach_id", coachId)
+      .maybeSingle();
+    if (error) throw error;
+    const row = data as { phone_number: string | null; phone_linked_at: string | null } | null;
+    if (row?.phone_number === phoneNumber && row.phone_linked_at) return Date.parse(row.phone_linked_at);
+    const now = new Date();
+    const { error: updateError } = await this.supabase.from("whatsapp_sessions").update({ phone_linked_at: now.toISOString() }).eq("coach_id", coachId);
+    if (updateError) throw updateError;
+    return now.getTime();
+  }
+
+  /**
    * Full credential wipe — logout, ban, or an explicit unlink. Removes the
    * creds blob AND every Signal key row: a logged-out device's key material
    * is dead weight that still reads as a credential, so it must not linger.
@@ -179,7 +203,7 @@ export class BridgeStore {
     if (keysError) throw keysError;
     const { error } = await this.supabase
       .from("whatsapp_sessions")
-      .update({ creds_enc: null, phone_number: null, status: finalStatus, last_disconnect_reason: reason })
+      .update({ creds_enc: null, phone_number: null, phone_linked_at: null, status: finalStatus, last_disconnect_reason: reason })
       .eq("coach_id", coachId);
     if (error) throw error;
   }
