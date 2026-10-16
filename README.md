@@ -22,4 +22,7 @@ npm run check   # typecheck + lint + tests
 | `BRAND_NAME` | Product name shown to users (default `WA Connector`) |
 | `BRAND_SUPPORT_EMAIL` | Optional support address shown to users |
 
-Full list in `docs/GO-LIVE-FOUNDATION.md` (Task 7).
+The complete list, with required/optional and defaults for both the web app
+and the WhatsApp bridge, is in [`docs/GO-LIVE-FOUNDATION.md`](docs/GO-LIVE-FOUNDATION.md),
+which is also the deploy and first-light guide. The bridge (`services/whatsapp-bridge`)
+runs on Node 24, and its tests must be run on Node 24.
