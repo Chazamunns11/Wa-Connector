@@ -32,6 +32,8 @@ export async function syncSubscriptionQuantity(
   const itemId = subscription.data.itemId;
   if (!itemId) return fail("subscription has no item");
   const quantity = await repo.countActivatedForAccount(account.id);
+  // Already correct: skip the write so our own updates cannot echo back as endless webhook events.
+  if (subscription.data.quantity === quantity) return { ok: true, quantity };
   const set = await deps.setQuantity(itemId, quantity);
   if (!set.ok) return fail(set.message);
   return { ok: true, quantity };

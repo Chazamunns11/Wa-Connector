@@ -52,6 +52,7 @@ export async function activateLocation(
   if (!verdict.ok) return verdict;
 
   let itemId: string | null = null;
+  let written: number | null = null;
   if (account.billingStatus !== "comped") {
     // A billable account with nothing to bill against must not get a free number.
     if (!account.stripeSubscriptionId) return { ok: false, reason: "stripe_failed" };
@@ -60,13 +61,16 @@ export async function activateLocation(
     itemId = subscription.data.itemId;
     const raised = await deps.setQuantity(itemId, accountActive + 1);
     if (!raised.ok) return { ok: false, reason: "stripe_failed" };
+    written = accountActive + 1;
   }
 
   // Re-syncs Stripe to the true activated count (never a stale read plus one).
   const resync = async () => {
     if (!itemId) return;
     try {
-      const set = await deps.setQuantity(itemId, await repo.countActivatedForAccount(accountId));
+      const count = await repo.countActivatedForAccount(accountId);
+      if (count === written) return;
+      const set = await deps.setQuantity(itemId, count);
       if (!set.ok) deps.notify(`Billing quantity re-sync failed for account ${accountId}: ${set.message}`);
     } catch {
       deps.notify(`Billing quantity re-sync failed for account ${accountId}`);

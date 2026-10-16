@@ -32,7 +32,10 @@ same organisation**.
 1. Create the project as in Part 1 of the foundation doc. Note the three
    values (URL, anon key, service-role key).
 2. **SQL Editor.** Run `supabase/migrations/0001_init.sql` once. Then run
-   `supabase/migrations/0002_accounts.sql` once. Always in that order.
+   `supabase/migrations/0002_accounts.sql` once. Then run
+   `supabase/migrations/0003_activation_cap.sql` once. Always in that order.
+   Without 0003 every Activate button fails, because activation calls the
+   `activate_ghl_location` function that 0003 creates.
 3. Before 0002, if you ever ran 0001 on a project that already has people in
    `profiles`, check for emails that differ only by case. 0002 lower-cases
    every email and then adds a unique index. Two rows like `Sam@x.com` and
@@ -223,7 +226,12 @@ Use a spare GHL sub-account and your own number. Use Stripe test cards.
    reach WhatsApp.
 6. In Stripe, the subscription item quantity should now be **1**.
 7. **Deactivate** the number. Quantity goes to **0**. (See Part 7 for why this
-   needs checking.)
+   needs checking.) If the dashboard says "Deactivated. Your bill will update
+   shortly.", the number is off and has stopped sending, but the call to
+   Stripe to lower the quantity failed. Slack gets "Billing quantity sync
+   failed for account ...". Nothing else to do: the next subscription update
+   from Stripe, or the next activation, puts the quantity right. Check the
+   subscription item in Stripe if the Slack note keeps repeating.
 8. Activate up to the trial cap (three numbers). A fourth should be refused
    with the cap message.
 9. Open **Billing** on the dashboard. **Manage billing** should open the
@@ -276,9 +284,11 @@ Then walk this journey:
    test cleanup properly, move the account's `cancelled_at` back in the
    database instead (`update accounts set cancelled_at = now() - interval
    '15 days' where ...`) and run the cron by hand.
-8. **Resubscribe.** Sign up again with the same email after cancelling. The
-   account should return to trialing or active and its cleanup marker should
-   clear.
+8. **Resubscribe.** Sign in to the cancelled account and open **Billing**.
+   Click **Restart your subscription** and complete Checkout with a test
+   card. The account gets the new subscription, returns to trialing or
+   active, and its cancelled and cleanup markers clear. (Signing up again
+   with the same email does not work; it says the email already exists.)
 
 Tick each step off. A failure at any step is a launch blocker.
 
@@ -404,4 +414,3 @@ line for that one run. Do not add them to Vercel.
 - **Quantity 0 is unconfirmed** until you do the check in Part 7.
 - **Cleanup runs hourly, not exactly at day 14.** It can land up to an hour
   after the 14-day mark. If the bridge is down it retries on the next run.
-- **No sign-out button yet.** Clear the site cookies to sign out.

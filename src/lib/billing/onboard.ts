@@ -85,6 +85,8 @@ export async function applyCheckoutSession(
     stripeSubscriptionId: sub.id,
     billingStatus: mapStripeSubscriptionStatus(sub.status) ?? account.billingStatus,
     trialEndsAt: sub.trialEnd ? new Date(sub.trialEnd * 1000).toISOString() : null,
+    // A restarted subscription on a cancelled account must not be cleaned up again.
+    ...(account.billingStatus === "cancelled" ? { cancelledAt: null, cleanedUpAt: null } : {}),
   });
   return { applied: true, accountId };
 }

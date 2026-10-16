@@ -1,7 +1,7 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import type { BridgeOkResult } from "@/lib/whatsapp-bridge";
 
-/** How long a cancelled account's stored WhatsApp credentials are kept before the daily pass removes them. */
+/** How long a cancelled account's stored WhatsApp credentials are kept before the hourly pass removes them. */
 export const CANCELLED_CLEANUP_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 
 export type CleanupRepo = Pick<
@@ -19,7 +19,7 @@ export interface CleanupDeps {
  * Cancelled for 14+ days: log every location out of the bridge (which deletes
  * its stored credentials) and clear its activation. `cleanedUpAt` is written
  * only when every logout succeeded, so a bridge outage simply retries on the
- * next daily pass; logout and clearing are both safe to repeat. Logs carry
+ * next hourly pass; logout and clearing are both safe to repeat. Logs carry
  * counts only, never ids, emails, Stripe references or bridge error text.
  */
 export async function purgeCancelledAccounts(

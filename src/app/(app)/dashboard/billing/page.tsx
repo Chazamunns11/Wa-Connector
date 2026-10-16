@@ -90,6 +90,13 @@ export default async function BillingPage({
               </button>
             </form>
           ) : null}
+          {account.billingStatus === "cancelled" ? (
+            <form action={startCheckoutAction}>
+              <button type="submit" className={buttonClasses("primary", "md", "min-h-11 px-5")}>
+                Restart your subscription
+              </button>
+            </form>
+          ) : null}
           {account.billingStatus === "trialing" ? (
             <form action={endTrialNowAction}>
               <button type="submit" className={buttonClasses("secondary", "md", "min-h-11 px-5")}>

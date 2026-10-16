@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { handleBillingEvent, type WebhookDeps, type WebhookRepo } from "@/lib/billing/webhook-handler";
 import { syncSubscriptionQuantity, type QuantityDeps } from "@/lib/billing/quantity";
+import { applyCheckoutSession } from "@/lib/billing/onboard";
 import type { Account } from "@/lib/types";
 import { parseSubscription, type StripeCheckoutSession, type StripeSubscription } from "@/lib/stripe/billing";
 
@@ -301,4 +302,36 @@ test("subscription.deleted does not re-sync the quantity", async () => {
   h.state.live = { ...sub({ status: "canceled", canceled_at: 1_800_000_000 }) };
   await run(h, { id: "evt_q2", type: "customer.subscription.deleted", data: { object: sub({ status: "canceled" }) } });
   assert.equal(h.log.includes("sync"), false);
+});
+
+test("quantity sync skips the Stripe write when the live quantity already equals the count", async () => {
+  const subscription = { id: "sub", itemId: "si_1", quantity: 2 } as StripeSubscription;
+  const { deps, sets, notes } = qdeps({ retrieveSubscription: (async () => ({ ok: true, data: subscription })) as never });
+  assert.deepEqual(await syncSubscriptionQuantity(qrepo(2), deps, account()), { ok: true, quantity: 2 });
+  assert.deepEqual(sets, []);
+  assert.deepEqual(notes, []);
+});
+
+test("a cancelled account that restarts via Checkout is repointed and its new subscription's events are handled", async () => {
+  const stored = account({ billingStatus: "cancelled", stripeSubscriptionId: "sub_old", cancelledAt: "2026-02-01T00:00:00.000Z", cleanedUpAt: "2026-02-15T00:00:00.000Z" });
+  const h = harness({ byId: stored });
+  const newSub = { id: "sub_new", status: "trialing", customer: "cus", metadata: { account_id: "acc-1" }, trial_end: 1800000000, items: { data: [] } };
+  // Before the checkout is applied, the new subscription is foreign and ignored.
+  const early = await run(h, { id: "evt_e", type: "customer.subscription.created", data: { object: newSub } });
+  assert.deepEqual(early, { kind: "ignored", type: "customer.subscription.created" });
+  // applyCheckoutSession repoints the account (and clears the cancel markers) ...
+  const patches: unknown[] = [];
+  const parsed = parseSubscription(newSub)!;
+  await applyCheckoutSession(
+    { getAccountById: async () => stored, updateAccountBilling: async (_id, patch) => void patches.push(patch) },
+    { id: "cs_2", status: "complete", customer: "cus", subscription: parsed, metadata: { account_id: "acc-1" } } as StripeCheckoutSession,
+  );
+  assert.deepEqual(patches, [
+    { stripeCustomerId: "cus", stripeSubscriptionId: "sub_new", billingStatus: "trialing", trialEndsAt: new Date(1800000000 * 1000).toISOString(), cancelledAt: null, cleanedUpAt: null },
+  ]);
+  // ... after which the new subscription's events pass the foreign-subscription guard.
+  const repointed = harness({ byId: account({ billingStatus: "trialing", stripeSubscriptionId: "sub_new" }) });
+  const out = await run(repointed, { id: "evt_n", type: "customer.subscription.updated", data: { object: { ...newSub, status: "active" } } });
+  assert.deepEqual(out, { kind: "handled", type: "customer.subscription.updated" });
+  assert.equal(repointed.patches.length, 1);
 });

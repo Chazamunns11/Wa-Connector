@@ -25,6 +25,7 @@ function account(over: Partial<Account> = {}): Account {
 
 function harness(
   opts: {
+    liveQty?: number;
     status?: BillingStatus;
     active?: number;
     all?: number;
@@ -60,7 +61,7 @@ function harness(
       log.push("retrieve");
       return opts.stripeFails
         ? { ok: false, status: 500, code: null, message: "boom" }
-        : { ok: true, data: parseSubscription({ id: "sub", status: "active", customer: "cus", items: { data: [{ id: "si_1", quantity: 1 }] } })! };
+        : { ok: true, data: parseSubscription({ id: "sub", status: "active", customer: "cus", items: { data: [{ id: "si_1", quantity: opts.liveQty ?? 1 }] } })! };
     }) as never,
     setQuantity: (async (item: string, q: number) => {
       log.push(`qty:${item}:${q}`);
@@ -82,7 +83,7 @@ test("a trial account at the cap is refused before Stripe or the database is tou
 test("activation updates the Stripe quantity first, then writes activated_at", async () => {
   const h = harness({ active: 2 });
   assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true });
-  assert.deepEqual(h.log, ["retrieve", "qty:si_1:3", "db:loc-1:2026-10-16T10:00:00.000Z", "qty:si_1:3"]);
+  assert.deepEqual(h.log, ["retrieve", "qty:si_1:3", "db:loc-1:2026-10-16T10:00:00.000Z"]);
 });
 
 test("a Stripe failure writes nothing", async () => {
@@ -130,7 +131,7 @@ test("an already active number is refused", async () => {
 });
 
 test("deactivation clears activated_at first, then syncs the quantity", async () => {
-  const h = harness({ active: 2, activatedAt: "2026-10-01T00:00:00.000Z" });
+  const h = harness({ active: 2, liveQty: 2, activatedAt: "2026-10-01T00:00:00.000Z" });
   assert.deepEqual(await deactivateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true, quantitySynced: true });
   assert.deepEqual(h.log, ["db:loc-1:null", "retrieve", "qty:si_1:1"]);
 });
@@ -193,4 +194,19 @@ test("second concurrent activation at the cap is refused and quantity ends at 3"
   assert.deepEqual(results.find((r) => !r.ok), { ok: false, reason: "trial_cap" });
   assert.equal(active, 3);
   assert.equal(quantity, 3);
+});
+
+test("a failed database write does not re-POST a quantity Stripe already holds", async () => {
+  const h = harness({ active: 0, dbFails: true });
+  await assert.rejects(activateLocation(h.repo, h.deps, "acc-1", "loc-1"));
+  // raised to 1, then the true count (0) differs, so exactly one restore is written
+  assert.deepEqual(h.log.filter((l) => l.startsWith("qty:")), ["qty:si_1:1", "qty:si_1:0"]);
+});
+
+test("re-sync is skipped when the true count equals what was just written", async () => {
+  const h = harness({ active: 0, matched: 0 });
+  let reads = 0;
+  h.repo.countActivatedForAccount = async () => (reads++ === 0 ? 0 : 1);
+  await activateLocation(h.repo, h.deps, "acc-1", "loc-1");
+  assert.deepEqual(h.log.filter((l) => l.startsWith("qty:")), ["qty:si_1:1"]);
 });

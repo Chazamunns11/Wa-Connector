@@ -37,7 +37,8 @@ export async function startCheckoutFlow(
   account: Account,
   deps: { appUrl: string; checkout: typeof createCheckoutSession },
 ): Promise<CheckoutOutcome> {
-  if (account.billingStatus !== "pending") return { kind: "not_pending" };
+  // A cancelled account gets a fresh Checkout; the webhook then repoints its subscription.
+  if (account.billingStatus !== "pending" && account.billingStatus !== "cancelled") return { kind: "not_pending" };
   const o = await createCheckoutForAccount(null, deps, account);
   return o.kind === "checkout" ? { kind: "redirect", url: o.url } : { kind: "failed" };
 }

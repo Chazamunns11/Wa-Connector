@@ -54,12 +54,13 @@ test("endTrialFlow only acts on a trialing account with a subscription", async (
   assert.deepEqual(await endTrialFlow(acct(), { endTrial: bad }), { kind: "failed" });
 });
 
-test("startCheckoutFlow only for pending accounts", async () => {
+test("startCheckoutFlow for pending and cancelled accounts only", async () => {
   let n = 0;
   const checkout = async () => (n++, { ok: true as const, data: { id: "cs", url: "https://stripe/c" } });
   assert.deepEqual(await startCheckoutFlow(acct({ billingStatus: "pending" }), { appUrl: "u", checkout }), { kind: "redirect", url: "https://stripe/c" });
+  assert.deepEqual(await startCheckoutFlow(acct({ billingStatus: "cancelled" }), { appUrl: "u", checkout }), { kind: "redirect", url: "https://stripe/c" });
   assert.deepEqual(await startCheckoutFlow(acct({ billingStatus: "active" }), { appUrl: "u", checkout }), { kind: "not_pending" });
-  assert.equal(n, 1);
+  assert.equal(n, 2);
 });
 
 test("billingHref carries a fixed notice", () => {
