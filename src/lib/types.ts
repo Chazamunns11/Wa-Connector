@@ -546,3 +546,6 @@ export interface GhlHealthSnapshot {
    */
   truncated: boolean;
 }
+
+/** How a client's logo is seated on the connect page (copied from PortalHub `types.ts`; only the type — `brand.ts`'s `ResolvedBranding` needs it). */
+export type LogoBackdrop = "none" | "light" | "dark";
