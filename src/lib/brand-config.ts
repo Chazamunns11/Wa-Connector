@@ -13,33 +13,12 @@ export interface BrandConfig {
   logoPath: string | null;
   /** BRAND_ACCENT normalised to #RRGGBB; null = globals.css teal. */
   accent: string | null;
-  /** BRAND_PRICE_PER_NUMBER, a decimal in major units; dev default 29. */
-  pricePerNumber: number;
-  /** BRAND_CURRENCY, ISO 4217 upper-case; default "GBP". */
-  currency: string;
   appUrl: string;
 }
 
 const DEFAULT_NAME = "WA Connector";
 const DEFAULT_TAGLINE = "WhatsApp for GoHighLevel";
-const DEFAULT_CURRENCY = "GBP";
-const DEV_PRICE_PER_NUMBER = 29;
 const DEV_APP_URL = "http://localhost:3000";
-
-function parsePrice(raw: string | undefined): number {
-  const value = raw?.trim();
-  if (!value) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("BRAND_PRICE_PER_NUMBER must be set in production");
-    }
-    return DEV_PRICE_PER_NUMBER;
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) {
-    throw new Error("BRAND_PRICE_PER_NUMBER must be a number");
-  }
-  return n;
-}
 
 /**
  * Product identity, read from env on every call so tests (and deploys) can
@@ -54,8 +33,6 @@ export function brandConfig(): BrandConfig {
   const supportWhatsApp = process.env.BRAND_SUPPORT_WHATSAPP?.trim() || null;
   const logoPath = process.env.BRAND_LOGO_PATH?.trim() || null;
   const accent = normaliseHex(process.env.BRAND_ACCENT);
-  const currency = (process.env.BRAND_CURRENCY?.trim() || DEFAULT_CURRENCY).toUpperCase();
-  const pricePerNumber = parsePrice(process.env.BRAND_PRICE_PER_NUMBER);
   const rawUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
   if (!rawUrl && process.env.NODE_ENV === "production") {
     throw new Error("NEXT_PUBLIC_APP_URL must be set in production");
@@ -68,16 +45,14 @@ export function brandConfig(): BrandConfig {
     supportWhatsApp,
     logoPath,
     accent,
-    pricePerNumber,
-    currency,
     appUrl,
   };
 }
 
 /**
  * Page-scoped accent variables for the site's outermost wrapper, or undefined
- * when no accent is configured (globals.css teal applies). Mirrors
- * `brandStyle` in `@/lib/brand`, with the ink computed rather than assumed.
+ * when no accent is configured (globals.css teal applies). Sets the same three
+ * variables as `brandStyle` in `@/lib/brand`; the ink comes from `inkFor`.
  */
 export function brandCssVars(brand: BrandConfig): CSSProperties | undefined {
   if (!brand.accent) return undefined;
