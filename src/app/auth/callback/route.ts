@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
       const profile = user ? await getProfile(user.id) : null;
       const cookieToken = cookieStore.get(SIGNUP_COOKIE)?.value;
       // One use: clear it whatever happens next.
-      if (cookieToken !== undefined) cookieStore.delete(SIGNUP_COOKIE);
+      if (cookieToken !== undefined) cookieStore.delete({ name: SIGNUP_COOKIE, path: "/auth/callback" });
       const pending = pendingFromSignupToken(cookieToken, user?.email);
       const decision = decideCallback(profile, pending);
 

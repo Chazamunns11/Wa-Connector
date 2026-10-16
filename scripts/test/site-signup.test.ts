@@ -92,7 +92,7 @@ test("auth callback completes a pending signup after the exchange, with fixed re
   assert.match(src, /verifyClaim: verifyClaimToken/);
   assert.match(src, /pendingFromSignupToken\(/);
   assert.doesNotMatch(src, /user_metadata/, "pending signup never comes from user metadata");
-  assert.match(src, /cookieStore\.delete\(SIGNUP_COOKIE/);
+  assert.match(src, /cookieStore\.delete\(\{ name: SIGNUP_COOKIE, path: "\/auth\/callback" \}\)/);
   assert.match(src, /link_expired/);
   assert.match(src, /error=failed/);
   assert.doesNotMatch(src, /searchParams\.get\("(next|redirect|returnTo)/);
