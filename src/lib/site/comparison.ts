@@ -10,6 +10,8 @@
  * allowed to contain a literal currency amount (see site-copy.test.ts).
  */
 
+import { VOLUME_FROM, standardPrice, volumePrice } from "@/lib/pricing";
+
 export interface GhlSource {
   title: string;
   modified: string;
@@ -67,13 +69,13 @@ export const COMPARISON = {
     .map((p) => (typeof p === "string" ? p : p.text))
     .join(""),
   closing:
-    "If you send a lot of marketing templates, or you need the verified badge, their option may suit you better. If you want the workflows you already have on your own number for a flat price, that's us.",
+    "If you send a lot of marketing templates, or you need the verified badge, their option may suit you better. If you want the workflows you already have on your own number with a simple per-number price, that's us.",
 };
 
-/** Our column. The price comes from pricingConfig(), formatted by the caller. */
-export function ourColumn(price: string): string[] {
+/** Our column. Prices come from src/lib/pricing.ts. */
+export function ourColumn(currency: string): string[] {
   return [
-    `${price} per number, per month.`,
+    `${standardPrice(currency)} a month per number, or ${volumePrice(currency)} each once you connect ${VOLUME_FROM} or more.`,
     "No charge per message.",
     "Your own number, connected as a linked device.",
     "No verified badge and no template approval, because it isn't the official API.",

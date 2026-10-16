@@ -11,11 +11,11 @@ const DEFAULT = "5";
  * The label is the first clause; the amount sits in a polite live region, and
  * the help or error line below is the input's description.
  */
-export function PricingCalculator({ pricePerNumber, currency }: { pricePerNumber: number; currency: string }) {
+export function PricingCalculator({ currency }: { currency: string }) {
   const id = useId();
   const [raw, setRaw] = useState(DEFAULT);
   const { n, note, empty } = calculatorValue(raw);
-  const cost = formatMoney(monthlyCost(n, pricePerNumber), currency);
+  const cost = formatMoney(monthlyCost(n), currency);
   const invalid = note !== null && !empty;
   const messageId = `${id}-message`;
   return (

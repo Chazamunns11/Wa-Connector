@@ -1,4 +1,4 @@
-import { test, afterEach } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -7,83 +7,94 @@ import {
   CALCULATOR_PRESETS,
   formatMoney,
   monthlyCost,
+  monthlyCostPence,
+  perNumberPence,
   priceLine,
   pricingConfig,
+  tierSentence,
+  tierRows,
 } from "@/lib/pricing";
 
-const KEYS = ["BRAND_PRICE_PER_NUMBER", "BRAND_CURRENCY", "NODE_ENV"] as const;
-const saved: Record<string, string | undefined> = {};
-for (const k of KEYS) saved[k] = process.env[k];
-afterEach(() => {
-  for (const k of KEYS) {
-    if (saved[k] === undefined) delete process.env[k];
-    else process.env[k] = saved[k];
-  }
-});
-const setProd = () => {
-  (process.env as Record<string, string | undefined>).NODE_ENV = "production";
-};
+const brand = { currency: "GBP" };
 
-const brand = { pricePerNumber: 29, currency: "GBP" };
-
-test("monthlyCost(5, 29) = 145; (0) = 0; (-2) = 0; (2.7) = 58", () => {
-  assert.equal(monthlyCost(5, 29), 145);
-  assert.equal(monthlyCost(0, 29), 0);
-  assert.equal(monthlyCost(-2, 29), 0);
-  assert.equal(monthlyCost(2.7, 29), 58);
-  assert.equal(monthlyCost(Number.NaN, 29), 0);
-  assert.equal(monthlyCost(Infinity, 29), 0);
+test("per-number price: 1499p below 10 numbers, 799p for every number at 10 or more (W40 revised)", () => {
+  assert.equal(perNumberPence(1), 1499);
+  assert.equal(perNumberPence(9), 1499);
+  assert.equal(perNumberPence(10), 799);
+  assert.equal(perNumberPence(25), 799);
 });
 
-test("formatMoney(145,'GBP') = '£145'; (35.5,'GBP') = '£35.50'; (145,'EUR') contains '€'", () => {
-  assert.equal(formatMoney(145, "GBP"), "£145");
-  assert.equal(formatMoney(35.5, "GBP"), "£35.50");
+test("monthlyCostPence: exact examples from the owner", () => {
+  const cases: [number, number][] = [
+    [1, 1499],
+    [3, 4497],
+    [5, 7495],
+    [9, 13491],
+    [10, 7990],
+    [11, 8789],
+    [25, 19975],
+  ];
+  for (const [n, pence] of cases) assert.equal(monthlyCostPence(n), pence, `${n} numbers`);
+  assert.equal(monthlyCostPence(0), 0);
+  assert.equal(monthlyCostPence(-2), 0);
+  assert.equal(monthlyCostPence(2.7), 2998);
+  assert.equal(monthlyCostPence(Number.NaN), 0);
+  assert.equal(monthlyCostPence(Infinity), 0);
+});
+
+test("monthlyCost returns pounds from whole pence, with no float drift", () => {
+  assert.equal(monthlyCost(3), 44.97);
+  assert.equal(monthlyCost(9), 134.91);
+  assert.equal(monthlyCost(10), 79.9);
+  assert.equal(monthlyCost(25), 199.75);
+});
+
+test("formatMoney always shows pence: '£14.99', '£79.90', '£0.00'; EUR contains '€'", () => {
+  assert.equal(formatMoney(14.99, "GBP"), "£14.99");
+  assert.equal(formatMoney(79.9, "GBP"), "£79.90");
+  assert.equal(formatMoney(869, "GBP"), "£869.00");
+  assert.equal(formatMoney(0, "GBP"), "£0.00");
   assert.ok(formatMoney(145, "EUR").includes("€"));
 });
 
-test("priceLine singular/plural: '1 number = £29/month', '5 numbers = £145/month'", () => {
-  assert.equal(priceLine(1, brand), "1 number = £29/month");
-  assert.equal(priceLine(5, brand), "5 numbers = £145/month");
+test("priceLine singular/plural: '1 number = £14.99/month', '10 numbers = £79.90/month'", () => {
+  assert.equal(priceLine(1, brand), "1 number = £14.99/month");
+  assert.equal(priceLine(5, brand), "5 numbers = £74.95/month");
+  assert.equal(priceLine(10, brand), "10 numbers = £79.90/month");
+});
+
+test("tierSentence states both prices plainly", () => {
+  assert.equal(
+    tierSentence("GBP"),
+    "£14.99 a month per number. Connect 10 or more and every number drops to £7.99 a month.",
+  );
+});
+
+test("tierRows lists the two tiers for the transparent table", () => {
+  assert.deepEqual(tierRows("GBP"), [
+    { range: "1 to 9 numbers", each: "£14.99" },
+    { range: "10 or more numbers", each: "£7.99" },
+  ]);
 });
 
 test("CALCULATOR_PRESETS is [1,3,5,10,25]", () => {
   assert.deepEqual([...CALCULATOR_PRESETS], [1, 3, 5, 10, 25]);
 });
 
-test("pricingConfig defaults: 29 GBP", () => {
-  for (const k of KEYS) delete process.env[k];
-  assert.deepEqual(pricingConfig(), { pricePerNumber: 29, currency: "GBP" });
-});
-
-test("BRAND_PRICE_PER_NUMBER '35.50' parses to 35.5 and BRAND_CURRENCY lower-case is upper-cased", () => {
-  process.env.BRAND_PRICE_PER_NUMBER = "35.50";
-  process.env.BRAND_CURRENCY = "eur";
-  assert.deepEqual(pricingConfig(), { pricePerNumber: 35.5, currency: "EUR" });
-});
-
-test("production with BRAND_PRICE_PER_NUMBER unset or blank throws", () => {
-  setProd();
+test("pricingConfig is GBP and reads no environment variable", () => {
+  const before = process.env.BRAND_PRICE_PER_NUMBER;
   delete process.env.BRAND_PRICE_PER_NUMBER;
-  assert.throws(() => pricingConfig(), /BRAND_PRICE_PER_NUMBER must be a number/);
-  process.env.BRAND_PRICE_PER_NUMBER = "  ";
-  assert.throws(() => pricingConfig(), /BRAND_PRICE_PER_NUMBER must be a number/);
-});
-
-test("BRAND_PRICE_PER_NUMBER 'abc', '0x10', '-0' throw in any env", () => {
-  for (const prod of [false, true]) {
-    if (prod) setProd();
-    for (const bad of ["abc", "0x10", "-0", "-5", "1e3"]) {
-      process.env.BRAND_PRICE_PER_NUMBER = bad;
-      assert.throws(() => pricingConfig(), /BRAND_PRICE_PER_NUMBER must be a number/, bad);
-    }
+  try {
+    assert.deepEqual(pricingConfig(), { currency: "GBP" });
+  } finally {
+    if (before !== undefined) process.env.BRAND_PRICE_PER_NUMBER = before;
   }
+  assert.ok(!/BRAND_PRICE_PER_NUMBER|BRAND_CURRENCY/.test(readFileSync(join(process.cwd(), "src/lib/pricing.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")));
 });
 
-test("invalid BRAND_CURRENCY throws", () => {
-  process.env.BRAND_PRICE_PER_NUMBER = "29";
-  for (const bad of ["pounds", "G1P", "ZZZZ", "us", "AAA1"]) {
-    process.env.BRAND_CURRENCY = bad;
-    assert.throws(() => pricingConfig(), /BRAND_CURRENCY must be an ISO 4217 code/, bad);
+test("BRAND_PRICE_PER_NUMBER is retired everywhere outside history docs", () => {
+  for (const f of ["README.md", "docs/GO-LIVE-FOUNDATION.md", "scripts/site-walkthrough.cjs"]) {
+    assert.ok(!/BRAND_PRICE_PER_NUMBER/.test(readFileSync(join(process.cwd(), f), "utf8")), f);
   }
 });
 
@@ -129,16 +140,16 @@ import { calculatorDisplay, CALC_MIN, CALC_MAX } from "@/lib/site/calculator";
 test("calculatorDisplay: valid, out of range, fractional and empty input", () => {
   assert.equal(CALC_MIN, 1);
   assert.equal(CALC_MAX, 500);
-  assert.deepEqual(calculatorDisplay("5", brand), { line: "5 numbers = £145/month", note: null, empty: false });
+  assert.deepEqual(calculatorDisplay("5", brand), { line: "5 numbers = £74.95/month", note: null, empty: false });
   const hi = calculatorDisplay("600", brand);
-  assert.equal(hi.line, "500 numbers = £14,500/month");
+  assert.equal(hi.line, "500 numbers = £3,995.00/month");
   assert.match(hi.note ?? "", /whole number from 1 to 500/);
   const lo = calculatorDisplay("0", brand);
-  assert.equal(lo.line, "1 number = £29/month");
+  assert.equal(lo.line, "1 number = £14.99/month");
   assert.ok(lo.note);
-  assert.equal(calculatorDisplay("2.7", brand).line, "2 numbers = £58/month");
+  assert.equal(calculatorDisplay("2.7", brand).line, "2 numbers = £29.98/month");
   assert.ok(calculatorDisplay("2.7", brand).note);
-  assert.equal(calculatorDisplay("-3", brand).line, "1 number = £29/month");
+  assert.equal(calculatorDisplay("-3", brand).line, "1 number = £14.99/month");
   const empty = calculatorDisplay("", brand);
   assert.equal(empty.empty, true);
   assert.equal(empty.line, "");
@@ -178,4 +189,21 @@ test("pricing copy follows the deck: one trial paragraph with 'per active number
   assert.match(c.trialTerms[0], /per active number/);
   assert.match(c.trialTerms[0], /charge nothing until the trial ends/);
   assert.equal(c.failedPayment.length, 2);
+});
+
+test("pricing page: one big price, no 'same price' line, tier sentence and tier list, calculator takes no price prop", () => {
+  const page = readFileSync(join(process.cwd(), "src/app/(site)/pricing/page.tsx"), "utf8");
+  assert.ok(!/same whether|one price per|One price/i.test(page));
+  assert.match(page, /tierSentence\(/);
+  assert.match(page, /<TierList/);
+  assert.ok(!/pricePerNumber/.test(page));
+  const calc = readFileSync(join(process.cwd(), "src/components/site/PricingCalculator.tsx"), "utf8");
+  assert.ok(!/pricePerNumber/.test(calc));
+});
+
+test("no source file mentions a single price: pricePerNumber and BRAND_PRICE_PER_NUMBER are gone from src", () => {
+  for (const f of [...walk("src"), ...walk("scripts")].filter((f) => /\.(tsx?|cjs)$/.test(f) && !f.endsWith("site-pricing.test.ts"))) {
+    const text = readFileSync(f, "utf8");
+    assert.ok(!/pricePerNumber|BRAND_PRICE_PER_NUMBER|BRAND_PRICE/.test(text), f);
+  }
 });

@@ -100,7 +100,7 @@ export class PreviewAccountDataSource implements AccountDataSource {
     return {
       cardLast4: "4242",
       nextInvoiceAt: new Date(this.now.getTime() + (this.scenario === "trial" ? 4 : 12) * DAY_MS).toISOString(),
-      nextInvoiceAmount: monthlyCost(activeCount(await this.listLocations()), pricingConfig().pricePerNumber),
+      nextInvoiceAmount: monthlyCost(activeCount(await this.listLocations())),
       currency: pricingConfig().currency,
       portalAvailable: false,
     };

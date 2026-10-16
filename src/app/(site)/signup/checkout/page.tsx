@@ -5,7 +5,7 @@ import { siteButton } from "@/components/site/button";
 import { Container } from "@/components/site/Container";
 import { PreviewBadge } from "@/components/site/PreviewBadge";
 import { brandConfig } from "@/lib/brand-config";
-import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, formatMoney, pricingConfig } from "@/lib/pricing";
+import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, pricingConfig, tierSentence } from "@/lib/pricing";
 import { SITE_ROUTES } from "@/lib/site/routes";
 import { validateSignup } from "@/lib/site/signup";
 
@@ -66,8 +66,8 @@ export default async function CheckoutPage({
             <h2 className="font-display text-[1.35rem] font-extrabold leading-[1.1] tracking-[-0.015em]">What happens next</h2>
             <ul className="mt-4 grid gap-3 text-ink-dim">
               <li>
-                <span className="font-semibold text-ink">{formatMoney(pricing.pricePerNumber, pricing.currency)}</span> per
-                active number per month, once the trial ends.
+                <span className="font-semibold text-ink">{tierSentence(pricing.currency)}</span> Billed per active number,
+                once the trial ends.
               </li>
               <li>
                 A {TRIAL_DAYS}-day free trial, with up to {TRIAL_MAX_NUMBERS} numbers.

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { PreviewAccountDataSource } from "@/lib/account-data/preview";
 import { getAccountDataSource, parseScenario } from "@/lib/account-data";
 import { activeCount } from "@/lib/account-data/derive";
-import { TRIAL_MAX_NUMBERS, pricingConfig } from "@/lib/pricing";
+import { TRIAL_MAX_NUMBERS, monthlyCost, pricingConfig } from "@/lib/pricing";
 
 const NOW = new Date("2026-10-16T12:00:00Z");
 
@@ -31,7 +31,7 @@ test("trial scenario keeps activated numbers within the trial cap, and the invoi
   assert.equal(rows.length, 6);
   const billing = await src.getBilling();
   assert.equal(billing.currency, pricingConfig().currency);
-  assert.equal(billing.nextInvoiceAmount, activeCount(rows) * pricingConfig().pricePerNumber);
+  assert.equal(billing.nextInvoiceAmount, monthlyCost(activeCount(rows)));
   const via = await getAccountDataSource({ scenario: "trial", now: NOW }).getAccount();
   assert.equal(via.trialEndsAt, new Date(NOW.getTime() + 4 * 86_400_000).toISOString());
 });

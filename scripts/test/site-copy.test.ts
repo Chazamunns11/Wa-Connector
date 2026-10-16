@@ -50,7 +50,7 @@ test("daily-cap, stop and white-label answers state the real behaviour", () => {
   assert.match(get("stop"), /from that number/);
   assert.match(get("white-label"), /It depends on the agency/);
   assert.match(get("white-label"), /ask your agency to allow Testbrand/);
-  assert.match(get("trial"), /After that you pay per number: 1 number = /);
+  assert.match(get("trial"), /After that it's £14\.99 a month per number\. Connect 10 or more and every number drops to £7\.99 a month\./);
   assert.ok(!salesCopy(brand).safety.some((s) => /from your account/.test(s.body)));
 });
 
@@ -60,7 +60,7 @@ test("salesCopy has 3 setup steps, the three safety items and the disclosure blo
   assert.equal(c.setup.steps.length, 3);
   assert.equal(c.safety.length, 3);
   assert.equal(c.disclosure.paragraphs.length, 3);
-  assert.equal(c.why.paragraphs.length, 2);
+  assert.ok(!("why" in c), "Why we made it is gone (W38)");
   const titles = c.safety.map((s) => s.title.toLowerCase()).join("|");
   assert.match(titles, /pac/);
   assert.match(titles, /held|disconnect/);
@@ -182,4 +182,20 @@ test("no literal currency or price outside src/lib/pricing.ts", () => {
     .filter((s) => re.test(s.text))
     .map((s) => s.file);
   assert.deepEqual(hits, []);
+});
+
+// Task 15 (W40 revised): volume pricing copy everywhere.
+import { ourColumn } from "@/lib/site/comparison";
+import { pricingCopy } from "@/lib/site/pricing-copy";
+
+test("W40: no 'one price', 'same price' or 'flat price' wording survives", () => {
+  const hits = websiteSources()
+    .filter((s) => /same (price|whether)|one price|flat price|One price/.test(s.text))
+    .map((s) => s.file);
+  assert.deepEqual(hits, []);
+});
+
+test("W40: the trial paragraph, our comparison column and the other price copy state the two prices", () => {
+  assert.match(pricingCopy().trialTerms[0], /£14\.99 a month per number\. Connect 10 or more and every number drops to £7\.99 a month\./);
+  assert.deepEqual(ourColumn("GBP")[0], "£14.99 a month per number, or £7.99 each once you connect 10 or more.");
 });
