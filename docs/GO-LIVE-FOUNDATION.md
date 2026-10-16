@@ -182,7 +182,6 @@ drain instead of arriving in seconds.
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Part 1 |
    | `SUPABASE_SERVICE_ROLE_KEY` | Part 1 |
    | `BRAND_NAME` | `<Brand>` (optional; default "PingWren") |
-   | `BRAND_PRICE_PER_NUMBER` | monthly price per number, e.g. `29` — **required for `next build` and at runtime in production** |
    | `WHATSAPP_BRIDGE_URL` | `<bridge>` (https) |
    | `WHATSAPP_BRIDGE_SECRET` | the Railway `WA_BRIDGE_SECRET` value |
    | `WHATSAPP_INBOUND_POKE_SECRET` | the Railway `WA_INBOUND_POKE_SECRET` value |
@@ -472,8 +471,6 @@ live sessions fight over one WhatsApp account.
 | `BRAND_ACCENT` | No | PingWren Coral | Accent colour as hex, e.g. `#FF6B5B`; invalid values fall back to the default |
 | `BRAND_SUPPORT_EMAIL` | No | unset | Support address shown to users |
 | `BRAND_SUPPORT_WHATSAPP` | No | unset | Support WhatsApp number, E.164 |
-| `BRAND_PRICE_PER_NUMBER` | **Yes in production, at build time and at runtime** | `29` in dev only | Monthly price per WhatsApp number, a decimal in major units. Prerendered pages read it, so a missing value fails the build and the deploy. Choose the real price before launch |
-| `BRAND_CURRENCY` | No | `GBP` | ISO 4217 currency code |
 | `WHATSAPP_BRIDGE_URL` | Yes for sending | unset (sends fail closed) | `<bridge>`, https (plain http only for localhost) |
 | `WHATSAPP_BRIDGE_SECRET` | Yes for sending | unset (fail closed) | Must equal the bridge's `WA_BRIDGE_SECRET` |
 | `WHATSAPP_INBOUND_POKE_SECRET` | Yes for pokes | unset (poke routes return 503; the hourly cron still drains) | Must equal the bridge's `WA_INBOUND_POKE_SECRET`; guards both poke routes |
@@ -559,7 +556,7 @@ launch publicly until each of these is built or the copy is changed to match:
 
 Also before launch:
 
-- Choose the real `BRAND_PRICE_PER_NUMBER` (the `29` default is a dev value).
+- Confirm the launch prices in `src/lib/pricing.ts` (volume pricing in GBP: £14.99 a month per number below 10 numbers, £7.99 a month for every number at 10 or more). There is no price env var any more. Set up the matching Stripe volume-tier price before taking real payments.
 - Run a trademark search for "PingWren".
 
 ---

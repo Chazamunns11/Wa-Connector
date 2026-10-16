@@ -3,7 +3,6 @@ import type { BrandConfig } from "@/lib/brand-config";
 export interface SalesCopy {
   heroSub: string;
   ctaNote: string;
-  why: { heading: string; paragraphs: [string, string] };
   setup: {
     heading: string;
     lead: string;
@@ -28,13 +27,6 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     heroSub: `${name} takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.`,
     ctaNote:
       "We take a card up front. The trial covers up to 3 numbers, and you can cancel from the billing portal whenever you like.",
-    why: {
-      heading: "Why we made it",
-      paragraphs: [
-        "We look after appointment reminders for a few small businesses. Texts sat there. The same reminder on WhatsApp got a reply, and the person turned up. The trouble was that everything we'd built lived in GoHighLevel workflows as Send SMS steps, and nobody wanted to rebuild them.",
-        `So we built the thing we wanted. Pick ${name} as the Telephony Provider, scan a QR code with the phone, and the workflows you already have go out on WhatsApp. Nothing gets rebuilt, and replies land in Conversations like they always did.`,
-      ],
-    },
     setup: {
       heading: "How you set it up",
       lead: "About ten minutes. The setup guide walks through every screen.",

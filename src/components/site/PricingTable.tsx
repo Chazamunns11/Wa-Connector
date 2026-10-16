@@ -1,9 +1,9 @@
 import { CALCULATOR_PRESETS, formatMoney, monthlyCost, type PricingConfig } from "@/lib/pricing";
 
-/** "1 number is £29 a month, 3 numbers £87 ..." as one sentence built from the presets. */
+/** "1 number is £14.99 a month, 3 numbers £44.97 ..." as one sentence built from the presets. */
 function fallbackSentence(pricing: PricingConfig): string {
   const parts = CALCULATOR_PRESETS.map((n) => {
-    const cost = formatMoney(monthlyCost(n, pricing.pricePerNumber), pricing.currency);
+    const cost = formatMoney(monthlyCost(n), pricing.currency);
     const label = n === 1 ? "1 number is" : `${n} numbers`;
     return n === 1 ? `${label} ${cost} a month` : `${label} ${cost}`;
   });
@@ -20,8 +20,7 @@ export function PricingTable({ pricing }: { pricing: PricingConfig }) {
       <p className="max-w-[62ch] text-ink-dim [font-variant-numeric:tabular-nums]">{fallbackSentence(pricing)}</p>
       <noscript>
         <p className="mt-2 max-w-[62ch] text-ink-dim">
-          The calculator needs JavaScript. For any other number, multiply by{" "}
-          {formatMoney(pricing.pricePerNumber, pricing.currency)}.
+          The calculator needs JavaScript. For any other number, the tiers above give the price per number.
         </p>
       </noscript>
     </div>

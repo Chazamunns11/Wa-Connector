@@ -99,7 +99,7 @@ test("14B home page: grounds run coral, dark, coral, slab, mist, coral", () => {
   assert.match(heroSection, /surface-coral/);
   const h1 = p.slice(p.indexOf("<h1"), p.indexOf("</h1>"));
   assert.match(h1, /hero-big/);
-  assert.ok(p.indexOf('id="own-result"') > p.indexOf("<ReminderResearch"));
+  assert.ok(p.indexOf('id="own-result"') > p.indexOf("copy.disclosure.heading"), "footnote target sits inside the disclosure block");
   assert.match(p, /<HowItWorks steps=\{copy\.setup\.steps\} \/>/);
   assert.ok(!/aside=/.test(p));
   assert.match(p, /<CustomerResults/);
@@ -138,7 +138,7 @@ test("14B SameReminderTwice: two phones are direct children of .phones", () => {
   const wrap = t.slice(t.indexOf("className=\"phones\""));
   const inner = wrap.slice(0, wrap.indexOf("<figcaption"));
   assert.equal((inner.match(/<PhoneFrame/g) ?? []).length, 2);
-  assert.ok(t.includes("Sample messages. Sam is made up."));
+  assert.ok(!t.includes("Sample messages. Sam is made up."));
 });
 
 test("14B globals.css: hero-rise only under no-preference, reduced motion lists the phones, no SMS crop", () => {

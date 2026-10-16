@@ -4,8 +4,9 @@ import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
 import { PricingCalculator } from "@/components/site/PricingCalculator";
 import { PricingTable } from "@/components/site/PricingTable";
+import { TierList } from "@/components/site/TierList";
 import { brandConfig } from "@/lib/brand-config";
-import { formatMoney, priceLine, pricingConfig } from "@/lib/pricing";
+import { pricingConfig, standardPrice, tierSentence } from "@/lib/pricing";
 import { COMPARISON, ourColumn, sourceParts } from "@/lib/site/comparison";
 import { faqEntries } from "@/lib/site/faq";
 import { pricingCopy } from "@/lib/site/pricing-copy";
@@ -14,7 +15,7 @@ export function generateMetadata(): Metadata {
   const { name } = brandConfig();
   return {
     title: `Pricing — ${name}`,
-    description: `One price per WhatsApp number, per month: ${priceLine(1, pricingConfig())}. 7-day free trial, cancel any time.`,
+    description: `${tierSentence(pricingConfig().currency)} 7-day free trial, cancel any time.`,
   };
 }
 
@@ -29,7 +30,7 @@ const PROSE = "max-w-[62ch]";
 export default function PricingPage() {
   const brand = brandConfig();
   const pricing = pricingConfig();
-  const price = formatMoney(pricing.pricePerNumber, pricing.currency);
+  const price = standardPrice(pricing.currency);
   const copy = pricingCopy();
   const all = faqEntries(brand);
   const faq = BILLING_FAQ.flatMap((id) => all.filter((e) => e.id === id));
@@ -46,8 +47,7 @@ export default function PricingPage() {
             </span>
           </h1>
           <p className={`${PROSE} mt-8 text-[1.3rem] font-medium leading-[1.4]`}>
-            There is no setup fee, and {brand.name} does not charge per message. The price is the same whether you
-            connect one number or forty.
+            {tierSentence(pricing.currency)} There is no setup fee, and {brand.name} does not charge per message.
           </p>
         </Container>
       </section>
@@ -55,7 +55,10 @@ export default function PricingPage() {
       <section className="pt-[clamp(48px,6vw,80px)]">
         <Container>
           <div className="slab slab-lift p-[clamp(24px,5vw,48px)]">
-            <PricingCalculator pricePerNumber={pricing.pricePerNumber} currency={pricing.currency} />
+            <PricingCalculator currency={pricing.currency} />
+            <div className="mt-8">
+              <TierList currency={pricing.currency} />
+            </div>
             <div className="mt-6">
               <PricingTable pricing={pricing} />
             </div>
@@ -88,7 +91,7 @@ export default function PricingPage() {
                 {brand.name}
               </h3>
               <ul role="list" className="mt-4">
-                {ourColumn(price).map((t) => (
+                {ourColumn(pricing.currency).map((t) => (
                   <li key={t} className={LI}>{t}</li>
                 ))}
               </ul>

@@ -7,7 +7,6 @@ import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
 import { HowItWorks } from "@/components/site/HowItWorks";
 import { PricingSummary } from "@/components/site/PricingSummary";
-import { ReminderResearch } from "@/components/site/ReminderResearch";
 import { SafetyThread } from "@/components/site/SafetyThread";
 import { DashboardSample } from "@/components/site/samples/DashboardSample";
 import { SameReminderTwice } from "@/components/site/samples/SameReminderTwice";
@@ -69,26 +68,7 @@ export default function HomePage() {
         </Container>
       </section>
 
-      <section className={`why-pad ${BAND}`}>
-        <Container>
-          <div className={`grid items-start ${GAP} min-[901px]:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]`}>
-            <h2 className={`${H2} max-w-[11ch]`}>{copy.why.heading}</h2>
-            <div>
-              <p className="max-w-[62ch] text-[1.3rem] font-medium leading-[1.4]">{copy.why.paragraphs[0]}</p>
-              <p className="mt-4 max-w-[62ch]">{copy.why.paragraphs[1]}</p>
-              <div className="mt-8 border-t-2 border-rule pt-4">
-                <ReminderResearch />
-              </div>
-              <p id="own-result" className="mt-6 max-w-[56ch] scroll-mt-6 border-t-2 border-rule pt-4 text-[0.95rem]">
-                <span aria-hidden="true">1 </span>
-                {result.note}
-              </p>
-            </div>
-          </div>
-        </Container>
-      </section>
-
-      <section id="how-it-works" className={`surface-dark ${BAND} scroll-mt-4`}>
+      <section id="how-it-works" className={`hang-pad surface-dark ${BAND} scroll-mt-4`}>
         <Container>
           <h2 className={`${H2} max-w-[14ch]`}>{copy.setup.heading}</h2>
           <p className="mt-4 max-w-[52ch] text-xl text-ink-dim">{copy.setup.lead}</p>
@@ -131,6 +111,10 @@ export default function HomePage() {
                   {p}
                 </p>
               ))}
+              <p id="own-result" className="max-w-[58ch] scroll-mt-6 border-t-2 border-rule pt-4 text-[0.95rem]">
+                <span aria-hidden="true">1 </span>
+                {result.note}
+              </p>
             </div>
           </div>
         </Container>

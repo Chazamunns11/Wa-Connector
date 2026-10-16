@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { CUSTOMER_RESULTS, RESEARCH_FINDINGS, resultsToShow, type CustomerResult } from "@/lib/site/proof";
+import { CUSTOMER_RESULTS, resultsToShow, type CustomerResult } from "@/lib/site/proof";
 
 const root = process.cwd();
 const read = (p: string) => readFileSync(join(root, p), "utf8");
@@ -42,31 +42,24 @@ test("no 98% claim and no open-rate or read-rate phrasing anywhere in src", () =
   }
 });
 
-test("the research band cites both studies with a link to each source", () => {
-  assert.equal(RESEARCH_FINDINGS.length, 2);
-  const urls = RESEARCH_FINDINGS.map((f) => f.href);
-  assert.ok(urls.includes("https://pmc.ncbi.nlm.nih.gov/articles/PMC5227159/"));
-  assert.ok(urls.includes("https://pmc.ncbi.nlm.nih.gov/articles/PMC7310733/"));
-  const band = read("src/components/site/ReminderResearch.tsx");
-  assert.match(band, /rel="noopener"/);
+test("W38: the research line, its component and its data are gone", () => {
+  const proof = read("src/lib/site/proof.ts");
+  assert.ok(!/RESEARCH_FINDINGS|PMC5227159|PMC7310733/.test(proof));
+  assert.ok(!existsSync(join(root, "src/components/site/ReminderResearch.tsx")));
   const page = read("src/app/(site)/page.tsx");
-  // Task 13: the research line sits after "Why we made it" and before the safety thread (W26 still holds).
-  assert.ok(page.indexOf("copy.why.heading") < page.indexOf("<ReminderResearch"));
-  assert.ok(page.indexOf("<ReminderResearch") < page.indexOf("<SafetyThread"));
+  assert.ok(!/ReminderResearch|copy\.why|why-pad/.test(page));
   assert.match(page, /<CustomerResults/);
+  assert.ok(!/Why we made it/.test(read("src/lib/site/sales-copy.ts")));
 });
 
-test("the research band states honest figures and the SMS-to-WhatsApp bridge", () => {
-  const text = JSON.stringify(RESEARCH_FINDINGS);
-  assert.match(text, /"from":"38%","to":"24%"/);
-  assert.match(text, /"from":"21%","to":"14%"/);
-  assert.match(text, /about 170 patients/);
-  assert.match(text, /rewording the reminder/);
-  const band = read("src/components/site/ReminderResearch.tsx");
-  assert.match(band, /used SMS reminders/);
-  assert.match(band, /from your own\s+number, and replies land back in Conversations/);
-  assert.ok(!/most of your\s+contacts/.test(band));
-  assert.ok(!/outperform|better than SMS|beats SMS/i.test(band + text));
+test("W38: the 85%+ note lives inside 'Read this before you sign up' and the hero footnote points at it", () => {
+  const page = read("src/app/(site)/page.tsx");
+  const disclosure = page.slice(page.indexOf("copy.disclosure.heading"));
+  assert.ok(disclosure.includes('id="own-result"'));
+  assert.ok(disclosure.includes("result.note"));
+  assert.ok(page.indexOf('href="#own-result"') < page.indexOf("copy.disclosure.heading"));
+  assert.ok(page.indexOf("copy.disclosure.heading") < page.indexOf("copy.faqHeading"));
+  assert.ok(page.indexOf("<SafetyThread") < page.indexOf("copy.disclosure.heading"));
 });
 
 test("owner's own average: figures, honest framing, and nothing banned (Rulings W25/W27)", async () => {
@@ -86,15 +79,7 @@ test("owner's own average: figures, honest framing, and nothing banned (Rulings 
   assert.match(page, /import \{[^}]*OWN_RESULTS_AVERAGE[^}]*\} from "@\/lib\/site\/proof"/);
   assert.ok(!a.headingLead.includes("%"), "headline lead carries no percentage");
   assert.match(a.headingTail, /it's$/);
-  assert.ok(page.indexOf("OWN_RESULTS_AVERAGE") < page.indexOf("<ReminderResearch"));
-});
-
-test("walkthrough fixes: control group, best-of-eight caveat", () => {
-  const text = JSON.stringify(RESEARCH_FINDINGS);
-  assert.ok(!/patients sent none/.test(text));
-  assert.match(text, /usual voice-message reminder/);
-  assert.match(text, /best of the eight/);
-  assert.match(text, /letting others down/);
+  assert.ok(page.indexOf("OWN_RESULTS_AVERAGE") < page.indexOf("<SafetyThread"));
 });
 
 test("walkthrough fixes: menu item named after the brand, no triple negative, pricing line, auth logo link", () => {

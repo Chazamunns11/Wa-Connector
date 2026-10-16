@@ -90,7 +90,7 @@ test("trailing slash is stripped from appUrl", () => {
   assert.equal(brandConfig().appUrl, "https://app.example.com");
 });
 
-test("brandConfig does not throw in production with BRAND_PRICE_PER_NUMBER unset", () => {
+test("brandConfig does not throw in production without any pricing variable", () => {
   for (const k of KEYS) delete process.env[k];
   (process.env as Record<string, string | undefined>).NODE_ENV = "production";
   process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com";

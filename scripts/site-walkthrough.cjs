@@ -6,8 +6,8 @@
  * Starts nothing itself: expects the production build to be running at
  * BASE_URL (default http://localhost:3000), e.g.
  *
- *   BRAND_PRICE_PER_NUMBER=29 NEXT_PUBLIC_APP_URL=http://localhost:3000 npm run build
- *   BRAND_PRICE_PER_NUMBER=29 NEXT_PUBLIC_APP_URL=http://localhost:3000 npm start &
+ *   NEXT_PUBLIC_APP_URL=http://localhost:3000 npm run build
+ *   NEXT_PUBLIC_APP_URL=http://localhost:3000 npm start &
  *   npm i --no-save axe-core@4.10.2
  *   NODE_PATH=/opt/node22/lib/node_modules node scripts/site-walkthrough.cjs
  *
@@ -281,7 +281,7 @@ function writeReport({ rows, summary, failures, logos }) {
   lines.push("");
   lines.push("## Logo variant per route");
   lines.push("");
-  lines.push("Logo `<img>` sources found at 1280 with the nearest painted background (reverse artwork belongs on Ink, standard on Cream).");
+  lines.push("Logo `<img>` sources found at 1280 with the nearest painted background (reverse artwork belongs on Ink, standard on Coral).");
   lines.push("");
   lines.push("| Route | Logo file | Background |");
   lines.push("| --- | --- | --- |");

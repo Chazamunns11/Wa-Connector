@@ -62,12 +62,14 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
 });
 
-test("headline reads '2 numbers active · £58/month' for 2 activated at 29 GBP", () => {
-  const pricing = { pricePerNumber: 29, currency: "GBP" };
+test("headline reads '2 numbers active · £29.98/month' and switches to the volume price at 10", () => {
+  const pricing = { currency: "GBP" };
   const rows = [row(), row(), row({ activated: false, state: { kind: "not_active" } })];
-  assert.equal(headline(rows, pricing), "2 numbers active · £58/month");
-  assert.equal(headline([row()], pricing), "1 number active · £29/month");
-  assert.equal(headline([], pricing), "0 numbers active · £0/month");
+  assert.equal(headline(rows, pricing), "2 numbers active · £29.98/month");
+  assert.equal(headline([row()], pricing), "1 number active · £14.99/month");
+  assert.equal(headline([], pricing), "0 numbers active · £0.00/month");
+  assert.equal(headline(Array.from({ length: 9 }, () => row()), pricing), "9 numbers active · £134.91/month");
+  assert.equal(headline(Array.from({ length: 10 }, () => row()), pricing), "10 numbers active · £79.90/month");
 });
 
 test("activeCount counts activated rows only", () => {

@@ -1,4 +1,4 @@
-import { TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
+import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, pricingConfig, tierSentence } from "@/lib/pricing";
 
 export interface PricingCopy {
   trialTerms: string[];
@@ -6,12 +6,12 @@ export interface PricingCopy {
   cancel: string;
 }
 
-/** Trial and billing facts for /pricing. Prices are rendered from pricingConfig(), not here. */
+/** Trial and billing facts for /pricing. Prices come from src/lib/pricing.ts. */
 export function pricingCopy(): PricingCopy {
   return {
     // One paragraph (Task 13C). Kept as an array because /docs/billing renders it.
     trialTerms: [
-      `The ${TRIAL_DAYS}-day trial covers up to ${TRIAL_MAX_NUMBERS} numbers. We take a card when you sign up and charge nothing until the trial ends. After that it's one price per active number, billed monthly.`,
+      `The ${TRIAL_DAYS}-day trial covers up to ${TRIAL_MAX_NUMBERS} numbers. We take a card when you sign up and charge nothing until the trial ends. After that it's ${tierSentence(pricingConfig().currency)} The price is per active number, billed monthly.`,
     ],
     failedPayment: [
       "If a payment fails, Stripe retries it for about 7 days. Sending continues while that happens, and a banner on your dashboard asks you to update the card.",

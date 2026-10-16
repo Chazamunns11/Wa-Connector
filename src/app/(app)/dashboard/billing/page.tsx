@@ -9,7 +9,7 @@ import { Chip } from "@/components/ui/Chip";
 import { getAccountDataSource, parseScenario } from "@/lib/account-data";
 import { headline, planStatus } from "@/lib/account-data/derive";
 import { brandConfig } from "@/lib/brand-config";
-import { formatMoney, pricingConfig } from "@/lib/pricing";
+import { formatMoney, pricingConfig, standardPrice, volumePrice, VOLUME_FROM } from "@/lib/pricing";
 import { dashboardHref } from "@/lib/site/dashboard-url";
 
 export function generateMetadata(): Metadata {
@@ -56,7 +56,7 @@ export default async function BillingPage({
                 <span className="text-ink-dim">{headline(rows, pricingConfig())}</span>
               </div>
               <p className="mt-1 text-sm text-ink-faint">
-                Billed per active number: {formatMoney(pricingConfig().pricePerNumber, pricingConfig().currency)} a month each.
+                Billed per active number: {standardPrice(pricingConfig().currency)} a month each, or {volumePrice(pricingConfig().currency)} each at {VOLUME_FROM} or more.
               </p>
             </dd>
             <dt className="text-ink-faint">Card</dt>

@@ -1,5 +1,5 @@
 import type { BrandConfig } from "@/lib/brand-config";
-import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, pricingConfig, priceLine } from "@/lib/pricing";
+import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, pricingConfig, tierSentence } from "@/lib/pricing";
 
 export interface FaqEntry {
   id: string;
@@ -30,7 +30,7 @@ type FaqId = (typeof FAQ_IDS)[number];
 /** The honest FAQ, in FAQ_IDS order. The brand name and prices are interpolated. */
 export function faqEntries(brand: BrandConfig): FaqEntry[] {
   const { name } = brand;
-  const one = priceLine(1, pricingConfig());
+  const tiers = tierSentence(pricingConfig().currency);
   const copy: Record<FaqId, { question: string; answer: string }> = {
     "what-is-it": {
       question: `What is ${name}?`,
@@ -70,7 +70,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     trial: {
       question: "How does the free trial work?",
-      answer: `You get ${TRIAL_DAYS} days free with up to ${TRIAL_MAX_NUMBERS} numbers. We take a card up front and charge nothing until the trial ends. After that you pay per number: ${one}.`,
+      answer: `You get ${TRIAL_DAYS} days free with up to ${TRIAL_MAX_NUMBERS} numbers. We take a card up front and charge nothing until the trial ends. After that it's ${tiers}`,
     },
     cancel: {
       question: "Can I cancel, and what happens if a payment fails?",

@@ -59,7 +59,7 @@ export function activeCount(rows: LocationRow[]): number {
 /** e.g. "2 numbers active · £58/month". Price per activated number (W14). */
 export function headline(rows: LocationRow[], pricing: PricingConfig): string {
   const n = activeCount(rows);
-  const cost = formatMoney(monthlyCost(n, pricing.pricePerNumber), pricing.currency);
+  const cost = formatMoney(monthlyCost(n), pricing.currency);
   return `${n} ${n === 1 ? "number" : "numbers"} active · ${cost}/month`;
 }
 

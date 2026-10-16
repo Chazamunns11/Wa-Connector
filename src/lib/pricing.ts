@@ -1,69 +1,84 @@
+/**
+ * Website pricing. A business decision kept in code, not an env var
+ * (Ruling W40): volume pricing in whole pence, GBP.
+ *
+ *  - fewer than VOLUME_FROM numbers: STANDARD_PENCE each, per month
+ *  - VOLUME_FROM numbers or more:    VOLUME_PENCE each, for ALL of them
+ *
+ * Every price the site shows is built from these constants.
+ */
 export interface PricingConfig {
-  /** BRAND_PRICE_PER_NUMBER, a decimal in major units; dev default 29. */
-  pricePerNumber: number;
-  /** BRAND_CURRENCY, ISO 4217 upper-case; default "GBP". */
+  /** ISO 4217 upper-case. */
   currency: string;
 }
 
-const DEV_PRICE_PER_NUMBER = 29;
-const DEFAULT_CURRENCY = "GBP";
+export const CURRENCY = "GBP";
+export const STANDARD_PENCE = 1499;
+export const VOLUME_PENCE = 799;
+export const VOLUME_FROM = 10;
 
-/**
- * Website pricing from env, read at call time. Deliberately separate from
- * brandConfig() so a missing price can never break modules that read the
- * brand at load (e.g. GHL message sending).
- */
 export function pricingConfig(): PricingConfig {
-  const raw = process.env.BRAND_PRICE_PER_NUMBER?.trim();
-  let pricePerNumber: number;
-  if (!raw) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("BRAND_PRICE_PER_NUMBER must be a number");
-    }
-    pricePerNumber = DEV_PRICE_PER_NUMBER;
-  } else {
-    if (!/^\d+(\.\d+)?$/.test(raw) || !Number.isFinite(Number(raw))) {
-      throw new Error("BRAND_PRICE_PER_NUMBER must be a number");
-    }
-    pricePerNumber = Number(raw);
-  }
-  const currency = (process.env.BRAND_CURRENCY?.trim() || DEFAULT_CURRENCY).toUpperCase();
-  let valid = /^[A-Z]{3}$/.test(currency);
-  if (valid) {
-    try {
-      new Intl.NumberFormat("en-GB", { style: "currency", currency });
-    } catch {
-      valid = false;
-    }
-  }
-  if (!valid) throw new Error("BRAND_CURRENCY must be an ISO 4217 code");
-  return { pricePerNumber, currency };
+  return { currency: CURRENCY };
 }
 
 export const TRIAL_DAYS = 7;
 export const TRIAL_MAX_NUMBERS = 3;
 export const CALCULATOR_PRESETS = [1, 3, 5, 10, 25] as const;
 
-/** Monthly cost for `numbers` WhatsApp numbers. Invalid input costs 0; fractions floor. */
-export function monthlyCost(numbers: number, pricePerNumber: number): number {
-  if (!Number.isFinite(numbers) || numbers < 0) return 0;
-  return Math.floor(numbers) * pricePerNumber;
+/** Pence charged per number, per month, when `numbers` are connected. */
+export function perNumberPence(numbers: number): number {
+  return numbers >= VOLUME_FROM ? VOLUME_PENCE : STANDARD_PENCE;
 }
 
-/** en-GB currency string: no decimals for whole amounts, two otherwise. */
+/** Monthly cost in whole pence. Invalid input costs 0; fractions floor. */
+export function monthlyCostPence(numbers: number): number {
+  if (!Number.isFinite(numbers) || numbers < 0) return 0;
+  const n = Math.floor(numbers);
+  return n * perNumberPence(n);
+}
+
+/** Monthly cost in major units, from whole pence (no float drift). */
+export function monthlyCost(numbers: number): number {
+  return monthlyCostPence(numbers) / 100;
+}
+
+/** en-GB currency string, always with pence: "£14.99", "£79.90". */
 export function formatMoney(amount: number, currency: string): string {
-  const digits = Number.isInteger(amount) ? 0 : 2;
   return new Intl.NumberFormat("en-GB", {
     style: "currency",
     currency,
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(amount);
 }
 
-/** e.g. "5 numbers = £145/month"; "1 number = £29/month". */
+const money = (pence: number, currency: string) => formatMoney(pence / 100, currency);
+
+/** The standard per-number price, e.g. "£14.99". */
+export function standardPrice(currency: string): string {
+  return money(STANDARD_PENCE, currency);
+}
+
+/** The volume per-number price, e.g. "£7.99". */
+export function volumePrice(currency: string): string {
+  return money(VOLUME_PENCE, currency);
+}
+
+/** The pricing in two plain sentences. */
+export function tierSentence(currency: string): string {
+  return `${standardPrice(currency)} a month per number. Connect ${VOLUME_FROM} or more and every number drops to ${volumePrice(currency)} a month.`;
+}
+
+/** The transparent tier list. */
+export function tierRows(currency: string): { range: string; each: string }[] {
+  return [
+    { range: `1 to ${VOLUME_FROM - 1} numbers`, each: standardPrice(currency) },
+    { range: `${VOLUME_FROM} or more numbers`, each: volumePrice(currency) },
+  ];
+}
+
+/** e.g. "5 numbers = £74.95/month"; "1 number = £14.99/month". */
 export function priceLine(numbers: number, pricing: PricingConfig): string {
   const n = Number.isFinite(numbers) && numbers > 0 ? Math.floor(numbers) : 0;
-  const cost = formatMoney(monthlyCost(n, pricing.pricePerNumber), pricing.currency);
-  return `${n} ${n === 1 ? "number" : "numbers"} = ${cost}/month`;
+  return `${n} ${n === 1 ? "number" : "numbers"} = ${formatMoney(monthlyCost(n), pricing.currency)}/month`;
 }

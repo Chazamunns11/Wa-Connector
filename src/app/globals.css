@@ -291,8 +291,8 @@ h2 {
 
 /* ---- home hero: one load sequence, about 1.2s ----
    1 the WhatsApp bubble slides up 16px into place at full opacity (150-600ms)
-   2 a Coral dot pings on its tail corner (650-1150ms)
-   3 "Delivered", the reply and "Back in Conversations" arrive (950-1300ms)
+   2 the two grey ticks (delivered) fade in (1200ms)
+   3 Sam's reply arrives (1550ms)
    Final state is the default style, so reduced motion simply drops the
    animations and shows the finished frame. */
 @keyframes hero-land {
@@ -301,17 +301,6 @@ h2 {
   }
   to {
     transform: none;
-  }
-}
-
-@keyframes hero-ping-ring {
-  from {
-    opacity: 0.75;
-    transform: scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: scale(3);
   }
 }
 
@@ -328,19 +317,6 @@ h2 {
 
 .hero-bubble {
   animation: hero-land 450ms var(--ease-out) 750ms both;
-}
-
-.hero-ping::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: var(--color-accent);
-  animation: hero-ping-ring 500ms ease-out 1250ms both;
-}
-
-.hero-ping {
-  animation: hero-fade-up 200ms var(--ease-out) 1250ms both;
 }
 
 /* "Delivered" fades in on its own at 600ms (REDESIGN section 7); the reply follows at 950ms. */
@@ -363,17 +339,12 @@ h2 {
 
 @media (prefers-reduced-motion: reduce) {
   .hero-bubble,
-  .hero-ping,
-  .hero-ping::after,
   .hero-delivered,
   .hero-late,
   .phones .phone {
     animation: none;
   }
 
-  .hero-ping::after {
-    display: none;
-  }
 }
 
 /* ---- Task 13: Paper ground ----
@@ -460,10 +431,6 @@ h2 {
   background: #FFFFFF;
 }
 
-.phone-chat .phone-screen {
-  background: var(--color-well);
-}
-
 .phone-status {
   display: flex;
   align-items: center;
@@ -477,25 +444,57 @@ h2 {
 .phone-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px 10px;
+  gap: 7px;
+  padding: 8px 10px 9px;
   font-size: 15px;
   font-weight: 600;
 }
 
 .phone-head-sms {
+  position: relative;
+  flex-direction: column;
   justify-content: center;
+  gap: 3px;
+  padding: 4px 10px 8px;
   border-bottom: 1px solid var(--color-border);
+  background: #F6F7F9;
+  font-size: 12px;
+}
+
+.phone-head-sms .phone-back {
+  position: absolute;
+  left: 12px;
+  top: 14px;
+  color: #4A5162;
 }
 
 .phone-head-chat {
-  background: #2D3345;
+  background: #1F2433;
   --color-ink: #FFFFFF;
   color: var(--color-ink);
 }
 
+.phone-who {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.phone-sub {
+  font-size: 10px;
+  font-weight: 400;
+  color: #C3C7D1;
+}
+
+.phone-tools {
+  flex: none;
+}
+
 .phone-avatar {
   display: inline-flex;
+  flex: none;
   width: 28px;
   height: 28px;
   align-items: center;
@@ -507,30 +506,73 @@ h2 {
   font-weight: 700;
 }
 
+.phone-avatar-sms {
+  width: 26px;
+  height: 26px;
+  background: #C3C7D1;
+  font-size: 12px;
+}
+
 .phone-body {
   flex: 1;
   min-height: 0;
-  padding: 14px 12px;
+  padding: 12px 10px;
 }
 
 .phone-meta {
   margin-bottom: 12px;
   text-align: center;
-  font-size: 12px;
+  font-size: 10.5px;
+  line-height: 1.35;
   color: var(--color-ink-faint);
 }
 
 .phone-composer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin: 0 10px 8px;
-  padding: 8px 8px 8px 14px;
+  gap: 6px;
+  margin: 0 8px 8px;
+  font-size: 13px;
+  color: var(--color-ink-faint);
+}
+
+.phone-composer-sms {
+  padding: 0 4px;
+}
+
+.phone-composer-sms .phone-field {
+  flex: 1;
+  padding: 6px 12px;
   border: 1px solid var(--color-border);
   border-radius: 999px;
+}
+
+.phone-plus {
+  display: inline-flex;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #EEF0F4;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.phone-composer-chat .phone-field {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
   background: #FFFFFF;
-  font-size: 14px;
-  color: var(--color-ink-faint);
+}
+
+.phone-mic {
+  flex: none;
 }
 
 .phone-home {
@@ -543,11 +585,6 @@ h2 {
   opacity: 0.85;
 }
 
-.phone-sms .bubble-out {
-  background: var(--color-sms);
-  border-color: transparent;
-  color: var(--color-ink);
-}
 
 /* Browser-ish chrome around a sample app screen. */
 .sample-chrome {
@@ -995,7 +1032,7 @@ h3 {
 .hero-big {
   display: block;
   margin: 0.06em 0 0.02em -0.04em;
-  font-size: clamp(6.5rem, 22vw, 17.5rem);
+  font-size: clamp(6.5rem, 17vw, 15rem);
   line-height: 0.8;
   letter-spacing: -0.06em;
   font-variant-numeric: tabular-nums;
@@ -1008,16 +1045,6 @@ h3 {
   letter-spacing: -0.03em;
 }
 
-.phones-cap {
-  position: absolute;
-  right: 0;
-  bottom: -64px;
-  left: 0;
-  text-align: center;
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: #1B1F2A;
-}
 
 .hero-grid {
   display: grid;
@@ -1026,7 +1053,7 @@ h3 {
   padding-top: clamp(24px, 5vw, 64px);
 }
 
-.why-pad {
+.hang-pad {
   padding-top: clamp(180px, 25vw, 340px);
 }
 
@@ -1050,6 +1077,10 @@ h3 {
 }
 
 @media (max-width: 900px) {
+  .hero-big {
+    font-size: clamp(6.5rem, 22vw, 12rem);
+  }
+
   .hero-grid {
     grid-template-columns: 1fr;
   }
@@ -1058,7 +1089,124 @@ h3 {
     max-width: none;
   }
 
-  .why-pad {
+  .hang-pad {
     padding-top: 230px;
+  }
+}
+
+/* ---- Task 15: WhatsApp-style chat mock-up (W39) ----
+   No WhatsApp green and no logo. The outgoing bubble is a pale Coral tint, the
+   ticks are grey (blue would mean "read", which we cannot see). */
+.chat-wallpaper {
+  background-color: #E3E7EE;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='88' height='88' viewBox='0 0 88 88' fill='none' stroke='%231B1F2A' stroke-opacity='.09' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='14' cy='14' r='5'/%3E%3Cpath d='M50 12h10M55 7v10'/%3E%3Cpath d='M70 34c3-4 6 4 9 0s6 4 9 0' transform='translate(-12 4)'/%3E%3Crect x='8' y='46' width='10' height='10' rx='3' transform='rotate(18 13 51)'/%3E%3Cpath d='M44 52l6 10h-12z'/%3E%3Ccircle cx='72' cy='72' r='3'/%3E%3Cpath d='M20 78c2-3 4 3 6 0s4 3 6 0'/%3E%3Cpath d='M70 20l4 4m0-4l-4 4'/%3E%3C/svg%3E");
+  background-size: 88px 88px;
+}
+
+.day-chip {
+  width: fit-content;
+  margin: 0 auto 10px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: #FFFFFF;
+  box-shadow: 0 1px 0 rgba(27, 31, 42, 0.12);
+  font-size: 10.5px;
+  color: #4A5162;
+}
+
+.wa-msg {
+  position: relative;
+  max-width: 88%;
+  padding: 6px 8px 5px;
+  border-radius: 9px;
+  font-size: clamp(11.5px, 1.15vw, 14.5px);
+  line-height: 1.32;
+  color: #1B1F2A;
+  box-shadow: 0 1px 0 rgba(27, 31, 42, 0.14);
+}
+
+.wa-msg::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+.wa-out {
+  background: #FFDDD3;
+  border-top-right-radius: 0;
+}
+
+.wa-in {
+  background: #FFFFFF;
+  border-top-left-radius: 0;
+}
+
+.wa-sms {
+  max-width: 90%;
+  padding: 7px 10px;
+  border-radius: 16px;
+  background: #E4E7EE;
+}
+
+/* The tail: a small wedge in the bubble's colour, on the square corner. */
+.bubble-tail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 9px;
+  height: 11px;
+  background: inherit;
+}
+
+.wa-out.bubble-tail::before {
+  right: -8px;
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+.wa-in.bubble-tail::before {
+  left: -8px;
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+}
+
+.wa-meta {
+  float: right;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 7px 0 -3px 10px;
+  font-size: 0.72em;
+  color: #4A5162;
+}
+
+.wa-ticks {
+  display: block;
+  color: #5F6676;
+}
+
+.no-reply {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4A5162;
+}
+
+.phone-field {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.phone-composer svg {
+  flex: none;
+}
+
+@media (max-width: 600px) {
+  .phone-tools,
+  .phone-sub {
+    display: none;
+  }
+
+  .phone-composer {
+    font-size: 11px;
   }
 }

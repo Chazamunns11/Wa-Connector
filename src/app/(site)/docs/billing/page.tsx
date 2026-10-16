@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Container } from "@/components/site/Container";
 import { PageTop } from "@/components/site/PageTop";
 import { brandConfig } from "@/lib/brand-config";
-import { formatMoney, pricingConfig } from "@/lib/pricing";
+import { pricingConfig, tierSentence } from "@/lib/pricing";
 import { pricingCopy } from "@/lib/site/pricing-copy";
 import { SITE_ROUTES } from "@/lib/site/routes";
 
@@ -22,7 +22,7 @@ export default function BillingHelpPage() {
   return (
     <>
     <PageTop title="Billing">
-      <p>One price: {formatMoney(pricing.pricePerNumber, pricing.currency)} per active number, per month.</p>
+      <p>{tierSentence(pricing.currency)} Billed per active number.</p>
     </PageTop>
     <section className="pb-12 pt-4 md:pb-20">
       <Container>
