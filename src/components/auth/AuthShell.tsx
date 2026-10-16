@@ -22,7 +22,7 @@ export function AuthShell({
 }) {
   return (
     <div className="mx-auto w-full max-w-md px-4 py-10 md:py-16">
-      <div className="rounded-lg border bg-card p-5 sm:p-8">
+      <div className="slab p-5 sm:p-8">
         <header className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
           <Link
             href="/"

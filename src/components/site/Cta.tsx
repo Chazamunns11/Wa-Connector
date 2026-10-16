@@ -1,30 +1,35 @@
 import Link from "next/link";
-import { buttonClasses } from "@/components/ui/Button";
+import { siteButton } from "@/components/site/button";
 import { SITE_ROUTES } from "@/lib/site/routes";
 
-/** Primary trial link, plus an optional secondary link. One primary CTA per view. */
+/**
+ * Primary trial link, plus an optional secondary link. One primary CTA per view.
+ * On a coral ground the primary is an Ink pill (`onCoral`); elsewhere it is Coral with Ink text.
+ */
 export function Cta({
   label,
   secondary,
   note,
+  onCoral = false,
 }: {
   label: string;
   secondary?: { href: string; label: string };
   note?: string;
+  onCoral?: boolean;
 }) {
   return (
     <div>
-      <div className="flex flex-wrap gap-3">
-        <Link href={SITE_ROUTES.signup} className={buttonClasses("primary", "md", "min-h-11 px-5 text-base")}>
+      <div className="btn-stack">
+        <Link href={SITE_ROUTES.signup} className={siteButton(onCoral ? "ink" : "coral")}>
           {label}
         </Link>
         {secondary ? (
-          <Link href={secondary.href} className={buttonClasses("secondary", "md", "min-h-11 px-5 text-base")}>
+          <Link href={secondary.href} className={siteButton("line")}>
             {secondary.label}
           </Link>
         ) : null}
       </div>
-      {note ? <p className="mt-3 text-sm text-ink-dim">{note}</p> : null}
+      {note ? <p className="mt-4 max-w-[52ch] text-[.95rem]">{note}</p> : null}
     </div>
   );
 }

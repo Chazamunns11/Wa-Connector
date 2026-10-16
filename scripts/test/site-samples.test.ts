@@ -58,14 +58,15 @@ test("DashboardSample carries the preview dashboard's rows and wording", () => {
 
 test("globals.css defines the Paper ground, rule token, section rule and phone", () => {
   const css = read("src/app/globals.css");
-  const dark = (css.match(/\.surface-dark \{[^}]*\}/g) ?? []).join("\n");
-  assert.match(dark, /--color-rule:\s*#D9A47A/);
+  // Task 14: Direction B. The last .surface-dark block carries the Coral rule.
+  const darkBlocks = css.match(/\.surface-dark \{[^}]*\}/g) ?? [];
+  assert.match(darkBlocks[darkBlocks.length - 1], /--color-rule:\s*#FF5A36/);
   const firstRoot = css.indexOf(":root {");
-  const secondRoot = css.indexOf(":root {", firstRoot + 1);
-  assert.ok(secondRoot > firstRoot, "second :root block appended");
-  const second = css.slice(secondRoot, css.indexOf("}", secondRoot));
+  const lastRoot = css.lastIndexOf(":root {");
+  assert.ok(lastRoot > firstRoot, "later :root block appended");
+  const second = css.slice(lastRoot, css.indexOf("}", lastRoot));
   assert.match(second, /--color-bg:\s*#FFFFFF/);
-  assert.match(second, /--color-rule:\s*#7A4E2D/);
+  assert.match(second, /--color-rule:\s*#1B1F2A/);
   assert.match(css, /\.section-rule/);
   assert.match(css, /\.phone\s*\{/);
   assert.match(css, /\.site-body/);

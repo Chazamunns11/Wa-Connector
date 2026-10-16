@@ -34,9 +34,9 @@ export default function DocsIndexPage() {
               <li key={d.href}>
                 <Link
                   href={d.href}
-                  className="block h-full min-h-11 rounded-lg border bg-raised p-6 transition-colors hover:border-accent-text"
+                  className="slab slab-2 block h-full min-h-11 p-6 transition-colors hover:border-accent"
                 >
-                  <span className="font-display text-lg font-medium text-accent-text underline underline-offset-2">
+                  <span className="font-display text-xl font-extrabold text-ink underline underline-offset-2">
                     {d.title}
                   </span>
                   <span className="mt-2 block text-ink-dim">{d.text}</span>
