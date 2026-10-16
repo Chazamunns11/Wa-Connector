@@ -91,7 +91,7 @@ interface WhatsappSessionSummaryRow {
   last_disconnect_reason: string | null;
 }
 
-function mapWhatsappSessionSummary(row: WhatsappSessionSummaryRow, sentToday: number): WhatsappSessionSummary {
+function mapWhatsappSessionSummary(row: WhatsappSessionSummaryRow, sentToday: number, heldMessages = 0): WhatsappSessionSummary {
   return {
     coachId: row.coach_id,
     status: row.status,
@@ -99,6 +99,7 @@ function mapWhatsappSessionSummary(row: WhatsappSessionSummaryRow, sentToday: nu
     lastConnectedAt: row.last_connected_at,
     lastDisconnectReason: row.last_disconnect_reason,
     sentToday,
+    heldMessages,
   };
 }
 

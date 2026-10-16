@@ -486,7 +486,7 @@ export function ConnectLinkClient({
           <div className="px-3 pb-3">
             <WhatsappConnectionPanel
               copy={buildConnectCopy(label, isConnected)}
-              summary={summary ? { ...summary, coachId: "" } : null}
+              summary={summary ? { ...summary, coachId: "", heldMessages: 0 } : null}
               bridgeConfigured={true}
               bridgeReachable={bridgeReachable}
               nowMs={nowMs}
@@ -499,7 +499,7 @@ export function ConnectLinkClient({
       ) : (
         <WhatsappConnectionPanel
           copy={buildConnectCopy(label, isConnected)}
-          summary={summary ? { ...summary, coachId: "" } : null}
+          summary={summary ? { ...summary, coachId: "", heldMessages: 0 } : null}
           // Always true — `/connect/[token]/page.tsx` already gates on
           // `isWhatsappBridgeConfigured()` before this component is ever
           // rendered at all (unlike the embed, which renders its own

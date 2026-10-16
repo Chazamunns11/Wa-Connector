@@ -59,6 +59,8 @@ export interface WhatsappSessionSummary {
    * of anything, just nothing sent.
    */
   sentToday: number;
+  /** Count of this number's GoHighLevel messages currently `held` (disconnected, waiting to be sent on reconnect). */
+  heldMessages: number;
 }
 
 /**
@@ -80,7 +82,7 @@ export interface WhatsappSessionSummary {
  * and deleting `coachId`, so a future field added to that interface can
  * never ride along by default.
  */
-export type GhlEmbedWhatsappSummary = Omit<WhatsappSessionSummary, "coachId">;
+export type GhlEmbedWhatsappSummary = Omit<WhatsappSessionSummary, "coachId" | "heldMessages">;
 
 // ---------------------------------------------------------------------------
 // GHL custom conversation provider, Phase 1 (WAGHL replacement — replacing
@@ -217,7 +219,7 @@ export interface GhlAccountDraft {
 }
 
 /** `'pending_send'` -> `'accepted'` (the bridge accepted the send) | `'refused'` (a terminal refusal reported inline — see the plan's D3 status table). Mirrors `ghl_outbound_messages.send_state`'s CHECK (0069). */
-export type GhlOutboundSendState = "pending_send" | "accepted" | "refused";
+export type GhlOutboundSendState = "pending_send" | "held" | "accepted" | "refused";
 
 /** What was last reported to GHL's Update Message Status endpoint for a row, if anything — `null` until Phase 2's drain reports an outcome. */
 export type GhlOutboundReportedStatus = "delivered" | "failed";
@@ -354,6 +356,17 @@ export interface GhlOutboundAttachmentDraft {
 // CHECK). The bridge (service-role) is the ONLY writer; this type is a pure
 // READ shape.
 // ---------------------------------------------------------------------------
+
+/** A contact who replied STOP to one number (`whatsapp_opt_outs`, migration 0004). Per (tenant, phone). */
+export interface OptOut {
+  tenantId: string;
+  /** Strict E.164 of the contact who opted out. */
+  phone: string;
+  optedOutAt: string;
+  /** Canonical matched keyword (`STOP`, `UNSUBSCRIBE`, ...). */
+  keyword: string;
+  ghlContactId: string | null;
+}
 
 /**
  * One prospect-authored WhatsApp reply, as read back for a single call's
