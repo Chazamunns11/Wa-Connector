@@ -1,0 +1,69 @@
+# Website walkthrough (Task 12)
+
+Verification of the PingWren website at commit `574906e` (branch `claude/adoring-brown-hvwuyz-site`), production build, **no Supabase env** (proves the marketing pages, signup, login and the preview dashboard stand alone after Task 11's proxy change). Task 11 has run, so `/login` is in the route list.
+
+## How to re-run
+
+```sh
+BRAND_PRICE_PER_NUMBER=29 NEXT_PUBLIC_APP_URL=http://localhost:3000 npm run build
+BRAND_PRICE_PER_NUMBER=29 NEXT_PUBLIC_APP_URL=http://localhost:3000 npm start   # port 3000; note the PID
+npm i --no-save axe-core@4.10.2
+NODE_PATH=/opt/node22/lib/node_modules PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node scripts/site-walkthrough.cjs
+```
+
+`scripts/site-walkthrough.cjs` starts nothing itself. For every route at 375x812 and 1280x900 it asserts no horizontal scroll, the expected `<h1>` count, the expected HTTP status, no WhatsApp green (`#25D366`) in any computed colour and no image whose `src` looks like a WhatsApp logo; it captures a full-page screenshot and runs axe-core 4.10.2 (`wcag2a`, `wcag2aa`, `wcag21aa`). It exits 1 on any failure or any serious/critical axe violation and writes `a11y-report.md`.
+
+## Result
+
+- Exit code **0**. 22 routes x 2 widths = 44 page loads, plus `/admin` asserted by status only.
+- axe: **0 violations** at any impact on every route (24 rules passed per page; the only `incomplete` results are colour-contrast checks axe could not resolve on SVG diagram text and on headings that sit on a `border-t`, all of which are Ink on Cream).
+- Horizontal scroll: 0 failures. `<h1>`: 0 failures (`/embed/crm` is expected to have none, see finding F2).
+- `/admin` answers **500** without Supabase env (fails closed), as expected.
+- No page paints `#25D366`; no WhatsApp logo image anywhere.
+
+Routes: `/`, `/pricing`, `/docs`, `/docs/setup`, `/docs/faq`, `/docs/billing`, `/docs/privacy-and-data`, `/legal/terms`, `/legal/privacy`, `/signup`, `/login`, `/dashboard`, `/dashboard/billing`, `/dashboard?scenario=past_due`, `/dashboard?filter=attention`, `/docs/setup?audience=business`, `/signup/checkout?name=Test&kind=agency&email=t%40example.com`, `/login?sent=1`, `/signup?error.*` (all three errors, values kept: `signup--errors-*.png`), `/this-page-does-not-exist` (404, `not-found-*.png`), `/embed/crm`, `/connect/abc`.
+
+Screenshots are `<slug>-375.png` and `<slug>-1280.png`. Hero animation frames are `hero-anim-{start,mid,end,reduced-motion}-1280.png` (clipped to the hero figure). The open mobile menu is `home-mobile-menu-open-375.png`. No two states were pixel-identical, so nothing was dropped.
+
+## Manual checks (step 3)
+
+Each was driven with Playwright against the production build and checked by eye on the screenshots. Evidence is quoted where it is short.
+
+- [x] **Keyboard pass through `/`**: first Tab lands on "Skip to main content"; Enter moves the hash to `#main`. All 28 interactive elements (nav, CTAs, both research source links, all 12 FAQ `<summary>`s, footer links) are reached in DOM order. Every stop shows the global `:focus-visible` ring (`outline: solid 2px #D9A47A`); no stop had `outline: none` without a box-shadow. Enter on a `<summary>` opens the FAQ.
+- [x] **Setup tabs**: both `#panel-agency` and `#panel-business` are in the server HTML. With focus on "Agency owner", ArrowRight moves focus to "Single sub-account", sets `aria-selected="true"`, shows that panel, hides the other and writes `?audience=business` to the address bar; ArrowLeft returns. With JavaScript off, `/docs/setup?audience=business` renders the business panel and both tabs keep `tabindex="0"`.
+- [x] **Pricing calculator**: default line "5 numbers = £145/month"; typing 12 gives "12 numbers = £348/month"; typing 0 shows "1 number = £29/month" with the note "Enter a whole number from 1 to 500. Showing the price for 1." The fallback table (1, 3, 5, 10 and 25 numbers) is always in the HTML, not only inside `<noscript>`; the `<noscript>` adds a one-line note about the calculator.
+- [x] **Signup validation**: empty submit redirects to `/signup?error.accountName=name_length&error.kind=kind_required&error.email=email_invalid#signup-errors`, focus lands on the error summary, each field shows its message. A partial submit (name and kind set, bad email) keeps "Acme Agency" and "agency" and flags only the email. A valid submit reaches `/signup/checkout?...` (preview badge shown).
+- [x] **Dashboard scenarios**: trial shows no banner ("Trial: 4 days left" chip, 3 numbers active, three sub-accounts "Not active", which respects the trial cap). `?scenario=past_due` shows the red `role="alert"` banner "Payment failed — update your card. Sending continues while we retry." (`#FBE6E3` well, Ink text). `?filter=attention` lists 2 of 6 rows: Fernbank Dental ("No messages from GHL yet. Is the Telephony Provider set?") and Millbrook Vets ("Disconnected — 4 messages waiting", Reconnect).
+- [x] **Setup steps vs the foundation's panel** (`src/app/embed/crm/CrmEmbedClient.tsx`, `src/components/whatsapp/WhatsappConnectionPanel.tsx`, `src/app/connect/[token]/ConnectLinkClient.tsx`): the QR instruction is the same string in all three ("On your phone: WhatsApp → Settings → Linked devices → Link a device, then scan this code."); the button labels the guide quotes exist as written ("Connect WhatsApp", "Get a new QR code", "Reconnect"); the status labels match (`Connected`, `Waiting for QR scan`, `Disconnected`); the expired-code path matches (panel: "That code has expired — click “Get a new QR code” and scan the new one."; guide troubleshooting "The QR code expired": "click Get a new QR code and scan the new one straight away"); the safety line carries the same meaning (whoever scans can read and send as your business; treat it like a password). One naming mismatch, see F3.
+- [x] **Home hero animation**: at 0 ms the outgoing bubble sits behind the workflow card (`translateY(-88px) scale(0.86)`) and "Delivered" plus the reply are at opacity 0; at 600 ms the bubble has landed and the ping has not fired; at 1300 ms everything is at rest (transform identity, opacity 1). Five animations run in total. With `prefers-reduced-motion: reduce` there are 0 animations, the finished frame renders straight away and the ping ring (`::after`) is `display: none`. The figure is one `role="img"` with a label describing the exchange, so the sample text is not read twice.
+- [x] **Safety thread**: three annotated rows (Paced sending / Delivered, Held while disconnected / "Waiting for the phone to reconnect", STOP opt-outs / "Not sent. Sam opted out." in the dashed `bubble-unsent` style). Bubble columns are `aria-hidden`; each note is an `<h3>` plus body. Copy matches rulings W10 (per number) and W11 (cap overflow reported as not sent, not held).
+- [x] **Research band**: both source links point at the canonical PMC URLs (`PMC5227159`, `PMC7310733`). PMC itself serves a reCAPTCHA page to the sandbox proxy, so the figures were confirmed against the abstracts via the Europe PMC API: study 1 (Int J Pediatr 2016, n=170) reports no-show 23.5% intervention vs 38.1% control; study 2 (PLoS One 2020, n=161,587) reports 14.2% vs 21.1% control. The page's 38% → 24%, 21% → 14%, "about 170 patients" and "about 160,000 appointments" are honest roundings. One wording problem, see F1.
+- [x] **No WhatsApp green or logo**: scripted on every route (computed `color`, `background-color`, `border-color`, `fill`, `stroke`, `outline-color` against `rgb(37, 211, 102)`; no `<img src>` containing "whatsapp"). The "Connected" chip uses `--color-win #17663F` on `#E3F1E8`.
+- [x] **Logo variant per surface**: reverse artwork (`pingwren-logo-reverse.svg`) on every Ink header and footer (site and app layouts); standard artwork (`pingwren-logo.svg`) on the white auth card (`/signup`, `/login`, `/login?sent=1`). Full table in `a11y-report.md`. `/connect/abc` shows the brand name as text (foundation `ConnectBrandHeader`), `/embed/crm` shows no logo (it sits inside GoHighLevel's page). Favicon is the kit's.
+- [x] **Mobile menu (375)**: "Menu" is the 4th Tab stop; Enter opens `nav[aria-label="Menu"]` at the full 375px width (left 0, top 72) with four 44px-high links.
+- [x] **Zoom proxy**: at a 640px viewport (roughly 200% zoom of 1280) `/`, `/docs/setup`, `/pricing` and `/dashboard` have no horizontal scroll.
+- [x] **Touch targets at 375**: every control is at least 44px except inline text links (setup page "FAQ", docs index "Terms"/"Privacy policy", one research source link at 42px) and the two native radio inputs, whose label cards are the real target. See F6.
+
+## Step 4: accessibility review and copy review
+
+WCAG 2.1 AA audit (`design:accessibility-review` lens) over the screenshots and the DOM: one `<h1>` per page (except F2), landmarks (`header`, `nav` with labels, `main#main`, `footer`), a skip link in both site and app layouts, every input labelled, errors tied to fields with `aria-describedby` and `aria-invalid`, a focused error summary, `role="status"`/`role="alert"` used for the sent and past-due states, native `<details>` for FAQ and troubleshooting, tabs with roving tabindex only after hydration, decorative numbers and bubbles `aria-hidden`, the hero as one labelled image, reduced motion honoured. Contrast samples: body Ink `#1B1F2A` on Cream `#F6F1EA` 14.6:1; `ink-dim #454A57` on Cream 7.9:1 and on Paper 8.9:1; dark-surface `ink-dim #D3CCC0` on Ink 10.3:1; `ink-faint #A8A296` on Ink 6.5:1; Wren link `#7A4E2D` on Cream 6.3:1; coral button `#FF5A36` with Ink text 5.3:1; win / warn / loss chips 6.0:1 each. Nothing below 4.5:1 was found by axe or by hand.
+
+Copy review (`anthropic-skills:human-writing` checklist; the skill folder holds only `SKILL.md`, there is no `ai-tells.md` beside it, so the §3 checklist was applied directly: banned vocabulary, negative parallelism, -ing tails, rule-of-three, em dashes, summary endings, puffery, truthfulness against the product rulings). Sales page, FAQ, pricing and setup copy read as plain British English with specifics (Telephony Provider path, 150-per-day cap shown on the dashboard, midnight UTC, Stripe retry window, trial cap). No invented stats, testimonials or logos. Suggested edits are F1, F3, F4 and F5 below; none were applied.
+
+## Findings for the controller
+
+Nothing under `src/` was changed by this task. Severity: critical / serious / medium / low / info.
+
+| # | Severity | Where | Finding | Suggested fix |
+| --- | --- | --- | --- | --- |
+| F1 | **medium** (truthfulness, ruling W25) | `src/lib/site/proof.ts:30` | The claim for PMC5227159 says patients were compared with "patients sent none". The paper's control group received the standard voice-message reminder; the intervention group got a text message *in addition*. | "…patients who also got a text-message reminder missed fewer appointments than patients who only got the usual voice-message reminder." |
+| F2 | low (foundation-owned) | `src/app/embed/crm/page.tsx` / `CrmEmbedClient.tsx:456` | `/embed/crm` renders no `<h1>` (the card title "WhatsApp" is a lower heading). Inside GoHighLevel's iframe the host page owns the `h1`, so this is acceptable there, but the route also answers standalone. The walkthrough expects `h1: 0` for this route and says why. | Leave as is, or promote the card title to `<h1>` when the panel is the whole document. Controller's call; not a website file. |
+| F3 | low (consistency) | `src/lib/site/sales-copy.ts:30` vs `src/lib/site/setup-steps.ts:67-74` | Home step 3 says "Open the WhatsApp page in the left menu"; the setup guide says "choose PingWren in the left menu" (the GHL custom-page menu item will carry the app's name); the embedded panel's own title is "WhatsApp". | Pick one label for the menu item (the brand name) and use it in both the home step and the guide's step summary ("The PingWren page lives in the left menu…"). |
+| F4 | low (copy) | `src/lib/site/faq.ts:47` | "no green tick, no template approval and no per-conversation fees from Meta" is a triple "no X, no Y, no Z" list (negative parallelism / rule of three). | "In practice you don't get the green tick or Meta's template approval, Meta doesn't charge you per conversation, and the phone with the number must stay online." |
+| F5 | low (copy, optional) | `src/app/(site)/pricing/page.tsx:38` | "No setup fee and no per-message charge from PingWren." is a mild "no X and no Y". | "There is no setup fee, and PingWren does not charge per message." |
+| F6 | info | `src/app/(site)/docs/setup/page.tsx:120`, `src/app/(site)/docs/page.tsx:54` | Inline prose links ("FAQ", "Terms", "Privacy policy") are 20px tall at 375. Inline text links are exempt from the target-size criterion, so this passes AA; noted because the quality bar says 44px on mobile. | No change required. If wanted, give them `inline-flex min-h-11 items-center` like the other inline links on the site. |
+| F7 | info | `src/components/auth/AuthShell.tsx:25` | On `/login` (no site header) the logo in the card is not a link, so the only way back to the site is the "Start your 7-day free trial" link. `/signup` is fine because it sits under the site layout. | Wrap `<BrandMark />` in a `Link` to `/` with `aria-label="PingWren home"`. |
+| F8 | info (optional honesty) | `src/lib/site/proof.ts:41` | The caveat says "the best wording is shown" without saying what it was. The paper's best-performing message was one "designed to evoke emotional guilt". | "…only the wording changed, and the best of the eight (a message framed around letting others down) is shown." |
+| F9 | info | `.claude` skill `anthropic-skills:human-writing` | The skill's `ai-tells.md` reference is missing from the installed skill folder; only `SKILL.md` is present. The checklist in `SKILL.md` was applied instead. | Restore `ai-tells.md` in the skill package. |
+
+No serious or critical axe violations, so the walkthrough exits 0.
