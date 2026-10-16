@@ -63,7 +63,7 @@ export class SupabaseAccountDataSource implements AccountDataSource {
     );
   }
 
-  async getBilling(): Promise<BillingSummary> {
+  async getBilling(knownRows?: LocationRow[]): Promise<BillingSummary> {
     const account = await this.getAccount();
     const currency = pricingConfig().currency;
     const base: BillingSummary = {
@@ -75,7 +75,7 @@ export class SupabaseAccountDataSource implements AccountDataSource {
       cancelAtPeriodEnd: false,
     };
     if (!account.stripeSubscriptionId) return { ...base, portalAvailable: false };
-    const [sub, rows] = await Promise.all([this.deps.retrieveSubscription(account.stripeSubscriptionId), this.listLocations()]);
+    const [sub, rows] = await Promise.all([this.deps.retrieveSubscription(account.stripeSubscriptionId), knownRows ?? this.listLocations()]);
     if (!sub.ok) return base;
     return {
       ...base,

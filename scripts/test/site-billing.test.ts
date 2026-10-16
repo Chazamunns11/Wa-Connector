@@ -79,7 +79,7 @@ test("billing page is real: no sample markers, wired to the actions, tier senten
   assert.match(src, /endTrialNowAction/);
   assert.match(src, /startCheckoutAction/);
   assert.match(src, /tierSentence\(/);
-  assert.match(src, /Cancels at the end of this period\./);
+  assert.match(src, /Cancels at the end of this period/);
   assert.match(src, /Ends the free trial today and starts monthly billing for your active numbers\./);
 });
 

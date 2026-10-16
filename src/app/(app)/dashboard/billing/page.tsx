@@ -38,10 +38,13 @@ export default async function BillingPage({
   const session = await requireAccountSession();
   const now = new Date();
   const source = getAccountDataSource(session, now);
-  const [account, rows, billing] = await Promise.all([source.getAccount(), source.listLocations(), source.getBilling()]);
+  const [account, rows] = await Promise.all([source.getAccount(), source.listLocations()]);
+  const billing = await source.getBilling(rows);
   const status = planStatus(account, now);
-  const next =
-    billing.nextInvoiceAt && billing.nextInvoiceAmount !== null
+  const endsOn = billing.nextInvoiceAt ? DATE.format(new Date(billing.nextInvoiceAt)) : null;
+  const next = billing.cancelAtPeriodEnd
+    ? "None, the plan is ending"
+    : billing.nextInvoiceAt && billing.nextInvoiceAmount !== null
       ? `${formatMoney(billing.nextInvoiceAmount, billing.currency)} on ${DATE.format(new Date(billing.nextInvoiceAt))}`
       : "None scheduled";
 
@@ -70,7 +73,7 @@ export default async function BillingPage({
                 <span className="text-ink-dim">{headline(rows)}</span>
               </div>
               <p className="mt-1 text-sm text-ink-dim">{tierSentence(pricingConfig().currency)}</p>
-              {billing.cancelAtPeriodEnd ? <p className="mt-1 text-sm font-medium text-ink">Cancels at the end of this period.</p> : null}
+              {billing.cancelAtPeriodEnd ? <p className="mt-1 text-sm font-medium text-ink">Cancels at the end of this period{endsOn ? ` on ${endsOn}` : ""}.</p> : null}
             </dd>
             <dt className="text-ink-faint">Card</dt>
             <dd>{billing.cardLast4 ? <>Ending {billing.cardLast4}</> : "No card on file"}</dd>

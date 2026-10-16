@@ -50,5 +50,6 @@ export interface AccountDataSource {
   readonly preview: boolean;
   getAccount(): Promise<AccountSummary>;
   listLocations(): Promise<LocationRow[]>;
-  getBilling(): Promise<BillingSummary>;
+  /** Pass the rows already listed to avoid reading them twice. */
+  getBilling(rows?: LocationRow[]): Promise<BillingSummary>;
 }
