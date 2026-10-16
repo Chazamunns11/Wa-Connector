@@ -1,15 +1,14 @@
-import { Wordmark } from "@/components/shell/Wordmark";
-import { Button } from "@/components/ui/Button";
-import { brandConfig } from "@/lib/brand-config";
+import Link from "next/link";
+import { AuthShell } from "@/components/auth/AuthShell";
+import { EmailLinkForm } from "@/components/auth/EmailLinkForm";
+import { brandCssVars, brandConfig } from "@/lib/brand-config";
+import { TRIAL_DAYS } from "@/lib/pricing";
 import { sendLoginLinkAction } from "./actions";
 
 /**
- * Owner sign-in — the cut-down shape of PortalHub `src/app/login/page.tsx`:
- * the wordmark, a heading, the `?error=` explainer card, and the magic-link
- * form (PortalHub's `MagicLinkTab`, posted to a server action here instead
- * of the browser client — see `sendLoginLinkAction`). Demo-role cards, the
- * password tab, closer-invite refusals and the self-serve signup promo are
- * Hub-only and not copied.
+ * Sign-in: the website auth shell around the foundation's magic-link flow.
+ * The form posts to `sendLoginLinkAction`; `/auth/callback` and `actions.ts`
+ * are the foundation's and are not touched here.
  */
 
 const AUTH_ERROR_COPY: Record<string, { title: string; body: string }> = {
@@ -31,48 +30,47 @@ interface LoginPageProps {
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const { error, sent } = await searchParams;
   const authError = error ? AUTH_ERROR_COPY[error] : undefined;
-  const { name } = brandConfig();
+  const brand = brandConfig();
+  const { name } = brand;
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-10 bg-bg px-4 py-16">
-      <Wordmark size="lg" />
+    <main id="main" style={brandCssVars(brand)} className="min-h-screen bg-bg">
+      <AuthShell
+        title="Sign in"
+        intro={<p>We&apos;ll email you a sign-in link. No password needed.</p>}
+      >
+        {authError ? (
+          <div
+            role="alert"
+            className="mb-5 rounded border border-border bg-well p-4"
+          >
+            <p className="text-sm font-semibold text-ink">{authError.title}</p>
+            <p className="mt-1 text-sm text-ink-dim">{authError.body}</p>
+          </div>
+        ) : null}
 
-      <div className="flex flex-col items-center gap-2 text-center">
-        <h1 className="font-display text-2xl font-bold uppercase italic text-ink">Sign in</h1>
-        <p className="max-w-md text-sm text-ink-faint">Sign in with your {name} owner account.</p>
-      </div>
-
-      {authError ? (
-        <div className="w-full max-w-sm rounded-lg border border-border bg-card p-4 text-center">
-          <p className="text-sm font-semibold text-ink">{authError.title}</p>
-          <p className="mt-1 text-sm text-ink-faint">{authError.body}</p>
-        </div>
-      ) : null}
-
-      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-6">
         {sent ? (
-          <p className="text-sm text-ink-dim">
-            If that address has an owner account, a sign-in link is on its way. Open it in this browser.
+          <p role="status" className="text-ink-dim">
+            If that address has a {name} account, a sign-in link is on its way.
+            Open it in this browser.
           </p>
         ) : (
-          <form action={sendLoginLinkAction} className="flex flex-col gap-4">
-            <label className="flex flex-col gap-1.5 text-sm text-ink-dim">
-              Email
-              <input
-                type="email"
-                name="email"
-                required
-                autoComplete="email"
-                placeholder="you@example.com"
-                className="h-[38px] rounded border border-border bg-well px-3 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
-              />
-            </label>
-            <Button type="submit" className="mt-2">
-              Send me a sign-in link
-            </Button>
-          </form>
+          <EmailLinkForm
+            action={sendLoginLinkAction}
+            buttonLabel="Send me a sign-in link"
+          />
         )}
-      </div>
+
+        <p className="mt-6 text-sm text-ink-dim">
+          New here?{" "}
+          <Link
+            href="/signup"
+            className="inline-flex min-h-11 items-center font-medium text-accent-text underline underline-offset-2"
+          >
+            Start your {TRIAL_DAYS}-day free trial
+          </Link>
+        </p>
+      </AuthShell>
     </main>
   );
 }
