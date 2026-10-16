@@ -54,6 +54,7 @@ const SITE_ROUTES = [
   "/pricing",
   "/docs",
   "/docs/setup",
+  "/docs/connect",
   "/docs/faq",
   "/docs/billing",
   "/docs/privacy-and-data",
