@@ -464,31 +464,10 @@ export class BridgeStore {
 
   // -------------------------------------------------------------------------
   // whatsapp_inbound_messages (0048) — inbound replies. See
-  // src/inbound.ts's file header for the filter chain and the ledger-gate
-  // privacy argument; this section is just the two Supabase calls it needs.
+  // src/inbound.ts's file header for the filter chain; this section is just
+  // the Supabase call it needs. (PortalHub's coach-only ledger-gate read,
+  // `wasProspectSent`, was removed with the coach path.)
   // -------------------------------------------------------------------------
-
-  /**
-   * The ledger gate (hard rule 4 / 0048's file header): true iff this coach
-   * has at least one `whatsapp_messages` row with `status = 'sent'` to this
-   * exact phone number. The linked WhatsApp number is the coach's REAL
-   * PERSONAL PHONE — family, friends, existing clients all message it too;
-   * only numbers the PORTAL itself has sent to are eligible to ever produce
-   * an inbound row. Deliberately a plain existence check (`limit(1)`), not a
-   * count — callers should front this with `ProspectLedgerCache`
-   * (src/inbound.ts) rather than call it once per inbound message.
-   */
-  async wasProspectSent(coachId: string, toPhone: string): Promise<boolean> {
-    const { data, error } = await this.supabase
-      .from("whatsapp_messages")
-      .select("id")
-      .eq("coach_id", coachId)
-      .eq("to_phone", toPhone)
-      .eq("status", "sent")
-      .limit(1);
-    if (error) throw error;
-    return (data?.length ?? 0) > 0;
-  }
 
   /**
    * Insert-or-ignore against 0048's unique `(coach_id, wa_message_id)`
@@ -624,9 +603,9 @@ export class BridgeStore {
    * mistyped id instead of creating orphan state for it. RENAMED from
    * `coachExists` (portal migration 0069_ghl_provider.sql, GHL custom
    * conversation provider Phase 1): the bridge's session key is no longer
-   * always a coach — 0069 generalises it to `whatsapp_tenants`, a table
-   * whose `id` is either a Hub coach's own id (kind `'coach'`) or a fresh id
-   * backing a GHL location (kind `'ghl_location'`). Every OTHER piece of
+   * always a coach — 0069 generalises it to `whatsapp_tenants`. Here every
+   * row is a fresh id backing a GHL location (kind `'ghl_location'`, the
+   * only kind 0001_init.sql allows). Every OTHER piece of
    * bridge code already treated this id as opaque (sessions map, AAD
    * binding, lease, pacer, ledger — see 0069's file header) — this was the
    * only query that assumed "coach". Same shape, same query cost, just a
@@ -636,19 +615,5 @@ export class BridgeStore {
     const { data, error } = await this.supabase.from("whatsapp_tenants").select("id").eq("id", tenantId).maybeSingle();
     if (error) throw error;
     return Boolean(data);
-  }
-
-  /**
-   * `'coach' | 'ghl_location'`, or `null` for an unknown id — mirrors
-   * `whatsapp_tenants.kind` (0069). Added now (Phase 1) though its only
-   * caller ships in Phase 3 (the inbound ledger-gate branch — GHL tenants
-   * skip `wasProspectSent`, coach tenants don't; see the plan's D4) so that
-   * work needs no further bridge-store changes when it lands. Read once per
-   * session start and cached by the caller, not re-queried per message.
-   */
-  async getTenantKind(tenantId: string): Promise<"coach" | "ghl_location" | null> {
-    const { data, error } = await this.supabase.from("whatsapp_tenants").select("kind").eq("id", tenantId).maybeSingle();
-    if (error) throw error;
-    return (data as { kind: "coach" | "ghl_location" } | null)?.kind ?? null;
   }
 }

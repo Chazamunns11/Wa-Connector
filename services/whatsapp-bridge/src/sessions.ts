@@ -86,11 +86,9 @@
  * INBOUND MESSAGES (Batch 1 of the reply/auto-stop/trigger package — see
  * src/inbound.ts's file header for the full filter chain and privacy
  * argument): every socket also gets a `messages.upsert` listener, wired
- * alongside `connection.update` in `openSocket` below. Each session owns its
- * own `ProspectLedgerCache` (created once, in `doStartSession`, so it
- * survives a reconnect's socket bounce exactly like the queue/pacer do) —
- * per-session, not per-socket, because the ledger gate's answer for a given
- * (coachId, phone) pair doesn't change just because the WebSocket reconnected.
+ * alongside `connection.update` in `openSocket` below. Every session is a
+ * GHL-location tenant, so there is no ledger gate (and no per-session
+ * ledger cache) — see src/inbound.ts's "NO LEDGER GATE" note.
  */
 import makeWASocket, {
   DisconnectReason,
@@ -108,7 +106,7 @@ import { SessionLock } from "./lock.js";
 import { PendingWrites } from "./pending-writes.js";
 import { SessionPacer } from "./pacing.js";
 import { isE164 } from "./phone.js";
-import { processInboundBatch, ProspectLedgerCache, type InboundMediaRef } from "./inbound.js";
+import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
 import { runMediaCapture } from "./media-capture.js";
 import { resolveOutboundAttachment } from "./media-fetch.js";
@@ -181,13 +179,11 @@ interface Session {
   reconnectAttempts: number;
   /** Set when the manager (not WhatsApp) is tearing the session down — suppresses the auto-reconnect in the close handler. */
   stopping: boolean;
-  /** Ledger-gate cache for inbound replies (src/inbound.ts) — survives socket bounces, scoped to this session's lifetime. */
-  prospectCache: ProspectLedgerCache;
   /**
    * Tracks every in-flight Signal key/creds write for this session (see
    * src/pending-writes.ts's file header for the incident this fixes) — MUST
-   * live here, on the Session, constructed exactly ONCE alongside
-   * `prospectCache` above, and survives socket bounces exactly like it does.
+   * live here, on the Session, constructed exactly ONCE in `doStartSession`,
+   * and survive socket bounces like the queue/pacer do.
    * `openSocket` runs on every reconnect, so a tracker built INSIDE it
    * instead (e.g. as a local to `useSupabaseAuthState`'s caller) would be a
    * brand-new empty set each time — `shutdownOneSession`'s flush would then
@@ -199,22 +195,13 @@ interface Session {
    */
   pendingWrites: PendingWrites;
   /**
-   * GHL custom conversation provider, Phase 3 (docs/GHL-PROVIDER-PLAN.md,
-   * decision D4) — read ONCE via `resolveTenantKind` in `doStartSession` and
-   * cached here for the session's whole lifetime (a tenant's kind is
-   * immutable by schema — 0069's `whatsapp_tenants_kind_shape` CHECK — so
-   * there is nothing to invalidate on reconnect). Drives
-   * `InboundDeps.bypassLedgerGate` in the `messages.upsert` wiring below.
-   */
-  tenantKind: "coach" | "ghl_location";
-  /**
    * Media plan (docs/MEDIA-PLAN.md §9) — abuse-cap counters for inbound media
    * capture, constructed once per session (survives socket bounces, exactly
-   * like `prospectCache` above). Built unconditionally for every session
+   * like `pendingWrites` above). Built unconditionally for every session
    * (cheap — no DB read happens until `checkAndReserve` is actually called),
-   * but only ever CONSULTED when `WA_MEDIA_INBOUND_ENABLED` is true AND this
-   * session is `'ghl_location'` — see `openSocket`'s `messages.upsert` wiring
-   * for the hard boundary (docs/MEDIA-PLAN.md §2 rule 4/§8).
+   * but only ever CONSULTED when `WA_MEDIA_INBOUND_ENABLED` is true — see
+   * `openSocket`'s `messages.upsert` wiring for the hard boundary
+   * (docs/MEDIA-PLAN.md §2 rule 4/§8).
    */
   mediaAbuseGate: MediaAbuseGate;
 }
@@ -340,38 +327,6 @@ export async function recordNotOnWhatsapp(store: BridgeStore, poke: PortalPoke |
 }
 
 /**
- * GHL custom conversation provider, Phase 3 (docs/GHL-PROVIDER-PLAN.md,
- * decision D4) — read this tenant's `kind` once, FAIL-CLOSED to the
- * STRICTER gate. Extracted as its own small, directly-testable function
- * (same rationale as `recordSent`/`recordFailed`/`recordNotOnWhatsapp`
- * above — `doStartSession` needs a live lease/Supabase round trip a unit
- * test cannot construct; this does not) so `test/sessions-tenant-kind.test.ts`
- * can pin the fail-closed default with a fake store, no Baileys involved.
- *
- * `store.getTenantKind` throwing, or returning `null` (an unknown tenant id
- * — should be impossible once `ensureSessionRow`/`tenantExists` have already
- * run, but never assumed), both default to `'coach'` — the GATED behaviour —
- * never to `'ghl_location'` (the bypass). A Supabase blip at session start
- * therefore degrades a genuine GHL session to "cold inbound dropped until
- * the next session restart", never a coach session to "cold inbound now
- * accepted" — see `src/inbound.ts`'s own in-code justification at the
- * ledger-gate branch for the full argument this asymmetry protects.
- */
-export async function resolveTenantKind(store: BridgeStore, tenantId: string, log: Logger): Promise<"coach" | "ghl_location"> {
-  try {
-    const kind = await store.getTenantKind(tenantId);
-    if (kind === null) {
-      log.warn({ tenantId }, "getTenantKind returned no row for this tenant — defaulting to 'coach' (the stricter ledger gate)");
-      return "coach";
-    }
-    return kind;
-  } catch (err) {
-    log.warn({ tenantId, err: (err as Error).message }, "getTenantKind failed — defaulting to 'coach' (the stricter ledger gate)");
-    return "coach";
-  }
-}
-
-/**
  * The exact fields `shutdownOneSession` touches, and nothing else —
  * deliberately STRUCTURAL rather than importing `Session` itself, so
  * `test/sessions-shutdown.test.ts` can pin the ordering that fixes the
@@ -393,7 +348,7 @@ export interface ShutdownableSession {
 /**
  * Graceful teardown for ONE session — extracted to module level, directly
  * testable, following the same rationale as `recordSent`/`recordFailed`/
- * `recordNotOnWhatsapp`/`resolveTenantKind` above (this file's own
+ * `recordNotOnWhatsapp` above (this file's own
  * established pattern for "needs a live dependency `SessionManager`'s
  * private methods can't easily fake, so pull it out and take everything as
  * a plain argument instead").
@@ -601,7 +556,7 @@ export class SessionManager {
    * actually prevents orphaning? They are still worth having, just for a
    * different reason — EFFICIENCY and TIGHTENING, not correctness:
    *   - Top-of-function and pre-acquire: skip pointless Supabase round trips
-   *     (`ensureSessionRow`/`getDailyActivity`/`getTenantKind`, or a
+   *     (`ensureSessionRow`/`getDailyActivity`, or a
    *     claim-then-immediately-release cycle) once shutdown is already known
    *     to have started.
    *   - Immediately after `acquire()` succeeds, before `this.sessions.set`:
@@ -750,11 +705,6 @@ export class SessionManager {
 
     const activity = await this.store.getDailyActivity(coachId);
 
-    // GHL custom conversation provider, Phase 3 (decision D4) — read once
-    // per session start, never re-queried per message (see `Session.tenantKind`'s
-    // own JSDoc and `resolveTenantKind`'s fail-closed default).
-    const tenantKind = await resolveTenantKind(this.store, coachId, this.log);
-
     // Two-step construction: the lease's onLost callback must close over
     // THIS session object (not the coachId), so that teardown can check
     // identity against the map instead of blindly evicting by key — a
@@ -789,9 +739,7 @@ export class SessionManager {
       draining: false,
       reconnectAttempts: 0,
       stopping: false,
-      prospectCache: new ProspectLedgerCache(),
       pendingWrites: new PendingWrites(),
-      tenantKind,
       mediaAbuseGate: new MediaAbuseGate(this.config.inboundMediaPerSenderDaily, this.config.inboundMediaPerTenantDaily, {
         countSenderToday: (tenantId, senderPhone) => this.store.countInboundMediaAttemptsForSenderToday(tenantId, senderPhone),
         countTenantToday: (tenantId) => this.store.countInboundMediaAttemptsForTenantToday(tenantId),
@@ -799,8 +747,7 @@ export class SessionManager {
     };
 
     // Re-checked immediately before claiming — shutdown may have begun
-    // during the awaits above (ensureSessionRow/getDailyActivity/
-    // resolveTenantKind). No lease has been touched yet, so there is
+    // during the awaits above (ensureSessionRow/getDailyActivity). No lease has been touched yet, so there is
     // nothing to release; bailing here just avoids a pointless
     // claim-then-immediately-release round trip against Supabase.
     if (this.shuttingDown) throw new ShuttingDownError();
@@ -1079,29 +1026,17 @@ export class SessionManager {
     sock.ev.on("messages.upsert", ({ messages, type }) => {
       // Media plan (docs/MEDIA-PLAN.md §2 rule 4/§8) — THE hard boundary,
       // enforced HERE in code, not as a config default: `deps.media` is only
-      // ever constructed when BOTH `WA_MEDIA_INBOUND_ENABLED` is true AND
-      // this session's own cached `tenantKind` (read once at session start,
-      // fail-closed to 'coach' — see `resolveTenantKind`) is confirmed
-      // `'ghl_location'`. A coach session can never reach this branch, and
-      // `processInboundBatch` ALSO re-checks `bypassLedgerGate` before ever
-      // touching `deps.media` (belt-and-braces — see its own comment at that
-      // branch), so the boundary holds even if this wiring were ever
-      // mis-ordered.
+      // ever constructed when `WA_MEDIA_INBOUND_ENABLED` is true. (PortalHub
+      // also required a confirmed 'ghl_location' tenant; every session here
+      // is one.)
       const media =
-        this.config.mediaInboundEnabled && session.tenantKind === "ghl_location"
+        this.config.mediaInboundEnabled
           ? { beginCapture: (input: { coachId: string; fromPhone: string; waMessageId: string; mediaRef: InboundMediaRef }) => this.beginMediaCapture(session, input) }
           : undefined;
 
-      void processInboundBatch(messages, type, coachId, session.prospectCache, {
-        wasProspectSent: (id, phone) => this.store.wasProspectSent(id, phone),
+      void processInboundBatch(messages, type, coachId, {
         recordInboundMessage: (input) => this.store.recordInboundMessage(input),
         schedulePoke: () => this.poke?.schedule(),
-        // GHL custom conversation provider, Phase 3 (decision D4) — see
-        // `Session.tenantKind`'s and `InboundDeps.bypassLedgerGate`'s own
-        // JSDoc, and `src/inbound.ts`'s in-code justification at the branch
-        // itself. Read from the SESSION object (not re-derived here) so a
-        // socket reconnect never re-queries it.
-        bypassLedgerGate: session.tenantKind === "ghl_location",
         media,
         // Baileys 7.x LID machinery (see this file's header + README's
         // "Baileys version" section) — the LAST resort for a LID-routed
@@ -1431,12 +1366,6 @@ export class SessionManager {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Baileys' AnyMessageContent union is intentionally not re-imported into media.ts (see buildBaileysMediaContent's own JSDoc); both branches above already produce a shape Baileys accepts.
           const sent = await sock.sendMessage(jid, messageContent as any);
           await recordSent(this.store, this.outboundPoke, record.id, sent?.key?.id ?? null);
-          // Adversarial-review fix (lens 2, finding 5) — seed the ledger-gate
-          // cache's positive entry the instant this send is confirmed, so a
-          // reply that lands moments later isn't dropped by a stale negative
-          // cached from before this coach ever messaged this number (see
-          // `ProspectLedgerCache.markSent`'s own JSDoc, src/inbound.ts).
-          session.prospectCache.markSent(session.coachId, record.toPhone);
         } catch (err) {
           // sendMessage WAS invoked — the frame may already be with
           // WhatsApp (e.g. an ack timeout after transmit). Never log the

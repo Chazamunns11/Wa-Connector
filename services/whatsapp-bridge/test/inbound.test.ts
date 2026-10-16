@@ -1,8 +1,9 @@
 /**
  * src/inbound.ts — the full filter chain (fabricated WAMessage objects, no
  * network, no WhatsApp, matching this package's existing test style), plus
- * the ledger-gate cache and the deps-injected batch processor's dedupe /
- * poke-scheduling behaviour.
+ * the deps-injected batch processor's dedupe / poke-scheduling behaviour.
+ * The coach-only ledger gate (and its ProspectLedgerCache tests) were
+ * removed with the gate itself — every session is a GHL location.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +12,6 @@ import type { WAMessage } from "@whiskeysockets/baileys";
 import {
   classifyInboundMessage,
   processInboundBatch,
-  ProspectLedgerCache,
   type InboundDeps,
   type RecordInboundInput,
 } from "../src/inbound.js";
@@ -319,108 +319,24 @@ test("classify: truncation never splits a surrogate pair, even when the cut poin
 });
 
 // ---------------------------------------------------------------------------
-// ProspectLedgerCache
-// ---------------------------------------------------------------------------
-
-test("ProspectLedgerCache: a positive result is cached forever (one lookup for many checks)", async () => {
-  const cache = new ProspectLedgerCache();
-  let calls = 0;
-  const lookup = async () => {
-    calls += 1;
-    return true;
-  };
-  assert.equal(await cache.check(COACH_A, PROSPECT_PHONE, lookup), true);
-  assert.equal(await cache.check(COACH_A, PROSPECT_PHONE, lookup), true);
-  assert.equal(await cache.check(COACH_A, PROSPECT_PHONE, lookup), true);
-  assert.equal(calls, 1);
-});
-
-// Adversarial-review fix (lens 2, finding 5) — without `markSent`, a
-// prospect who DMs cold moments before the portal's own send would have
-// their very next reply swallowed by a stale cached negative for the rest
-// of the TTL window, even though the send just made them genuinely eligible.
-test("ProspectLedgerCache: markSent seeds a positive entry immediately, overriding a cached negative before its TTL would otherwise expire", async () => {
-  const cache = new ProspectLedgerCache(10_000); // long TTL — would still be "negative" without the fix
-  let calls = 0;
-  const lookup = async () => {
-    calls += 1;
-    return false;
-  };
-  assert.equal(await cache.check(COACH_A, PROSPECT_PHONE, lookup), false); // cold DM, cached negative
-  assert.equal(calls, 1);
-
-  cache.markSent(COACH_A, PROSPECT_PHONE); // the portal's own sequence just messaged this number
-
-  // No further DB lookup needed — the cache already knows this number is
-  // now eligible, well within what would otherwise still be the negative's TTL.
-  assert.equal(await cache.check(COACH_A, PROSPECT_PHONE, lookup), true);
-  assert.equal(calls, 1);
-});
-
-test("ProspectLedgerCache: markSent is scoped per coach, like every other entry", async () => {
-  const cache = new ProspectLedgerCache();
-  cache.markSent("coach-yes", PROSPECT_PHONE);
-  const lookup = async (coachId: string) => coachId === "coach-yes";
-  assert.equal(await cache.check("coach-yes", PROSPECT_PHONE, lookup), true);
-  assert.equal(await cache.check("coach-no", PROSPECT_PHONE, lookup), false);
-});
-
-test("ProspectLedgerCache: a negative result is cached only within its TTL, then re-checked", async () => {
-  const cache = new ProspectLedgerCache(20); // 20ms TTL
-  let calls = 0;
-  let answer = false;
-  const lookup = async () => {
-    calls += 1;
-    return answer;
-  };
-  assert.equal(await cache.check(COACH_A, PROSPECT_PHONE, lookup), false);
-  assert.equal(await cache.check(COACH_A, PROSPECT_PHONE, lookup), false); // still within TTL — no second lookup.
-  assert.equal(calls, 1);
-  answer = true;
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(await cache.check(COACH_A, PROSPECT_PHONE, lookup), true); // TTL expired — re-checked, now eligible.
-  assert.equal(calls, 2);
-});
-
-test("ProspectLedgerCache: different coaches for the same phone are scoped independently", async () => {
-  const cache = new ProspectLedgerCache();
-  const calls: string[] = [];
-  const lookup = async (coachId: string) => {
-    calls.push(coachId);
-    return coachId === "coach-yes";
-  };
-  assert.equal(await cache.check("coach-yes", PROSPECT_PHONE, lookup), true);
-  assert.equal(await cache.check("coach-no", PROSPECT_PHONE, lookup), false);
-  assert.deepEqual(calls, ["coach-yes", "coach-no"]);
-});
-
-// ---------------------------------------------------------------------------
 // processInboundBatch — deps-injected, no real store/HTTP.
 // ---------------------------------------------------------------------------
 
 interface FakeStore {
-  wasProspectSentCalls: Array<[string, string]>;
   recordCalls: RecordInboundInput[];
   pokeCalls: number;
   seen: Set<string>;
-  wasProspectSentAnswer: boolean;
   deps: InboundDeps;
 }
 
 function makeFakeStore(): FakeStore {
   const fake: FakeStore = {
-    wasProspectSentCalls: [],
     recordCalls: [],
     pokeCalls: 0,
     seen: new Set(),
-    wasProspectSentAnswer: true,
     deps: null as unknown as InboundDeps,
   };
   fake.deps = {
-    async wasProspectSent(coachId, phone) {
-      fake.wasProspectSentCalls.push([coachId, phone]);
-      return fake.wasProspectSentAnswer;
-    },
     async recordInboundMessage(input) {
       fake.recordCalls.push(input);
       const key = `${input.coachId}:${input.waMessageId}`;
@@ -431,13 +347,6 @@ function makeFakeStore(): FakeStore {
     schedulePoke() {
       fake.pokeCalls += 1;
     },
-    // GHL custom conversation provider, Phase 3 — every EXISTING test in
-    // this suite exercises the coach path, which must stay byte-identical
-    // (plan's test 13 — a regression pin). `false` here reproduces exactly
-    // that: `processInboundBatch`'s `deps.bypassLedgerGate ? true : await
-    // cache.check(...)` branch takes the SAME `cache.check(...)` path this
-    // whole suite was written against.
-    bypassLedgerGate: false,
     log,
   };
   return fake;
@@ -445,30 +354,18 @@ function makeFakeStore(): FakeStore {
 
 test("processInboundBatch: a survivor is recorded and pokes the portal exactly once", async () => {
   const fake = makeFakeStore();
-  const cache = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg()], "notify", COACH_A, cache, fake.deps);
+  await processInboundBatch([makeMsg()], "notify", COACH_A, fake.deps);
   assert.equal(fake.recordCalls.length, 1);
   assert.equal(fake.recordCalls[0]?.fromPhone, PROSPECT_PHONE);
   assert.equal(fake.pokeCalls, 1);
 });
 
-test("processInboundBatch: the ledger gate drops a sender the portal never messaged — no record, no poke", async () => {
-  const fake = makeFakeStore();
-  fake.wasProspectSentAnswer = false;
-  const cache = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg()], "notify", COACH_A, cache, fake.deps);
-  assert.equal(fake.wasProspectSentCalls.length, 1);
-  assert.equal(fake.recordCalls.length, 0);
-  assert.equal(fake.pokeCalls, 0);
-});
-
 test("processInboundBatch: DUPLICATE DELIVERY — the same wa_message_id redelivered (e.g. Baileys reconnect resync) is recorded but never poked a second time", async () => {
   const fake = makeFakeStore();
-  const cache = new ProspectLedgerCache();
   const msg = makeMsg({ key: { id: "DUP1" } });
 
-  await processInboundBatch([msg], "notify", COACH_A, cache, fake.deps);
-  await processInboundBatch([msg], "notify", COACH_A, cache, fake.deps); // redelivered
+  await processInboundBatch([msg], "notify", COACH_A, fake.deps);
+  await processInboundBatch([msg], "notify", COACH_A, fake.deps); // redelivered
 
   assert.equal(fake.recordCalls.length, 2, "store is asked to record both times — dedupe is the DB's job, not skipped client-side");
   assert.equal(fake.pokeCalls, 1, "the second (duplicate) delivery must not trigger a second poke");
@@ -476,9 +373,7 @@ test("processInboundBatch: DUPLICATE DELIVERY — the same wa_message_id redeliv
 
 test("processInboundBatch: a filtered-out message (fromMe) never reaches the store at all", async () => {
   const fake = makeFakeStore();
-  const cache = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg({ key: { fromMe: true } })], "notify", COACH_A, cache, fake.deps);
-  assert.equal(fake.wasProspectSentCalls.length, 0);
+  await processInboundBatch([makeMsg({ key: { fromMe: true } })], "notify", COACH_A, fake.deps);
   assert.equal(fake.recordCalls.length, 0);
   assert.equal(fake.pokeCalls, 0);
 });
@@ -493,12 +388,10 @@ test("processInboundBatch: one throwing message does not stop the rest of the ba
       return { fresh: true };
     },
   };
-  const cache = new ProspectLedgerCache();
   await processInboundBatch(
     [makeMsg({ key: { id: "BOOM" } }), makeMsg({ key: { id: "OK1" } })],
     "notify",
     COACH_A,
-    cache,
     fake.deps
   );
   assert.equal(fake.recordCalls.length, 1);
@@ -506,61 +399,22 @@ test("processInboundBatch: one throwing message does not stop the rest of the ba
 });
 
 // ---------------------------------------------------------------------------
-// GHL custom conversation provider, Phase 3 (docs/GHL-PROVIDER-PLAN.md,
-// decision D4) — the ledger-gate bypass for `kind = 'ghl_location'` sessions.
-// `sessions.ts`'s `openSocket` wiring is what actually derives
-// `bypassLedgerGate` from `Session.tenantKind`; these tests exercise
-// `processInboundBatch`/`classifyInboundMessage` directly, exactly like
-// every other test in this file, with the flag passed in explicitly.
+// Every session is a GHL location (PortalHub's `kind = 'ghl_location'`
+// branch, docs/GHL-PROVIDER-PLAN.md decision D4): cold inbound is the
+// product, so there is no ledger gate at all. The coach-only cases (the gate
+// dropping a never-messaged sender, the `bypassLedgerGate: false` regression
+// pin) were removed with the gate.
 // ---------------------------------------------------------------------------
 
-test("processInboundBatch: bypassLedgerGate true — wasProspectSent is NEVER invoked, a cold sender's message is still stored, and the portal is still poked", async () => {
+test("processInboundBatch: every session — a cold sender's message is stored and the portal is poked (no ledger gate)", async () => {
   const fake = makeFakeStore();
-  fake.deps = {
-    ...fake.deps,
-    bypassLedgerGate: true,
-    // Throws if called at all — the strongest possible assertion that the
-    // ledger-gate lookup is skipped entirely under the bypass, not merely
-    // answered `true` by a permissive fake.
-    wasProspectSent() {
-      throw new Error("wasProspectSent must not be called when bypassLedgerGate is true");
-    },
-  };
-  const cache = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg()], "notify", COACH_A, cache, fake.deps);
-  assert.equal(fake.recordCalls.length, 1, "a cold sender (never on the send ledger) must still be recorded under the bypass");
+  await processInboundBatch([makeMsg()], "notify", COACH_A, fake.deps);
+  assert.equal(fake.recordCalls.length, 1, "a cold sender (never on the send ledger) must be recorded");
   assert.equal(fake.recordCalls[0]?.fromPhone, PROSPECT_PHONE);
   assert.equal(fake.pokeCalls, 1);
 });
 
-test("processInboundBatch: bypassLedgerGate false — behaviour is BYTE-IDENTICAL to the existing (default) suite above — a regression pin, not a new behaviour", async () => {
-  // Deliberately re-runs the exact scenario the very first
-  // `processInboundBatch` test above already covers (a survivor is recorded
-  // and pokes exactly once), with `bypassLedgerGate: false` passed
-  // EXPLICITLY rather than relying on `makeFakeStore`'s own default — this
-  // is what pins "false takes the same cache.check(...) path every other
-  // test in this file already exercises" as an intentional contract, not an
-  // accident of a fake's default value.
-  const fake = makeFakeStore();
-  fake.deps = { ...fake.deps, bypassLedgerGate: false };
-  const cache = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg()], "notify", COACH_A, cache, fake.deps);
-  assert.equal(fake.wasProspectSentCalls.length, 1, "the ledger gate must still be consulted when bypassLedgerGate is false");
-  assert.equal(fake.recordCalls.length, 1);
-  assert.equal(fake.pokeCalls, 1);
-
-  // And the negative case: a cold sender is STILL dropped when the bypass is off.
-  const fakeCold = makeFakeStore();
-  fakeCold.wasProspectSentAnswer = false;
-  fakeCold.deps = { ...fakeCold.deps, bypassLedgerGate: false };
-  const cache2 = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg({ key: { id: "COLD1" } })], "notify", COACH_A, cache2, fakeCold.deps);
-  assert.equal(fakeCold.recordCalls.length, 0, "a cold sender must still be dropped when bypassLedgerGate is false");
-  assert.equal(fakeCold.pokeCalls, 0);
-});
-
-test("processInboundBatch: the bypass skips EXACTLY the ledger-gate step — the rest of the filter chain (fromMe/group/reaction/stale-append) still applies identically under bypassLedgerGate: true", async () => {
-  const cache = new ProspectLedgerCache();
+test("processInboundBatch: every session — the rest of the filter chain (fromMe/group/reaction/stale-append) still applies", async () => {
   const monthOldSeconds = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
 
   const scenarios: { label: string; msg: WAMessage; batchType: "notify" | "append" }[] = [
@@ -572,16 +426,9 @@ test("processInboundBatch: the bypass skips EXACTLY the ledger-gate step — the
 
   for (const { label, msg, batchType } of scenarios) {
     const fake = makeFakeStore();
-    fake.deps = {
-      ...fake.deps,
-      bypassLedgerGate: true,
-      wasProspectSent() {
-        throw new Error(`wasProspectSent must not be called for ${label} — this message should be dropped before the ledger gate is ever reached`);
-      },
-    };
-    await processInboundBatch([msg], batchType, COACH_A, cache, fake.deps);
-    assert.equal(fake.recordCalls.length, 0, `${label} must still be dropped under the bypass`);
-    assert.equal(fake.pokeCalls, 0, `${label} must not poke the portal under the bypass`);
+    await processInboundBatch([msg], batchType, COACH_A, fake.deps);
+    assert.equal(fake.recordCalls.length, 0, `${label} must still be dropped`);
+    assert.equal(fake.pokeCalls, 0, `${label} must not poke the portal`);
   }
 });
 
@@ -602,8 +449,7 @@ test("processInboundBatch: LID 1:1, no alt, no resolver wired at all -> dropped 
   // live socket to read `signalRepository` off (or a test harness that
   // simply doesn't wire it), which must degrade to today's "unmappable"
   // behaviour, not throw.
-  const cache = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg({ key: { remoteJid: LID_JID } })], "notify", COACH_A, cache, fake.deps);
+  await processInboundBatch([makeMsg({ key: { remoteJid: LID_JID } })], "notify", COACH_A, fake.deps);
   assert.equal(fake.recordCalls.length, 0);
   assert.equal(fake.pokeCalls, 0);
 });
@@ -621,8 +467,7 @@ test("processInboundBatch: LID 1:1, no alt, resolver returns a PN JID WITH a :0 
       return "447700900999:0@s.whatsapp.net";
     },
   };
-  const cache = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg({ key: { remoteJid: LID_JID } })], "notify", COACH_A, cache, fake.deps);
+  await processInboundBatch([makeMsg({ key: { remoteJid: LID_JID } })], "notify", COACH_A, fake.deps);
   assert.equal(fake.recordCalls.length, 1);
   assert.equal(fake.recordCalls[0]?.fromPhone, "+447700900999");
   assert.equal(fake.pokeCalls, 1);
@@ -631,8 +476,7 @@ test("processInboundBatch: LID 1:1, no alt, resolver returns a PN JID WITH a :0 
 test("processInboundBatch: LID 1:1, no alt, resolver returns null -> dropped unmappable_sender", async () => {
   const fake = makeFakeStore();
   fake.deps = { ...fake.deps, async resolvePnForLid() { return null; } };
-  const cache = new ProspectLedgerCache();
-  await processInboundBatch([makeMsg({ key: { remoteJid: LID_JID } })], "notify", COACH_A, cache, fake.deps);
+  await processInboundBatch([makeMsg({ key: { remoteJid: LID_JID } })], "notify", COACH_A, fake.deps);
   assert.equal(fake.recordCalls.length, 0);
   assert.equal(fake.pokeCalls, 0);
 });
@@ -646,9 +490,8 @@ test("processInboundBatch: LID 1:1, no alt, resolver THROWS -> that message is d
       return null;
     },
   };
-  const cache = new ProspectLedgerCache();
   const okMsg = makeMsg({ key: { id: "OK1" } }); // ordinary PN message — must still be processed.
-  await processInboundBatch([makeMsg({ key: { remoteJid: LID_JID, id: "BOOM" } }), okMsg], "notify", COACH_A, cache, fake.deps);
+  await processInboundBatch([makeMsg({ key: { remoteJid: LID_JID, id: "BOOM" } }), okMsg], "notify", COACH_A, fake.deps);
   assert.equal(fake.recordCalls.length, 1, "only the PN message was recorded — the throwing LID message never was");
   assert.equal(fake.recordCalls[0]?.waMessageId, "OK1");
   assert.equal(fake.pokeCalls, 1);
@@ -659,12 +502,10 @@ test("processInboundBatch: LID 1:1, no alt, resolver THROWS -> that message is d
 // alt is dropped identically whether or not a username happens to be present.
 test("processInboundBatch: remoteJidUsername present with no alt still drops unmappable_sender — usernames never map to phones", async () => {
   const fake = makeFakeStore();
-  const cache = new ProspectLedgerCache();
   await processInboundBatch(
     [makeMsg({ key: { remoteJid: LID_JID, remoteJidUsername: "some.business.username" } })],
     "notify",
     COACH_A,
-    cache,
     fake.deps
   );
   assert.equal(fake.recordCalls.length, 0);
@@ -677,9 +518,8 @@ test("processInboundBatch: remoteJidUsername present with no alt still drops unm
 // at the pure-classifier level (see the classify-level trap test above).
 test("processInboundBatch: THE TRAP, end to end — a LID whose alt is itself @lid is never recorded under the alt's digits", async () => {
   const fake = makeFakeStore();
-  const cache = new ProspectLedgerCache();
   const msg = makeMsg({ key: { remoteJid: LID_JID, remoteJidAlt: "987654321098765@lid" } });
-  await processInboundBatch([msg], "notify", COACH_A, cache, fake.deps);
+  await processInboundBatch([msg], "notify", COACH_A, fake.deps);
   assert.equal(fake.recordCalls.length, 0, "must never reach the store under the fabricated LID-as-phone number");
   assert.equal(fake.pokeCalls, 0);
 });

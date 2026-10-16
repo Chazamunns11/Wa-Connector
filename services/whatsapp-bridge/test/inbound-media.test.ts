@@ -2,8 +2,9 @@
  * src/inbound.ts — the media plan's additions (docs/MEDIA-PLAN.md §6):
  * `classifyInboundMessage`'s `mediaRef` construction (incl. sticker and
  * view-once exclusion), and `processInboundBatch`'s capture-routing branch
- * (the hard boundary — ghl_location + WA_MEDIA_INBOUND_ENABLED + a
- * capturable mediaRef, ALL THREE, before a download is ever considered).
+ * (the hard boundary — WA_MEDIA_INBOUND_ENABLED + a capturable mediaRef,
+ * BOTH, before a download is ever considered; every session is a GHL
+ * location, so the old ghl_location-only condition is always met).
  * No network, no Baileys, no Supabase — fabricated WAMessage objects and
  * fake deps, exactly this package's existing convention (test/inbound.test.ts).
  */
@@ -11,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pino } from "pino";
 import type { WAMessage } from "@whiskeysockets/baileys";
-import { classifyInboundMessage, processInboundBatch, ProspectLedgerCache, type InboundDeps, type RecordInboundInput } from "../src/inbound.js";
+import { classifyInboundMessage, processInboundBatch, type InboundDeps, type RecordInboundInput } from "../src/inbound.js";
 
 const log = pino({ level: "silent" });
 const COACH_A = "coach-a";
@@ -139,12 +140,9 @@ interface FakeHarness {
   deps: InboundDeps;
 }
 
-function makeHarness(opts: { bypassLedgerGate: boolean; withMediaDeps: boolean }): FakeHarness {
+function makeHarness(opts: { withMediaDeps: boolean }): FakeHarness {
   const h: FakeHarness = { recordCalls: [], pokeCalls: 0, beginCaptureCalls: [], deps: null as unknown as InboundDeps };
   h.deps = {
-    async wasProspectSent() {
-      return true;
-    },
     async recordInboundMessage(input) {
       h.recordCalls.push(input);
       return { fresh: true };
@@ -152,7 +150,6 @@ function makeHarness(opts: { bypassLedgerGate: boolean; withMediaDeps: boolean }
     schedulePoke() {
       h.pokeCalls += 1;
     },
-    bypassLedgerGate: opts.bypassLedgerGate,
     media: opts.withMediaDeps
       ? {
           beginCapture(input) {
@@ -167,9 +164,9 @@ function makeHarness(opts: { bypassLedgerGate: boolean; withMediaDeps: boolean }
 
 const IMAGE_MSG = makeMsg({ message: { imageMessage: { mediaKey: new Uint8Array([1]), mimetype: "image/jpeg" } } });
 
-test("processInboundBatch: ghl_location + media deps + capturable image -> beginCapture called, NOT an immediate poke", async () => {
-  const h = makeHarness({ bypassLedgerGate: true, withMediaDeps: true });
-  await processInboundBatch([IMAGE_MSG], "notify", COACH_A, new ProspectLedgerCache(), h.deps);
+test("processInboundBatch: media deps + capturable image -> beginCapture called, NOT an immediate poke", async () => {
+  const h = makeHarness({ withMediaDeps: true });
+  await processInboundBatch([IMAGE_MSG], "notify", COACH_A, h.deps);
   assert.equal(h.recordCalls.length, 1);
   assert.equal(h.recordCalls[0]?.captureMedia, true, "the store insert must be told to set media_status='pending'");
   assert.equal(h.beginCaptureCalls.length, 1);
@@ -177,54 +174,42 @@ test("processInboundBatch: ghl_location + media deps + capturable image -> begin
   assert.equal(h.pokeCalls, 0, "beginCapture owns the eventual poke — processInboundBatch must not ALSO poke immediately");
 });
 
-test("processInboundBatch: ghl_location + media deps + TEXT reply -> pokes immediately, exactly like today (media routing only ever applies to capturable media)", async () => {
-  const h = makeHarness({ bypassLedgerGate: true, withMediaDeps: true });
-  await processInboundBatch([makeMsg()], "notify", COACH_A, new ProspectLedgerCache(), h.deps);
+test("processInboundBatch: media deps + TEXT reply -> pokes immediately, exactly like today (media routing only ever applies to capturable media)", async () => {
+  const h = makeHarness({ withMediaDeps: true });
+  await processInboundBatch([makeMsg()], "notify", COACH_A, h.deps);
   assert.equal(h.beginCaptureCalls.length, 0);
   assert.equal(h.recordCalls[0]?.captureMedia, false);
   assert.equal(h.pokeCalls, 1);
 });
 
-test("processInboundBatch: media deps present but bypassLedgerGate FALSE (a coach session) -> media capture NEVER runs, even for a capturable image — the hard boundary holds", async () => {
-  // Belt-and-braces: sessions.ts is only ever supposed to construct `deps.media`
-  // for a confirmed ghl_location session, but this proves processInboundBatch
-  // ITSELF refuses to route to capture without bypassLedgerGate true, so a
-  // hypothetical future mis-wiring still cannot download media for a coach.
-  const h = makeHarness({ bypassLedgerGate: false, withMediaDeps: true });
-  await processInboundBatch([IMAGE_MSG], "notify", COACH_A, new ProspectLedgerCache(), h.deps);
-  assert.equal(h.beginCaptureCalls.length, 0, "capture must never run for a coach session regardless of deps.media being set");
-  assert.equal(h.recordCalls[0]?.captureMedia, false);
-  assert.equal(h.pokeCalls, 1, "falls through to the ordinary immediate-poke path, exactly like today");
-});
-
-test("processInboundBatch: ghl_location but media deps UNDEFINED (WA_MEDIA_INBOUND_ENABLED=false) -> capture never runs, immediate poke, byte-identical to pre-media-plan behaviour", async () => {
-  const h = makeHarness({ bypassLedgerGate: true, withMediaDeps: false });
-  await processInboundBatch([IMAGE_MSG], "notify", COACH_A, new ProspectLedgerCache(), h.deps);
+test("processInboundBatch: media deps UNDEFINED (WA_MEDIA_INBOUND_ENABLED=false) -> capture never runs, immediate poke, byte-identical to pre-media-plan behaviour", async () => {
+  const h = makeHarness({ withMediaDeps: false });
+  await processInboundBatch([IMAGE_MSG], "notify", COACH_A, h.deps);
   assert.equal(h.beginCaptureCalls.length, 0);
   assert.equal(h.recordCalls[0]?.captureMedia, false);
   assert.equal(h.pokeCalls, 1);
 });
 
-test("processInboundBatch: a sticker under ghl_location + media deps is never routed to capture (no mediaRef) — pokes immediately", async () => {
-  const h = makeHarness({ bypassLedgerGate: true, withMediaDeps: true });
+test("processInboundBatch: a sticker with media deps is never routed to capture (no mediaRef) — pokes immediately", async () => {
+  const h = makeHarness({ withMediaDeps: true });
   const sticker = makeMsg({ message: { stickerMessage: { mediaKey: new Uint8Array([1]) } } });
-  await processInboundBatch([sticker], "notify", COACH_A, new ProspectLedgerCache(), h.deps);
+  await processInboundBatch([sticker], "notify", COACH_A, h.deps);
   assert.equal(h.beginCaptureCalls.length, 0);
   assert.equal(h.recordCalls[0]?.captureMedia, false);
   assert.equal(h.pokeCalls, 1);
 });
 
-test("processInboundBatch: a view-once image under ghl_location + media deps is never routed to capture — pokes immediately", async () => {
-  const h = makeHarness({ bypassLedgerGate: true, withMediaDeps: true });
+test("processInboundBatch: a view-once image with media deps is never routed to capture — pokes immediately", async () => {
+  const h = makeHarness({ withMediaDeps: true });
   const viewOnce = makeMsg({ message: { viewOnceMessageV2: { message: { imageMessage: { mediaKey: new Uint8Array([1]) } } } } });
-  await processInboundBatch([viewOnce], "notify", COACH_A, new ProspectLedgerCache(), h.deps);
+  await processInboundBatch([viewOnce], "notify", COACH_A, h.deps);
   assert.equal(h.beginCaptureCalls.length, 0);
   assert.equal(h.recordCalls[0]?.captureMedia, false);
   assert.equal(h.pokeCalls, 1);
 });
 
 test("processInboundBatch: a redelivered (non-fresh) capturable media row never re-invokes beginCapture", async () => {
-  const h = makeHarness({ bypassLedgerGate: true, withMediaDeps: true });
+  const h = makeHarness({ withMediaDeps: true });
   h.deps = {
     ...h.deps,
     async recordInboundMessage(input) {
@@ -232,7 +217,7 @@ test("processInboundBatch: a redelivered (non-fresh) capturable media row never 
       return { fresh: false }; // simulates a Baileys redelivery — already recorded.
     },
   };
-  await processInboundBatch([IMAGE_MSG], "notify", COACH_A, new ProspectLedgerCache(), h.deps);
+  await processInboundBatch([IMAGE_MSG], "notify", COACH_A, h.deps);
   assert.equal(h.beginCaptureCalls.length, 0);
   assert.equal(h.pokeCalls, 0);
 });

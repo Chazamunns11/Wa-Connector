@@ -28,7 +28,7 @@
  * that method's own JSDoc in src/sessions.ts). Every test below that has an
  * in-flight `startSession` attempt still paused at the moment `shutdown()`
  * is called therefore resolves its blocking deferred (`claim`/`sweep`/
- * `ensureRow`/`tenantB` etc.) BEFORE awaiting `manager.shutdown()` to
+ * `ensureRow`/`activityB` etc.) BEFORE awaiting `manager.shutdown()` to
  * completion, never after — awaiting shutdown() first, with the blocker
  * still unresolved, now deadlocks the test instead of merely proving a
  * weaker guarantee. That is not a test-authoring quirk to work around; it
@@ -106,7 +106,6 @@ function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
 interface StoreOverrides {
   ensureSessionRow?: (coachId: string) => Promise<void>;
   getDailyActivity?: (coachId: string) => Promise<{ attemptCount: number; lastAttemptAt: string | null }>;
-  getTenantKind?: (coachId: string) => Promise<"coach" | "ghl_location" | null>;
   claimSessionLock?: (coachId: string, instanceId: string, ttlMs: number) => Promise<boolean>;
   renewSessionLock?: (coachId: string, instanceId: string) => Promise<boolean>;
   releaseSessionLock?: (coachId: string, instanceId: string) => Promise<void>;
@@ -119,7 +118,6 @@ function makeFakeStore(overrides: StoreOverrides = {}) {
   const store = {
     ensureSessionRow: overrides.ensureSessionRow ?? (async () => {}),
     getDailyActivity: overrides.getDailyActivity ?? (async () => ({ attemptCount: 0, lastAttemptAt: null })),
-    getTenantKind: overrides.getTenantKind ?? (async () => "coach" as const),
     claimSessionLock:
       overrides.claimSessionLock ??
       (async (coachId: string, instanceId: string, ttlMs: number) => {
@@ -362,12 +360,12 @@ test("resumeAll's sweep stops as soon as shutdown begins mid-loop — a coach la
 
 test("shutdown() with several coaches racing at three DIFFERENT stages simultaneously — every lease ends up released, none orphaned, before shutdown() itself resolves", async () => {
   const claimA = deferred<boolean>(); // paused waiting on the lease claim itself (before it's granted)
-  const tenantB = deferred<"coach">(); // paused earlier still — before the lease is touched at all
+  const activityB = deferred<{ attemptCount: number; lastAttemptAt: string | null }>(); // paused earlier still — before the lease is touched at all
   const sweepC = deferred<[]>(); // paused after insertion, before openSocket
   const { store, calls } = makeFakeStore({
-    getTenantKind: async (coachId) => {
-      if (coachId === "coach-B") return tenantB.promise;
-      return "coach" as const;
+    getDailyActivity: async (coachId) => {
+      if (coachId === "coach-B") return activityB.promise;
+      return { attemptCount: 0, lastAttemptAt: null };
     },
     claimSessionLock: async (coachId, instanceId, ttlMs) => {
       calls.push({ method: "claimSessionLock", args: [coachId, instanceId, ttlMs] });
@@ -388,7 +386,7 @@ test("shutdown() with several coaches racing at three DIFFERENT stages simultane
   await flushMicrotasks();
   // Each coach should now be paused at ITS OWN distinct checkpoint:
   //   A: inside session.lock.acquire(), the claim itself unresolved.
-  //   B: inside resolveTenantKind, before the lease has been touched at all.
+  //   B: inside getDailyActivity, before the lease has been touched at all.
   //   C: past the claim and the insert into this.sessions, inside the
   //      interrupted-message sweep, before openSocket.
   assert.equal(manager.getSnapshot("coach-A"), null, "A must not be registered yet — still awaiting its claim");
@@ -405,7 +403,7 @@ test("shutdown() with several coaches racing at three DIFFERENT stages simultane
   assert.equal(shutdownSettled, false, "shutdown() must still be waiting on all three in-flight attempts");
 
   claimA.resolve(true);
-  tenantB.resolve("coach");
+  activityB.resolve({ attemptCount: 0, lastAttemptAt: null });
   sweepC.resolve([]);
 
   const results = await Promise.allSettled([startA, startB, startC]);

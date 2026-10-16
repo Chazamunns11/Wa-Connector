@@ -6,7 +6,7 @@
  * message the linked device sends or receives, including our own bridge's
  * echoes, group chatter, status updates, reactions, edits, and offline
  * history backfill) into "genuine 1:1 replies from the prospect", plus the
- * ledger-gated write to `whatsapp_inbound_messages` (0048) and the
+ * write to `whatsapp_inbound_messages` (0048) and the
  * contentless poke that tells the portal to drain them.
  *
  * DESIGN: `classifyInboundMessage` is PURE — no Supabase, no HTTP, no
@@ -98,8 +98,8 @@
  *      `containsRejectedContentAtAnyDepth`'s own recursive-wrapper-check
  *      shape. Populating this is PURE — no download happens here; the actual
  *      fetch/sniff/store pipeline (`src/media-capture.ts`) only ever runs
- *      when `processInboundBatch` decides this row is eligible (ghl_location
- *      tenant + `WA_MEDIA_INBOUND_ENABLED` + a non-null `mediaRef`).
+ *      when `processInboundBatch` decides this row is eligible
+ *      (`WA_MEDIA_INBOUND_ENABLED` + a non-null `mediaRef`).
  *   7. JID -> E.164 (the Phase 0 contract, never loosened; see
  *      `resolveSenderE164`). Baileys 7.x removed `key.senderPn` (the 6.7.x
  *      field this used to read) — the replacement is `key.remoteJidAlt`,
@@ -137,33 +137,15 @@
  *      the 0045 contract. Guessing wrong here would message (or worse,
  *      attribute a reply to) a stranger.
  *
- * THE LEDGER GATE (privacy — hard rule 4, and its own file-header note in
- * 0048): even a message that survives every step above is dropped, unstored
- * and unforwarded, unless this coach's OWN send ledger
- * (`whatsapp_messages`, 0046) shows a `status = 'sent'` row to this exact
- * phone number (`BridgeStore.wasProspectSent`). The linked WhatsApp number is
- * the coach's REAL PERSONAL PHONE — family, friends, and existing clients
- * all message it too. Only threads the PORTAL itself opened are eligible to
- * ever enter this database. `ProspectLedgerCache` exists purely so this
- * check is not one Supabase query per inbound message — it is not a
- * correctness mechanism (the DB read behind it is still the source of
- * truth), only a hot-path optimisation. Its negative-result TTL is
- * deliberately short (adversarial-review fix, lens 2 finding 5) and is also
- * proactively CLEARED the instant this coach's own session confirms a send
- * to a number (`ProspectLedgerCache.markSent`, called from `sessions.ts`'s
- * dispatch path) — without that, a prospect who DMs cold seconds before the
- * portal's own sequence messages them for the first time could have their
- * very next reply swallowed by a stale cached "not eligible" answer.
- *
- * GHL CUSTOM CONVERSATION PROVIDER, PHASE 3 AMENDMENT (docs/GHL-PROVIDER-PLAN.md,
- * decision D4) — the ledger gate above is SKIPPED for a `kind = 'ghl_location'`
- * session (`InboundDeps.bypassLedgerGate`, read once at session start from
- * `whatsapp_tenants.kind` — see `sessions.ts`'s `doStartSession`). This is
- * the ONLY safety invariant in this package Phase 3 is permitted to change —
- * see `processInboundBatch`'s own in-code comment at the branch for the full
- * scope/rationale argument, and this package's README "Safety invariants"
- * section for the amended, restated invariant. Every OTHER step in this
- * filter chain (1-7 above) is untouched for every session, GHL or coach.
+ * NO LEDGER GATE: every session is a GHL-location tenant (PortalHub's
+ * `kind = 'ghl_location'` branch, docs/GHL-PROVIDER-PLAN.md decision D4).
+ * PortalHub also served Hub coach sessions, whose linked number was the
+ * coach's personal phone, so it dropped any sender the coach's own send
+ * ledger had never messaged (`wasProspectSent` + `ProspectLedgerCache`).
+ * That gate was always skipped for GHL locations — the number is a dedicated
+ * business number and cold inbound from a prospect is the product — so it
+ * was removed together with the coach path. Every OTHER step in the filter
+ * chain above (1-7) runs exactly as before.
  *
  * DEDUPE: Baileys redelivers on reconnect/offline-resync, so intake must be
  * idempotent on `key.id`. The AUTHORITATIVE mechanism is 0048's unique
@@ -634,61 +616,6 @@ function sanitizeBody(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Ledger gate cache — see file header. NOT a correctness mechanism: a cache
-// miss (or a false negative that hasn't expired yet) just costs one extra
-// Supabase read next time; it can never turn an ineligible sender eligible.
-// ---------------------------------------------------------------------------
-
-/**
- * Per-session cache in front of `BridgeStore.wasProspectSent`. A coach
- * cannot "un-send" a message, so a positive result is cached forever; a
- * negative result (this number has never been sent to) is cached only
- * briefly, so a genuine first-contact send moments later is still picked up
- * promptly rather than blocked by a stale negative for the cache's whole
- * lifetime.
- */
-export class ProspectLedgerCache {
-  private readonly confirmed = new Set<string>();
-  private readonly negativeUntil = new Map<string, number>();
-
-  constructor(private readonly negativeTtlMs: number = 5 * 60_000) {}
-
-  async check(coachId: string, phone: string, lookup: (coachId: string, phone: string) => Promise<boolean>): Promise<boolean> {
-    const key = `${coachId}:${phone}`;
-    if (this.confirmed.has(key)) return true;
-    const negExpiry = this.negativeUntil.get(key);
-    if (negExpiry !== undefined && negExpiry > Date.now()) return false;
-
-    const result = await lookup(coachId, phone);
-    if (result) {
-      this.confirmed.add(key);
-      this.negativeUntil.delete(key);
-    } else {
-      this.negativeUntil.set(key, Date.now() + this.negativeTtlMs);
-    }
-    return result;
-  }
-
-  /**
-   * Adversarial-review fix (lens 2, finding 5) — without this, a genuine
-   * FIRST reply could be permanently swallowed: a prospect DMs cold (negative
-   * cached for `negativeTtlMs`), the portal's OWN sequence sends them a
-   * message moments later (which really does make them ledger-eligible from
-   * that instant on), and a reply arriving before the stale negative expires
-   * would still be dropped by `check` above without ever consulting the DB
-   * again. `sessions.ts`'s send path calls this the moment `markMessageSent`
-   * confirms a send — seeding the SAME positive-forever entry a fresh
-   * `wasProspectSent` read would itself populate, instead of waiting out the
-   * TTL. Idempotent and safe to call even when no negative was ever cached.
-   */
-  markSent(coachId: string, phone: string): void {
-    const key = `${coachId}:${phone}`;
-    this.confirmed.add(key);
-    this.negativeUntil.delete(key);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Batch processing — the impure half, deps-injected so it is testable
 // against fakes (see module header).
 // ---------------------------------------------------------------------------
@@ -706,9 +633,9 @@ export interface RecordInboundInput {
    * `media_status = 'pending'` rather than leaving the column `NULL`.
    * Omitted (or `false`) means exactly today's insert — every media_status
    * column stays untouched/NULL, byte-identical to pre-media-plan behaviour.
-   * NEVER set for a coach-tenant row (see `processInboundBatch`'s own
-   * `shouldCaptureMedia` computation — the hard boundary lives there, not
-   * here; this field is just what the store insert reads).
+   * See `processInboundBatch`'s own `shouldCaptureMedia` computation — the
+   * hard boundary lives there, not here; this field is just what the store
+   * insert reads.
    */
   captureMedia?: boolean;
 }
@@ -729,35 +656,16 @@ export interface MediaCaptureHook {
 }
 
 export interface InboundDeps {
-  /** `BridgeStore.wasProspectSent`, or a fake in tests. */
-  wasProspectSent(coachId: string, fromPhone: string): Promise<boolean>;
   /** `BridgeStore.recordInboundMessage`, or a fake in tests. Must report `fresh` accurately (see file header's DEDUPE note). */
   recordInboundMessage(input: RecordInboundInput): Promise<{ fresh: boolean }>;
   /** Fire-and-forget "drain now" request to the portal — never awaited, never throws (see src/poke.ts). */
   schedulePoke(): void;
   /**
-   * GHL custom conversation provider, Phase 3 (docs/GHL-PROVIDER-PLAN.md's
-   * Phase 3 follow-on, decision D4) — `true` iff this session's own
-   * `whatsapp_tenants.kind` is `'ghl_location'` (read once by
-   * `sessions.ts`'s `doStartSession`, cached on the `Session` object,
-   * default `'coach'` on any lookup failure — see that call site's own
-   * comment for the fail-closed justification). When `true`, `processInboundBatch`
-   * SKIPS the ledger-gate check below entirely — see the branch itself for
-   * the full scope argument. `false` for every coach session, always — this
-   * bypass is opt-in on a positive `'ghl_location'` read, never the other
-   * way round.
-   */
-  bypassLedgerGate: boolean;
-  /**
    * Media plan (docs/MEDIA-PLAN.md §2 rule 4/§8) — `undefined` means media
-   * capture is ENTIRELY INERT for this session: either `WA_MEDIA_INBOUND_ENABLED`
-   * is `false` (the global dark switch), or `sessions.ts` simply never
-   * constructs this for a coach session in the first place (belt-and-braces
-   * — see `processInboundBatch`'s `shouldCaptureMedia`, which ALSO requires
-   * `bypassLedgerGate: true` before ever touching this, so even a
-   * hypothetically-miswired coach session cannot trigger a download). When
-   * `undefined`, every fresh row pokes immediately — byte-identical to the
-   * pre-media-plan behaviour, regardless of message type or tenant kind.
+   * capture is ENTIRELY INERT for this session: `WA_MEDIA_INBOUND_ENABLED`
+   * is `false` (the global dark switch), so `sessions.ts` never constructs
+   * it. When `undefined`, every fresh row pokes immediately — byte-identical
+   * to the pre-media-plan behaviour, regardless of message type.
    */
   media?: MediaCaptureHook;
   /**
@@ -784,7 +692,7 @@ export interface InboundDeps {
 }
 
 /**
- * Runs the full pipeline (classify -> ledger gate -> record -> poke) over
+ * Runs the full pipeline (classify -> record -> poke) over
  * one `messages.upsert` batch for one coach. Entirely self-wrapped: a throw
  * from ANY step for ONE message is caught and logged, never propagated —
  * one malformed message must never take down the batch, let alone the
@@ -794,7 +702,6 @@ export async function processInboundBatch(
   messages: WAMessage[],
   batchType: MessageUpsertType,
   coachId: string,
-  cache: ProspectLedgerCache,
   deps: InboundDeps
 ): Promise<void> {
   for (const msg of messages) {
@@ -829,70 +736,21 @@ export async function processInboundBatch(
       } else {
         reply = result.reply;
       }
-      // GHL custom conversation provider, Phase 3, decision D4 — SCOPED,
-      // JUSTIFIED-IN-CODE ledger-gate bypass. This is the ONLY safety
-      // invariant in this file's package that Phase 3 is permitted to
-      // change (README "Safety invariants" section) — everything else about
-      // the filter chain above (fromMe, groups, edits/reactions, the
-      // JID->E.164 mapping) is untouched for EVERY session, GHL or coach.
-      //
-      // WHY THIS IS SAFE, RESTATED HERE (not just in the plan doc) —
-      // SCOPE: `deps.bypassLedgerGate` is read once at session start
-      // (`sessions.ts`'s `doStartSession`) from `whatsapp_tenants.kind`, a
-      // column this bridge never writes and the portal never updates after
-      // insert (0069's `whatsapp_tenants_kind_shape` CHECK pins `kind =
-      // 'coach'` to rows where `id = coach_id = coaches.id`, with no UPDATE
-      // path to `kind` anywhere in the schema). A coach tenant is therefore
-      // PHYSICALLY INCAPABLE of ever reading back `'ghl_location'` — this
-      // bypass cannot leak onto a coach's session by any code path, present
-      // or future, short of a hand-written migration that changes the CHECK
-      // itself.
-      //
-      // WHY THIS IS SAFE — THE RATIONALE ITSELF: the ledger-gate invariant's
-      // stated rule (this file's own header, "THE LEDGER GATE") is that "the
-      // linked WhatsApp number is the coach's REAL PERSONAL PHONE — family,
-      // friends, and existing clients all message it too". For a
-      // `'ghl_location'` tenant that rationale does not apply AT ALL: the
-      // number is, contractually (the operator go-live checklist requires
-      // it), a DEDICATED BUSINESS NUMBER the client is paying specifically
-      // for WAGHL-parity two-way WhatsApp — cold inbound from a prospect who
-      // has never been messaged first is the ENTIRE PRODUCT for this tenant
-      // kind, not an edge case to filter out.
-      //
-      // WHY THIS IS SAFE — FAIL-CLOSED ON DOUBT: `doStartSession` defaults
-      // to `'coach'` (the STRICTER gate) on any lookup failure/null/throw,
-      // never to the looser bypass — a Supabase blip at session start
-      // degrades a GHL session to "cold inbound dropped until the next
-      // session restart", never a coach session to "cold inbound now
-      // accepted". See that call site's own comment.
-      //
-      // WHAT THIS DOES NOT CHANGE: the bypass skips EXACTLY this one check —
-      // every filter above (fromMe/groups/status-broadcast/reactions/edits/
-      // protocol messages/unmappable senders) still runs identically for a
-      // GHL session. This is not a "let everything through for GHL" switch;
-      // it is "one specific eligibility check, whose entire premise doesn't
-      // hold for this tenant kind, is skipped".
-      const eligible = deps.bypassLedgerGate ? true : await cache.check(coachId, reply.fromPhone, deps.wasProspectSent);
-      if (!eligible) {
-        // Ledger gate (hard rule 4) — this number is not a thread the portal
-        // ever opened. Never stored, never forwarded. No phone/body logged.
-        deps.log.debug({ coachId }, "inbound message dropped: sender not on this coach's send ledger");
-        continue;
-      }
+      // No ledger gate — every session is a GHL location (file header, "NO
+      // LEDGER GATE"): a reply surviving the filter chain above is recorded.
 
       // Media plan (docs/MEDIA-PLAN.md §2 rule 4/§6.1) — THE hard boundary,
-      // enforced in code, not a config default: media capture requires ALL
-      // THREE of (a) this session bypassing the ledger gate at all (i.e. a
-      // confirmed 'ghl_location' tenant — never true for a coach session,
-      // see `InboundDeps.bypassLedgerGate`'s own fail-closed JSDoc), (b) the
-      // media capture deps actually being wired in (`sessions.ts` only ever
-      // constructs `deps.media` when `WA_MEDIA_INBOUND_ENABLED` is true), and
-      // (c) this specific reply having a capturable `mediaRef` (text,
-      // stickers, and view-once media never do — see `classifyInboundMessage`).
-      // Any one of the three being false/absent means EXACTLY today's
-      // behaviour: `media_status` untouched (stays NULL) and an immediate
-      // poke on every fresh row, regardless of message type or tenant kind.
-      const shouldCaptureMedia = deps.bypassLedgerGate && deps.media !== undefined && reply.mediaRef !== null;
+      // enforced in code, not a config default: media capture requires BOTH
+      // (a) the media capture deps actually being wired in (`sessions.ts`
+      // only ever constructs `deps.media` when `WA_MEDIA_INBOUND_ENABLED` is
+      // true), and (b) this specific reply having a capturable `mediaRef`
+      // (text, stickers, and view-once media never do — see
+      // `classifyInboundMessage`). PortalHub also required a confirmed
+      // 'ghl_location' tenant; every session here is one. Either being
+      // false/absent means EXACTLY today's behaviour: `media_status`
+      // untouched (stays NULL) and an immediate poke on every fresh row,
+      // regardless of message type.
+      const shouldCaptureMedia = deps.media !== undefined && reply.mediaRef !== null;
 
       const { fresh } = await deps.recordInboundMessage({
         coachId,
