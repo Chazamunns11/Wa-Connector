@@ -289,3 +289,16 @@ test("quantity sync: Stripe failure notifies", async () => {
   assert.deepEqual(await syncSubscriptionQuantity(qrepo(2), deps, account()), { ok: false, reason: "stripe_failed" });
   assert.deepEqual(notes, ["Billing quantity sync failed for account acc-1: boom"]);
 });
+
+test("subscription.updated re-syncs the Stripe quantity so a failed deactivation sync is healed", async () => {
+  const h = harness();
+  await run(h, { id: "evt_q", type: "customer.subscription.updated", data: { object: sub({ status: "active" }) } });
+  assert.ok(h.log.includes("sync"));
+});
+
+test("subscription.deleted does not re-sync the quantity", async () => {
+  const h = harness();
+  h.state.live = { ...sub({ status: "canceled", canceled_at: 1_800_000_000 }) };
+  await run(h, { id: "evt_q2", type: "customer.subscription.deleted", data: { object: sub({ status: "canceled" }) } });
+  assert.equal(h.log.includes("sync"), false);
+});

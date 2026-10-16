@@ -35,6 +35,7 @@ import type {
 } from "@/lib/types";
 import { LOGO_BUCKET, LOGO_EXTENSION, normaliseHex, type SafeLogoType } from "@/lib/brand";
 import { ghlTenantKeyQueryFilters } from "@/lib/ghl";
+import { ActivationCapError } from "@/lib/billing/activation";
 import {
   buildGhlHealthSnapshot,
   GHL_HEALTH_INBOUND_ROW_CAP,
@@ -1194,10 +1195,24 @@ export class SupabaseGhlRepository implements GhlRepository {
     return (data ?? []).length === 1;
   }
 
-  async setGhlActivated(locationId: string, activatedAt: string | null) {
+  async setGhlActivated(locationId: string, activatedAt: string | null, opts: { platformCap?: number | null } = {}) {
     const supabase = getServiceClient();
-    const { error } = await supabase.from("ghl_accounts").update({ activated_at: activatedAt }).eq("location_id", locationId);
-    if (error) throw error;
+    if (activatedAt === null) {
+      const { data, error } = await supabase.from("ghl_accounts").update({ activated_at: null }).eq("location_id", locationId).select("location_id");
+      if (error) throw error;
+      return (data ?? []).length;
+    }
+    const { data, error } = await supabase.rpc("activate_ghl_location", {
+      p_location_id: locationId,
+      p_activated_at: activatedAt,
+      p_platform_cap: opts.platformCap ?? null,
+    });
+    if (error) {
+      if (/trial_cap/.test(error.message)) throw new ActivationCapError("trial_cap");
+      if (/platform_cap/.test(error.message)) throw new ActivationCapError("platform_cap");
+      throw error;
+    }
+    return typeof data === "number" ? data : 0;
   }
 
   async countActivatedForAccount(accountId: string) {

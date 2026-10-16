@@ -580,8 +580,12 @@ export interface GhlRepository {
   listGhlAccountsForAccount(accountId: string): Promise<GhlAccountSummary[]>;
   /** Claims an unowned location (UPDATE ... WHERE account_id IS NULL); true iff exactly one row changed. */
   claimGhlAccount(locationId: string, accountId: string): Promise<boolean>;
-  /** Sets or clears (null) activated_at on a location. */
-  setGhlActivated(locationId: string, activatedAt: string | null): Promise<void>;
+  /**
+   * Clears (null) or sets activated_at; returns the rows changed. Setting is conditional
+   * (only while activated_at IS NULL, so 0 = already active) and the database enforces the
+   * trial cap and the optional platform cap, throwing ActivationCapError when it refuses.
+   */
+  setGhlActivated(locationId: string, activatedAt: string | null, opts?: { platformCap?: number | null }): Promise<number>;
   /** Number of activated locations owned by this account. */
   countActivatedForAccount(accountId: string): Promise<number>;
   /** Number of activated locations across all accounts. */

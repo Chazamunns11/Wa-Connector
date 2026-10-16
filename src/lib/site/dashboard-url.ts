@@ -12,6 +12,7 @@ export function parseFilter(value: string | string[] | undefined): DashboardFilt
 export type DashboardResult =
   | "activated"
   | "deactivated"
+  | "deactivated_billing_pending"
   | "disconnected"
   | "link"
   | "trial_cap"
@@ -25,6 +26,7 @@ export type DashboardResult =
 export const DASHBOARD_RESULT_COPY: Record<DashboardResult, string> = {
   activated: "Number activated. Scan the QR code to connect WhatsApp.",
   deactivated: "Number deactivated. It will no longer send or be billed.",
+  deactivated_billing_pending: "Deactivated. Your bill will update shortly.",
   disconnected: "WhatsApp disconnected from this number.",
   link: "Connect link ready to share.",
   trial_cap: TRIAL_CAP_MESSAGE,

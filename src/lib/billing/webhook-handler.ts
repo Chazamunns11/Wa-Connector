@@ -104,6 +104,8 @@ async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeE
         ...(status === "cancelled" ? {} : { cleanedUpAt: null }),
         stripeSubscriptionId: sub.id,
       });
+      // Heals a quantity left stale by a failed sync (e.g. after a deactivation).
+      if (status !== "cancelled") await deps.syncQuantity({ ...account, billingStatus: status, stripeSubscriptionId: sub.id });
       return { kind: "handled", type: event.type };
     }
     case "invoice.payment_failed": {

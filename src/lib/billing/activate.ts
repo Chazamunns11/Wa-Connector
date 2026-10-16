@@ -1,6 +1,6 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import type { retrieveSubscription, setSubscriptionItemQuantity } from "@/lib/stripe/billing";
-import { canActivate, type ActivateRefusal } from "./activation";
+import { ActivationCapError, canActivate, type ActivateRefusal } from "./activation";
 import { syncSubscriptionQuantity } from "./quantity";
 
 export type ActivateRepo = Pick<
@@ -22,8 +22,10 @@ export type ActivateOutcome = { ok: true } | { ok: false; reason: ActivateRefusa
  * Activates one of the account's locations. The location must belong to
  * `accountId` (never trust the caller's location id). Stripe's quantity is
  * raised BEFORE activated_at is written, so a number is never active but
- * unbilled; if the write then fails the quantity is put back and the error
- * rethrown.
+ * unbilled. The write is conditional and cap-checked in the database, so two
+ * parallel activations cannot both land past the cap; whatever happens, Stripe
+ * is then re-synced to the true activated count. A database cap refusal or a
+ * no-op write is returned as a refusal; any other error is rethrown.
  */
 export async function activateLocation(
   repo: ActivateRepo,
@@ -60,18 +62,30 @@ export async function activateLocation(
     if (!raised.ok) return { ok: false, reason: "stripe_failed" };
   }
 
-  try {
-    await repo.setGhlActivated(locationId, deps.now().toISOString());
-  } catch (err) {
-    if (itemId) {
-      try {
-        await deps.setQuantity(itemId, accountActive);
-      } catch {
-        deps.notify(`Billing quantity re-sync failed after a failed activation for account ${accountId}`);
-      }
+  // Re-syncs Stripe to the true activated count (never a stale read plus one).
+  const resync = async () => {
+    if (!itemId) return;
+    try {
+      const set = await deps.setQuantity(itemId, await repo.countActivatedForAccount(accountId));
+      if (!set.ok) deps.notify(`Billing quantity re-sync failed for account ${accountId}: ${set.message}`);
+    } catch {
+      deps.notify(`Billing quantity re-sync failed for account ${accountId}`);
     }
+  };
+
+  let matched: number;
+  try {
+    matched = await repo.setGhlActivated(locationId, deps.now().toISOString(), { platformCap: deps.platformCap() });
+  } catch (err) {
+    await resync();
+    if (err instanceof ActivationCapError) return { ok: false, reason: err.reason };
     throw err;
   }
+  if (matched === 0) {
+    await resync();
+    return { ok: false, reason: "already_active" };
+  }
+  await resync();
   return { ok: true };
 }
 

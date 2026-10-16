@@ -3,6 +3,16 @@ import { TRIAL_MAX_NUMBERS } from "@/lib/pricing";
 
 export type ActivateRefusal = "already_active" | "billing_inactive" | "trial_cap" | "platform_cap";
 
+/** Thrown by the repository when the database refuses an activation at a cap (the race backstop). */
+export class ActivationCapError extends Error {
+  readonly reason: "trial_cap" | "platform_cap";
+  constructor(reason: "trial_cap" | "platform_cap") {
+    super(reason);
+    this.reason = reason;
+    this.name = "ActivationCapError";
+  }
+}
+
 const BILLABLE: ReadonlySet<BillingStatus> = new Set(["trialing", "active", "past_due", "comped"]);
 
 /** Precedence: already_active, billing_inactive, trial_cap, platform_cap. */

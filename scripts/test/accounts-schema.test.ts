@@ -56,3 +56,14 @@ test("comped convention documented", () => {
   assert.match(sql, /--.*comped/);
   assert.match(sql, /--.*FitClosers/);
 });
+
+test("0003: activation function is the DB-side cap, service-role only", () => {
+  const cap = readFileSync(join(process.cwd(), "supabase/migrations/0003_activation_cap.sql"), "utf8");
+  assert.match(cap, /create function public\.activate_ghl_location/);
+  assert.match(cap, /for update/);
+  assert.match(cap, /raise exception 'trial_cap'/);
+  assert.match(cap, /raise exception 'platform_cap'/);
+  assert.match(cap, /activated_at is null/);
+  assert.match(cap, /revoke all on function public\.activate_ghl_location\(text, timestamptz, integer\) from public, anon, authenticated/);
+  assert.match(cap, />= 3 then/);
+});

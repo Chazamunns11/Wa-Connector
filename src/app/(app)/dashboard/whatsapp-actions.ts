@@ -3,6 +3,7 @@
 import { requireAccountSession } from "@/lib/account-session";
 import { redactBridgeSessionResult, type PanelBridgeSessionResult } from "@/lib/bridge-panel-guard";
 import { repo } from "@/lib/data";
+import { NOT_FOUND, runOwnedWhatsappAction } from "@/lib/site/owned-whatsapp";
 import {
   connectWhatsappSession,
   getWhatsappBridgeSession,
@@ -17,30 +18,19 @@ import {
  * nothing else.
  */
 
-const NOT_FOUND = { ok: false, code: "invalid_coach_id", message: "That sub-account could not be found." } as const;
-
-async function ownedTenantId(accountId: string, locationId: string): Promise<string | null> {
-  const owned = await repo.listGhlAccountsForAccount(accountId);
-  return owned.find((a) => a.locationId === locationId)?.tenantId ?? null;
-}
-
 export async function connectLocationWhatsappAction(locationId: string): Promise<PanelBridgeSessionResult> {
   const session = await requireAccountSession();
-  const tenantId = await ownedTenantId(session.accountId, locationId);
-  if (!tenantId) return NOT_FOUND;
-  return redactBridgeSessionResult(await connectWhatsappSession(tenantId));
+  const result = await runOwnedWhatsappAction(repo, session.accountId, locationId, connectWhatsappSession);
+  return result === NOT_FOUND ? NOT_FOUND : redactBridgeSessionResult(result);
 }
 
 export async function pollLocationWhatsappAction(locationId: string): Promise<PanelBridgeSessionResult> {
   const session = await requireAccountSession();
-  const tenantId = await ownedTenantId(session.accountId, locationId);
-  if (!tenantId) return NOT_FOUND;
-  return redactBridgeSessionResult(await getWhatsappBridgeSession(tenantId));
+  const result = await runOwnedWhatsappAction(repo, session.accountId, locationId, getWhatsappBridgeSession);
+  return result === NOT_FOUND ? NOT_FOUND : redactBridgeSessionResult(result);
 }
 
 export async function logoutLocationWhatsappAction(locationId: string): Promise<BridgeOkResult> {
   const session = await requireAccountSession();
-  const tenantId = await ownedTenantId(session.accountId, locationId);
-  if (!tenantId) return NOT_FOUND;
-  return logoutWhatsappSession(tenantId);
+  return runOwnedWhatsappAction(repo, session.accountId, locationId, logoutWhatsappSession);
 }

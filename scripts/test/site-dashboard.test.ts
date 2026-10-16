@@ -97,13 +97,15 @@ test("row actions are real: RowActions posts to rowAction, which activates throu
   assert.match(rows, /import \{ rowAction \} from "@\/app\/\(app\)\/dashboard\/actions"/);
   assert.doesNotMatch(rows, /previewRowAction/);
   const actions = read("src/app/(app)/dashboard/actions.ts");
-  assert.match(actions, /activateLocation/);
-  assert.match(actions, /deactivateLocation/);
+  assert.match(actions, /runRowAction/);
   assert.match(actions, /const session = await requireAccountSession\(\)/);
+  const logic = read("src/lib/site/row-action.ts");
+  assert.match(logic, /activateLocation/);
+  assert.match(logic, /deactivateLocation/);
 });
 
 test("every row intent checks the session's account owns the location", () => {
-  const src = read("src/app/(app)/dashboard/actions.ts");
+  const src = read("src/lib/site/row-action.ts");
   assert.match(src, /listGhlAccountsForAccount\(session\.accountId\)/);
   for (const intent of ["activate", "deactivate", "disconnect", "send-link", "show-qr"]) {
     assert.match(src, new RegExp(`"${intent}"`), intent);
@@ -125,7 +127,8 @@ test("the account WhatsApp actions each re-check the session's ownership", () =>
   const exported = src.match(/export async function \w+/g) ?? [];
   assert.equal(exported.length, 3);
   assert.equal((src.match(/await requireAccountSession\(\)/g) ?? []).length, 3);
-  assert.equal((src.match(/listGhlAccountsForAccount\(/g) ?? []).length, 1); // one shared owned-lookup helper
+  assert.equal((src.match(/runOwnedWhatsappAction\(/g) ?? []).length, 3); // one shared owned-lookup helper
+  assert.equal((read("src/lib/site/owned-whatsapp.ts").match(/listGhlAccountsForAccount\(/g) ?? []).length, 1);
   assert.doesNotMatch(src, /assertOwner/);
 });
 
