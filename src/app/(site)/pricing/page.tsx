@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { Card } from "@/components/ui/Card";
 import { Container } from "@/components/site/Container";
 import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
 import { PricingCalculator } from "@/components/site/PricingCalculator";
 import { PricingTable } from "@/components/site/PricingTable";
 import { brandConfig } from "@/lib/brand-config";
-import { priceLine, pricingConfig } from "@/lib/pricing";
+import { formatMoney, priceLine, pricingConfig } from "@/lib/pricing";
+import { COMPARISON, ourColumn, sourceParts } from "@/lib/site/comparison";
 import { faqEntries } from "@/lib/site/faq";
 import { pricingCopy } from "@/lib/site/pricing-copy";
 
@@ -20,67 +20,108 @@ export function generateMetadata(): Metadata {
 
 const BILLING_FAQ = ["trial", "cancel", "ban-risk", "official-api", "disconnected"];
 
+const H2 =
+  "section-rule font-display text-[clamp(31px,4vw,39px)] font-extrabold leading-[1.1] tracking-[-0.03em]";
+const SECTION = "pt-16 md:pt-28";
+const PROSE = "max-w-[62ch]";
+
 export default function PricingPage() {
   const brand = brandConfig();
   const pricing = pricingConfig();
-  const copy = pricingCopy(brand);
+  const price = formatMoney(pricing.pricePerNumber, pricing.currency);
+  const copy = pricingCopy();
   const all = faqEntries(brand);
   const faq = BILLING_FAQ.flatMap((id) => all.filter((e) => e.id === id));
   return (
-    <>
-      <section className="pb-6 pt-14 md:pb-8">
+    <div className="pb-16 md:pb-28">
+      <section className="pt-14 md:pt-20">
         <Container>
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">One price per number</h1>
-          <p className="mt-4 font-display text-2xl font-medium [font-variant-numeric:tabular-nums]">
-            {priceLine(1, pricing)}
+          <h1>
+            <span className="block font-display text-[clamp(56px,10vw,96px)] font-extrabold leading-[0.95] tracking-[-0.04em] [font-variant-numeric:tabular-nums]">
+              {price}
+            </span>{" "}
+            <span className="mt-2 block font-display text-[clamp(19px,2.4vw,22px)] font-medium leading-[1.4]">
+              per WhatsApp number, per month
+            </span>
+          </h1>
+          <p className={`${PROSE} mt-8 text-lg`}>
+            There is no setup fee, and {brand.name} does not charge per message. The price is the same whether you
+            connect one number or forty.
           </p>
-          <p className="mt-3 max-w-[60ch] text-lg text-ink-dim">
-            Pay for the WhatsApp numbers you connect. There is no setup fee, and {brand.name} does not charge per message.
-          </p>
-          <div className="mt-8 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="grid content-start gap-4">
-              <Card>
-                <PricingCalculator
-                  pricePerNumber={pricing.pricePerNumber}
-                  currency={pricing.currency}
-                  brandName={brand.name}
-                />
-              </Card>
-              <Card>
-                <PricingTable pricing={pricing} />
-              </Card>
+          <div className="mt-10 bg-raised px-5 py-8 md:px-10 md:py-10">
+            <PricingCalculator pricePerNumber={pricing.pricePerNumber} currency={pricing.currency} />
+            <div className="mt-6">
+              <PricingTable pricing={pricing} />
             </div>
-            <aside aria-labelledby="terms">
-            <Card>
-              <h2 id="terms" className="font-display text-2xl font-extrabold">Trial and billing</h2>
-              <ul className="mt-4 grid gap-3">
-                {copy.trialTerms.map((t) => (
-                  <li key={t} className="relative pl-7">
-                    <span aria-hidden="true" className="absolute left-1 top-[7px] h-3 w-2 rotate-45 border-b-2 border-r-2 border-accent-text" />
-                    {t}
-                  </li>
-                ))}
-              </ul>
-              <h3 className="mt-6 font-display text-lg font-medium">Cancelling</h3>
-              <p className="mt-2 text-ink-dim">{copy.cancel}</p>
-              <h3 className="mt-6 font-display text-lg font-medium">If a payment fails</h3>
-              {copy.failedPayment.map((p) => (
-                <p key={p} className="mt-2 text-ink-dim">{p}</p>
-              ))}
-              <div className="mt-6">
-                <Cta label="Start 7-day free trial" />
-              </div>
-            </Card>
-            </aside>
           </div>
         </Container>
       </section>
-      <section className="py-12 md:py-20">
+
+      <section className={SECTION}>
         <Container>
-          <h2 className="font-display text-[clamp(24px,4vw,32px)] font-extrabold leading-[1.15]">Billing questions</h2>
-          <FaqList entries={faq} />
+          <h2 className={H2}>The trial, and what happens after</h2>
+          <div className={`${PROSE} mt-6 grid gap-4`}>
+            {copy.trialTerms.map((t) => (
+              <p key={t}>{t}</p>
+            ))}
+            <p>{copy.cancel}</p>
+            {copy.failedPayment.map((p) => (
+              <p key={p}>{p}</p>
+            ))}
+          </div>
         </Container>
       </section>
-    </>
+
+      <section className={SECTION}>
+        <Container>
+          <h2 className={H2}>{COMPARISON.heading}</h2>
+          <p className={`${PROSE} mt-6`}>{COMPARISON.intro}</p>
+          <div className="mt-10 grid gap-10 md:grid-cols-2 md:gap-0 md:divide-x md:divide-border-strong">
+            <div className="md:pr-10">
+              <h3 className="font-display text-[clamp(22px,2.4vw,25px)] font-medium leading-tight tracking-[-0.015em]">
+                {brand.name}
+              </h3>
+              <ul role="list" className="mt-4 grid gap-4">
+                {ourColumn(price).map((t) => (
+                  <li key={t}>{t}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="md:pl-10">
+              <h3 className="font-display text-[clamp(22px,2.4vw,25px)] font-medium leading-tight tracking-[-0.015em]">
+                {COMPARISON.nativeHeading}
+              </h3>
+              <ul role="list" className="mt-4 grid gap-4">
+                {COMPARISON.native.map((t) => (
+                  <li key={t}>{t}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+          <p className={`${PROSE} mt-10 text-[15px] leading-[1.45] text-ink-faint`}>
+            {sourceParts().map((part, i) =>
+              typeof part === "string" ? (
+                part
+              ) : (
+                <a key={i} href={part.href} rel="noopener" className="text-accent-text underline underline-offset-2">
+                  {part.text}
+                </a>
+              ),
+            )}
+          </p>
+          <p className={`${PROSE} mt-6`}>{COMPARISON.closing}</p>
+        </Container>
+      </section>
+
+      <section className={SECTION}>
+        <Container>
+          <h2 className={H2}>Billing questions</h2>
+          <FaqList entries={faq} />
+          <div className="mt-12">
+            <Cta label="Start 7-day free trial" />
+          </div>
+        </Container>
+      </section>
+    </div>
   );
 }

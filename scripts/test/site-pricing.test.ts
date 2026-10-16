@@ -88,7 +88,7 @@ test("invalid BRAND_CURRENCY throws", () => {
 });
 
 test("pricingCopy trial terms mention 7 days, card and 3 numbers", () => {
-  const c = pricingCopy({ name: "Acme" } as never);
+  const c = pricingCopy();
   const terms = c.trialTerms.join(" ");
   assert.match(terms, /7-day/);
   assert.match(terms, /card/i);
@@ -143,4 +143,39 @@ test("calculatorDisplay: valid, out of range, fractional and empty input", () =>
   assert.equal(empty.empty, true);
   assert.equal(empty.line, "");
   assert.ok(empty.note);
+});
+
+// Task 13C additions.
+import { calculatorValue } from "@/lib/site/calculator";
+
+test("calculatorValue mirrors calculatorDisplay", () => {
+  assert.deepEqual(calculatorValue("5"), { n: 5, note: null, empty: false });
+  const hi = calculatorValue("600");
+  assert.equal(hi.n, 500);
+  assert.match(hi.note ?? "", /Showing the price for 500/);
+  const lo = calculatorValue("0");
+  assert.equal(lo.n, 1);
+  assert.ok(lo.note);
+  assert.equal(calculatorValue("2.7").n, 2);
+  const empty = calculatorValue("");
+  assert.equal(empty.empty, true);
+  assert.ok(empty.note);
+});
+
+test("pricing page has no Card kit; fallback has no table; calculator is labelled and live", () => {
+  const page = readFileSync(join(process.cwd(), "src/app/(site)/pricing/page.tsx"), "utf8");
+  assert.doesNotMatch(page, /@\/components\/ui\/Card/);
+  const table = readFileSync(join(process.cwd(), "src/components/site/PricingTable.tsx"), "utf8");
+  assert.doesNotMatch(table, /<table/);
+  const calc = readFileSync(join(process.cwd(), "src/components/site/PricingCalculator.tsx"), "utf8");
+  assert.ok(calc.includes('aria-live="polite"'));
+  assert.ok(calc.includes("htmlFor"));
+});
+
+test("pricing copy follows the deck: one trial paragraph with 'per active number'", () => {
+  const c = pricingCopy();
+  assert.equal(c.trialTerms.length, 1);
+  assert.match(c.trialTerms[0], /per active number/);
+  assert.match(c.trialTerms[0], /charge nothing until the trial ends/);
+  assert.equal(c.failedPayment.length, 2);
 });

@@ -15,9 +15,8 @@ export function generateMetadata(): Metadata {
 }
 
 export default function BillingHelpPage() {
-  const brand = brandConfig();
   const pricing = pricingConfig();
-  const copy = pricingCopy(brand);
+  const copy = pricingCopy();
   const h2 = "mt-10 font-display text-[clamp(20px,3vw,24px)] font-extrabold";
   return (
     <section className="pb-12 pt-12 md:pb-20">
@@ -29,11 +28,9 @@ export default function BillingHelpPage() {
           </p>
 
           <h2 className={h2}>The free trial</h2>
-          <ul className="mt-3 grid max-w-[62ch] list-disc gap-2 pl-5 text-ink-dim marker:text-ink-faint">
-            {copy.trialTerms.map((t) => (
-              <li key={t}>{t}</li>
-            ))}
-          </ul>
+          {copy.trialTerms.map((t) => (
+            <p key={t} className="mt-3 max-w-[62ch] text-ink-dim">{t}</p>
+          ))}
 
           <h2 className={h2}>If a payment fails</h2>
           <div className="mt-3 grid max-w-[62ch] gap-3 text-ink-dim">

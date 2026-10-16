@@ -129,6 +129,10 @@ test("sales page sources carry no invented proof", () => {
 
 test("no literal currency or price outside src/lib/pricing.ts", () => {
   const re = /[£€$]\s?\d/;
-  const hits = websiteSources().filter((s) => re.test(s.text)).map((s) => s.file);
+  // Task 13C: comparison.ts quotes HighLevel's own USD figures verbatim (W33); it is the one exception.
+  const hits = websiteSources()
+    .filter((s) => !s.file.endsWith("src/lib/site/comparison.ts"))
+    .filter((s) => re.test(s.text))
+    .map((s) => s.file);
   assert.deepEqual(hits, []);
 });
