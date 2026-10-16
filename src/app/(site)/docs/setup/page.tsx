@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { AudienceTabs } from "@/components/site/AudienceTabs";
 import { Container } from "@/components/site/Container";
+import { ConnectPanelSample } from "@/components/site/samples/ConnectPanelSample";
 import { SetupStep } from "@/components/site/SetupStep";
 import { brandConfig } from "@/lib/brand-config";
 import { SITE_ROUTES } from "@/lib/site/routes";
@@ -11,7 +12,7 @@ import { AUDIENCES, AUDIENCE_LABELS, setupSteps, troubleshooting, type Audience 
 export function generateMetadata(): Metadata {
   const { name } = brandConfig();
   return {
-    title: `Set up ${name} in GoHighLevel`,
+    title: `Setting up ${name} in GoHighLevel`,
     description: `Step-by-step setup for ${name}: install, set the Telephony Provider, scan the QR code and send a test message. About ten minutes.`,
   };
 }
@@ -64,23 +65,33 @@ export default async function SetupPage({
     <>
       <section className="pb-12 pt-12 md:pb-20">
         <Container>
-          <div className="max-w-[760px]">
-            <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">
-              Set up {brand.name} in GoHighLevel
-            </h1>
-            <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
-              About ten minutes, start to finish. Pick the guide that matches your account, and you will be sending
-              WhatsApp messages from your existing workflows.
-            </p>
-            <div className="mt-6 rounded-lg border bg-raised p-4">
-              <h2 className="font-display text-lg font-medium">Before you start</h2>
-              <ul className="mt-2 grid list-disc gap-1 pl-5 text-ink-dim marker:text-ink-faint">
-                <li>A GoHighLevel account with at least one sub-account.</li>
-                <li>A {brand.name} account (start the free trial first).</li>
-                <li>The phone that has the WhatsApp number you want to send from, with you.</li>
-                <li>A second phone to receive the test message.</li>
-              </ul>
+          <div className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-16">
+            <div>
+              <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.1] tracking-[-0.03em]">
+                Setting up {brand.name} in GoHighLevel
+              </h1>
+              <p className="mt-5 max-w-[52ch] text-xl leading-snug text-ink-dim">
+                About ten minutes, start to finish. Pick the guide that matches your account, and by the end the workflows
+                you already have will be sending on WhatsApp.
+              </p>
+              <div className="section-rule mt-10 max-w-[52ch]">
+                <h2 className="font-display text-[1.5625rem] font-medium leading-tight tracking-[-0.015em]">Before you start</h2>
+                <ul className="mt-3 grid list-disc gap-2 pl-5 marker:text-ink-faint">
+                  <li>A GoHighLevel account with at least one sub-account.</li>
+                  <li>A {brand.name} account. The free trial is fine.</li>
+                  <li>The phone that has the WhatsApp number you want to send from, with you.</li>
+                  <li>A second phone to receive the test message.</li>
+                </ul>
+              </div>
             </div>
+            <figure>
+              <ConnectPanelSample connectedStrip />
+              <figcaption className="mt-3 text-[0.9375rem] text-ink-faint">
+                Sample screen: the connect page you&apos;ll see in step 4, before and after the scan.
+              </figcaption>
+            </figure>
+          </div>
+          <div className="max-w-[760px]">
             <div className="mt-8">
               <AudienceTabs key={initial} panels={panels} initial={initial} />
             </div>

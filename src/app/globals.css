@@ -366,6 +366,20 @@ h2 {
   animation: hero-fade-up 200ms var(--ease-out) 650ms both;
 }
 
+/* "Delivered" fades in on its own at 600ms (REDESIGN section 7); the reply follows at 950ms. */
+@keyframes hero-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.hero-delivered {
+  animation: hero-fade 200ms var(--ease-out) 600ms both;
+}
+
 .hero-late {
   animation: hero-fade-up 350ms var(--ease-out) 950ms both;
 }
@@ -374,6 +388,7 @@ h2 {
   .hero-bubble,
   .hero-ping,
   .hero-ping::after,
+  .hero-delivered,
   .hero-late {
     animation: none;
   }
@@ -421,31 +436,140 @@ h2 {
   background: var(--color-rule);
 }
 
-/* Phone frame for the sample messages. */
+/* Phone for the sample messages: device proportions (bezel, island, status
+   bar, composer, home bar) so it reads as a phone, not a card. A phone is a
+   light object even on an Ink section, so it restates the light-scope tokens
+   it needs. 13B reshaped this block from 13A's small card. */
 .phone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  max-width: 300px;
-  padding: 16px 12px;
-  border-radius: 28px;
-  /* A phone is a light object even on an Ink section, so it restates the
-     light-scope text tokens it needs. */
+  max-width: 272px;
+  height: 410px;
+  padding: 9px;
+  border-radius: 40px;
   --color-ink: #1B1F2A;
   --color-ink-dim: #454A57;
   --color-ink-faint: #5F6270;
   --color-border: rgba(27, 31, 42, 0.14);
   --color-well: #F6F1EA;
-  background: var(--color-well);
+  background: #0E1118;
   color: var(--color-ink);
-  box-shadow: 0 24px 48px -24px rgba(27, 31, 42, 0.35);
+  box-shadow:
+    0 0 0 1.5px #4A5163,
+    0 32px 56px -28px rgba(0, 0, 0, 0.7);
 }
 
-.phone-title {
-  margin-bottom: 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--color-border);
+@media (min-width: 1024px) {
+  .phone {
+    height: 548px;
+  }
+}
+
+.phone-island {
+  position: absolute;
+  top: 17px;
+  left: 50%;
+  z-index: 2;
+  width: 64px;
+  height: 18px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: #0E1118;
+}
+
+.phone-screen {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 32px;
+  background: #FFFFFF;
+}
+
+.phone-chat .phone-screen {
+  background: var(--color-well);
+}
+
+.phone-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 22px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.phone-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 10px;
   font-size: 15px;
   font-weight: 600;
+}
+
+.phone-head-sms {
+  justify-content: center;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.phone-head-chat {
+  background: #2D3345;
+  --color-ink: #F6F1EA;
+  color: var(--color-ink);
+}
+
+.phone-avatar {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #D9A47A;
+  color: #1B1F2A;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.phone-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 12px;
+}
+
+.phone-meta {
+  margin-bottom: 12px;
   text-align: center;
+  font-size: 12px;
+  color: var(--color-ink-faint);
+}
+
+.phone-composer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 10px 8px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: #FFFFFF;
+  font-size: 14px;
+  color: var(--color-ink-faint);
+}
+
+.phone-home {
+  display: block;
+  width: 96px;
+  height: 4px;
+  margin: 2px auto 8px;
+  border-radius: 999px;
+  background: var(--color-ink);
+  opacity: 0.85;
 }
 
 .phone-sms .bubble-out {

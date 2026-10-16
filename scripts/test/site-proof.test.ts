@@ -50,9 +50,9 @@ test("the research band cites both studies with a link to each source", () => {
   const band = read("src/components/site/ReminderResearch.tsx");
   assert.match(band, /rel="noopener"/);
   const page = read("src/app/(site)/page.tsx");
-  // Ruling W26: after "Keep your workflows", before the safety thread.
-  assert.ok(page.indexOf("copy.keepWorkflows.heading") < page.indexOf("<ReminderResearch"));
-  assert.ok(page.indexOf("<ReminderResearch") < page.indexOf("Built to be careful"));
+  // Task 13: the research line sits after "Why we made it" and before the safety thread (W26 still holds).
+  assert.ok(page.indexOf("copy.why.heading") < page.indexOf("<ReminderResearch"));
+  assert.ok(page.indexOf("<ReminderResearch") < page.indexOf("<SafetyThread"));
   assert.match(page, /<CustomerResults/);
 });
 
@@ -80,9 +80,13 @@ test("owner's own average: figures, honest framing, and nothing banned (Rulings 
   }
   assert.match(a.note, /not an independent study/);
   assert.match(a.note, /vary/i);
+  // Task 13: the owner's result is the hero headline, with the signature figure beside it.
   const page = read("src/app/(site)/page.tsx");
-  assert.match(page, /<OwnResults/);
-  assert.ok(page.indexOf("<OwnResults") < page.indexOf("<ReminderResearch"));
+  assert.match(page, /<SameReminderTwice/);
+  assert.match(page, /import \{[^}]*OWN_RESULTS_AVERAGE[^}]*\} from "@\/lib\/site\/proof"/);
+  assert.ok(!a.headingLead.includes("%"), "headline lead carries no percentage");
+  assert.match(a.headingTail, /it's$/);
+  assert.ok(page.indexOf("OWN_RESULTS_AVERAGE") < page.indexOf("<ReminderResearch"));
 });
 
 test("walkthrough fixes: control group, best-of-eight caveat", () => {

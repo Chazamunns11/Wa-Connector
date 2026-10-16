@@ -70,3 +70,14 @@ test("globals.css defines the Paper ground, rule token, section rule and phone",
   assert.match(css, /\.phone\s*\{/);
   assert.match(css, /\.site-body/);
 });
+
+// Task 13B: the figure must read as phones, and the QR as a QR.
+test("phone frame has a status bar and the QR is a dense deterministic grid", () => {
+  const f = read(`${DIR}/PhoneFrame.tsx`);
+  assert.match(f, /phone-status/);
+  assert.match(f, /phone-home/);
+  const c = read(`${DIR}/ConnectPanelSample.tsx`);
+  assert.match(c, /FakeQr/);
+  assert.ok(!/Math\.random|Date\.now/.test(c), "QR must be deterministic");
+  assert.match(read(`${DIR}/SameReminderTwice.tsx`), /hero-delivered/);
+});

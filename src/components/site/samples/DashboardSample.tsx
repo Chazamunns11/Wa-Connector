@@ -36,20 +36,20 @@ const ROWS: Row[] = [
     chip: { tone: "win", label: "Connected" },
     number: "+44 7700 900102",
     sent: "0 / 150",
-    note: { text: "No messages from GHL yet. Is the Telephony Provider set?", tone: "warn" },
+    note: { text: "No messages from GoHighLevel yet. Is the Telephony Provider set?", tone: "warn" },
   },
 ];
 
-const GRID = "md:grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,1.5fr)] md:items-start md:gap-4";
+const GRID = "md:grid md:grid-cols-[minmax(0,1.15fr)_minmax(0,1.6fr)_minmax(0,0.75fr)_minmax(0,1.4fr)] md:items-start md:gap-4";
 
 export function DashboardSample() {
   const { name } = brandConfig();
-  const label = `The ${name} dashboard with three sample sub-accounts: Harbour Street Physio, connected, 42 of 150 sent today; Millbrook Vets, disconnected with 4 messages waiting and a Reconnect button; Fernbank Dental, connected, 0 of 150, with the note "No messages from GHL yet. Is the Telephony Provider set?"`;
+  const label = `The ${name} dashboard with three sample sub-accounts: Harbour Street Physio, connected, 42 of 150 sent today; Millbrook Vets, disconnected with 4 messages waiting and a Reconnect button; Fernbank Dental, connected, 0 of 150, with the note "No messages from GoHighLevel yet. Is the Telephony Provider set?"`;
 
   return (
     <div role="img" aria-label={label} className="w-full">
       <div aria-hidden="true" className="sample-chrome overflow-hidden">
-        <div className="hidden border-b bg-raised px-5 py-3 text-sm text-ink-faint md:grid md:grid-cols-[minmax(0,1.4fr)_minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,1.5fr)] md:gap-4">
+        <div className="hidden border-b bg-raised px-5 py-3 text-sm text-ink-faint md:grid md:grid-cols-[minmax(0,1.15fr)_minmax(0,1.6fr)_minmax(0,0.75fr)_minmax(0,1.4fr)] md:gap-4">
           <span>Sub-account</span>
           <span>WhatsApp</span>
           <span>Sent today</span>

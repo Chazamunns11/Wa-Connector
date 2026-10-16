@@ -51,6 +51,9 @@ export interface AverageResult {
   measure: string;
   claim: string;
   note: string;
+  /** The percentage-free parts of the home headline; `after` is the big number. */
+  headingLead: string;
+  headingTail: string;
 }
 
 /**
@@ -64,7 +67,9 @@ export const OWN_RESULTS_AVERAGE: AverageResult = {
   measure: "Show rate: about 50% before WhatsApp reminders, 85% or more with them",
   claim:
     "Across the businesses we've run WhatsApp appointment reminders for, the average show rate went from about half to 85% or more.",
-  note: "That is our own clients' average, from before this product existed. It is not an independent study, and results vary by business.",
+  note: "That's our own average across the businesses we've run WhatsApp appointment reminders for, and it's from before this product existed. It is not an independent study, and your numbers will vary.",
+  headingLead: "About half of booked clients used to turn up.",
+  headingTail: "With WhatsApp reminders, it's",
 };
 
 export interface CustomerResult {

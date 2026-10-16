@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { BrandConfig } from "@/lib/brand-config";
-import { FAQ_IDS, faqEntries } from "@/lib/site/faq";
+import { FAQ_IDS, HOME_FAQ_IDS, faqEntries } from "@/lib/site/faq";
 import { salesCopy } from "@/lib/site/sales-copy";
 
 const brand: BrandConfig = {
@@ -54,15 +54,62 @@ test("daily-cap, stop and white-label answers state the real behaviour", () => {
   assert.ok(!salesCopy(brand).safety.some((s) => /from your account/.test(s.body)));
 });
 
-test("salesCopy has 3 steps and the three safety items", () => {
+// Task 13: salesCopy is the home page's voice: setup steps moved under `setup`, hook and keepWorkflows are gone.
+test("salesCopy has 3 setup steps, the three safety items and the disclosure block", () => {
   const c = salesCopy(brand);
-  assert.equal(c.steps.length, 3);
+  assert.equal(c.setup.steps.length, 3);
   assert.equal(c.safety.length, 3);
+  assert.equal(c.disclosure.paragraphs.length, 3);
+  assert.equal(c.why.paragraphs.length, 2);
   const titles = c.safety.map((s) => s.title.toLowerCase()).join("|");
   assert.match(titles, /pac/);
   assert.match(titles, /held|disconnect/);
   assert.match(titles, /stop/);
   assert.equal(c.ctaLabel, "Start 7-day free trial");
+});
+
+function strings(v: unknown): string[] {
+  if (typeof v === "string") return [v];
+  if (Array.isArray(v)) return v.flatMap(strings);
+  if (v && typeof v === "object") return Object.values(v).flatMap(strings);
+  return [];
+}
+
+test("the brand name appears at most once per string in sales copy", () => {
+  for (const s of strings(salesCopy(brand))) {
+    assert.ok((s.match(/Testbrand/g) ?? []).length <= 1, s);
+  }
+});
+
+test("sales copy has no staccato fragments", () => {
+  for (const s of strings(salesCopy(brand))) {
+    assert.ok(!/^Card needed|^Cancel any time\.$/.test(s), s);
+  }
+});
+
+test("the disclosure block says the uncomfortable things once, plainly", () => {
+  const d = salesCopy(brand).disclosure.paragraphs.join(" ");
+  assert.match(d, /linked device/);
+  assert.match(d, /not the official WhatsApp Business API/);
+  assert.match(d, /restrict or ban/);
+  assert.match(d, /can't promise/);
+  assert.match(d, /dedicated business number/);
+  const stop = salesCopy(brand).safety[2].body;
+  assert.match(stop, /from that number/);
+  assert.ok(!/from your account/.test(stop));
+});
+
+test("home FAQ ids are a subset of the twelve and leave out what the disclosure block says", () => {
+  for (const id of HOME_FAQ_IDS) assert.ok((FAQ_IDS as readonly string[]).includes(id), id);
+  assert.ok(!(HOME_FAQ_IDS as readonly string[]).includes("ban-risk"));
+  assert.ok(!(HOME_FAQ_IDS as readonly string[]).includes("official-api"));
+  assert.equal(HOME_FAQ_IDS.length, 7);
+});
+
+test("copy says GoHighLevel, not GHL, in customer-facing strings", () => {
+  for (const s of strings(salesCopy(brand))) assert.ok(!/\bGHL\b/.test(s), s);
+  for (const e of faqEntries(brand)) assert.ok(!/\bGHL\b/.test(e.answer), e.id);
+  assert.ok(!/GHL/.test(readFileSync(join(process.cwd(), "src/components/site/samples/DashboardSample.tsx"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "")));
 });
 
 const WEBSITE_ROOTS = [
