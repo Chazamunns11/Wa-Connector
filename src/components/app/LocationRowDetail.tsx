@@ -12,10 +12,22 @@ function Stat({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** Expanded row: held messages, failures with reasons, opt-outs, provider nudge, and the row actions. */
-export function LocationRowDetail({ row, actions }: { row: LocationRow; actions: ReactNode }) {
+export function LocationRowDetail({
+  row,
+  actions,
+  connectLink,
+  qrOpen = false,
+  qrPanel,
+}: {
+  row: LocationRow;
+  actions: ReactNode;
+  connectLink?: string;
+  qrOpen?: boolean;
+  qrPanel?: ReactNode;
+}) {
   const { count, reasons } = row.failedLast7Days;
   return (
-    <details className="group border-t border-divider">
+    <details className="group border-t border-divider" open={qrOpen || !!connectLink}>
       <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-2 text-sm font-medium text-accent-text md:px-6 [&::-webkit-details-marker]:hidden">
         <span>
           Details and actions<span className="sr-only"> for {row.name}</span>
@@ -46,6 +58,22 @@ export function LocationRowDetail({ row, actions }: { row: LocationRow; actions:
             Telephony Provider is set: <span className="font-medium">{TELEPHONY_PROVIDER_PATH.join(" → ")}</span>.
           </p>
         ) : null}
+        {connectLink ? (
+          <div className="grid gap-1.5">
+            <label htmlFor={`link-${row.id}`} className="text-sm font-medium text-ink">
+              Connect link for {row.name}
+            </label>
+            <input
+              id={`link-${row.id}`}
+              readOnly
+              value={connectLink}
+              onFocus={(e) => e.currentTarget.select()}
+              className="min-h-11 w-full rounded border bg-raised px-3 text-sm text-ink"
+            />
+            <p className="text-sm text-ink-dim">Send this link to whoever has the phone. It works for 7 days.</p>
+          </div>
+        ) : null}
+        {qrOpen && qrPanel ? qrPanel : null}
         {actions}
       </div>
     </details>

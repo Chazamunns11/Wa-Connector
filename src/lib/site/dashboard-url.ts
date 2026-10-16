@@ -18,6 +18,8 @@ export type DashboardResult =
   | "platform_cap"
   | "billing_inactive"
   | "stripe_failed"
+  | "bridge_failed"
+  | "link_unavailable"
   | "not_found";
 
 export const DASHBOARD_RESULT_COPY: Record<DashboardResult, string> = {
@@ -29,6 +31,8 @@ export const DASHBOARD_RESULT_COPY: Record<DashboardResult, string> = {
   platform_cap: "We are at capacity for new numbers right now. Please try again soon.",
   billing_inactive: "Billing is not active on this account. Update billing to activate numbers.",
   stripe_failed: "We could not update billing just now, so nothing was changed. Please try again.",
+  bridge_failed: "We could not reach WhatsApp just now. Please try again.",
+  link_unavailable: "Connect links are not available right now. Please try again later.",
   not_found: "We could not find that sub-account.",
 };
 
@@ -38,11 +42,12 @@ export function parseResult(value: string | string[] | undefined): DashboardResu
 }
 
 /** /dashboard URL keeping the filter, with an optional result notice and a row to focus. */
-export function dashboardHref(opts: { filter?: DashboardFilter; result?: DashboardResult; focus?: string } = {}): string {
+export function dashboardHref(opts: { filter?: DashboardFilter; result?: DashboardResult; focus?: string; qr?: string } = {}): string {
   const q = new URLSearchParams();
   if (opts.filter === "attention") q.set("filter", "attention");
   if (opts.result) q.set("result", opts.result);
   if (opts.focus) q.set("focus", opts.focus);
+  if (opts.qr) q.set("qr", opts.qr);
   const s = q.toString();
   return `${SITE_ROUTES.dashboard}${s ? `?${s}` : ""}${opts.focus ? `#row-${opts.focus}` : ""}`;
 }

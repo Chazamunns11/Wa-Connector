@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
 import { AttentionFilter } from "@/components/app/AttentionFilter";
+import { LocationQrPanel } from "@/components/app/LocationQrPanel";
 import { LocationTable } from "@/components/app/LocationTable";
 import { PlanHeader } from "@/components/app/PlanHeader";
 import { GhlResultNotice } from "@/components/app/GhlResultNotice";
 import { Container } from "@/components/site/Container";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { getAccountDataSource } from "@/lib/account-data";
+import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
 import { headline, needsAttention, planStatus } from "@/lib/account-data/derive";
+import { panelSummaryFromRow } from "@/lib/account-data/map";
+import { isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { billingHref, DASHBOARD_RESULT_COPY, dashboardHref, parseFilter, parseResult } from "@/lib/site/dashboard-url";
@@ -44,6 +48,29 @@ export default async function DashboardPage({
   const source = getAccountDataSource(session, now);
   const [account, rows] = await Promise.all([source.getAccount(), source.listLocations()]);
 
+  // Both only ever name a row of this account's own list; the link is minted here, never carried in a URL.
+  const focusRow = rows.find((r) => r.id === first(params.focus));
+  const qrRow = rows.find((r) => r.id === first(params.qr));
+  const connectUrl =
+    result === "link" && focusRow ? await connectLinkForOwnedLocation(session.accountId, focusRow.id) : null;
+  const rowExtras = {
+    connectLink: focusRow && connectUrl ? { locationId: focusRow.id, url: connectUrl } : undefined,
+    qr: qrRow
+      ? {
+          locationId: qrRow.id,
+          panel: (
+            <LocationQrPanel
+              locationId={qrRow.id}
+              name={qrRow.name}
+              summary={panelSummaryFromRow(qrRow)}
+              bridgeConfigured={isWhatsappBridgeConfigured()}
+              nowMs={now.getTime()}
+            />
+          ),
+        }
+      : undefined,
+  };
+
   const attentionCount = rows.filter((r) => needsAttention(r) !== null).length;
   const visible = filter === "attention" ? rows.filter((r) => needsAttention(r) !== null) : rows;
 
@@ -60,7 +87,7 @@ export default async function DashboardPage({
 
       {result ? (
         <p role="status" className="mt-4 rounded-lg border border-info/30 bg-info-soft p-3 font-medium text-ink">
-          {DASHBOARD_RESULT_COPY[result]}
+          {result === "link" && !connectUrl ? DASHBOARD_RESULT_COPY.link_unavailable : DASHBOARD_RESULT_COPY[result]}
           {result === "trial_cap" && account.billingStatus === "trialing" ? (
             <form action={endTrialNowAction} className="mt-3">
               <button type="submit" className={buttonClasses("primary", "md", "min-h-11 px-5")}>
@@ -101,7 +128,7 @@ export default async function DashboardPage({
               }
             />
           ) : (
-            <LocationTable rows={visible} filter={filter} />
+            <LocationTable rows={visible} filter={filter} {...rowExtras} />
           )}
         </div>
       </section>

@@ -29,7 +29,14 @@ function Cell({ label, children, className = "", hideLabel = false }: { label: s
   );
 }
 
-export function LocationTable({ rows, filter }: { rows: LocationRow[]; filter: string }) {
+export interface RowExtras {
+  /** A freshly minted connect link for one row, shown in that row's detail. */
+  connectLink?: { locationId: string; url: string };
+  /** The QR panel to open under one row. */
+  qr?: { locationId: string; panel: React.ReactNode };
+}
+
+export function LocationTable({ rows, filter, connectLink, qr }: { rows: LocationRow[]; filter: string } & RowExtras) {
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
       <div
@@ -95,7 +102,13 @@ export function LocationTable({ rows, filter }: { rows: LocationRow[]; filter: s
                   ) : null}
                 </Cell>
               </div>
-              <LocationRowDetail row={row} actions={<RowActions row={row} filter={filter} />} />
+              <LocationRowDetail
+                row={row}
+                actions={<RowActions row={row} filter={filter} />}
+                connectLink={connectLink?.locationId === row.id ? connectLink.url : undefined}
+                qrOpen={qr?.locationId === row.id}
+                qrPanel={qr?.locationId === row.id ? qr.panel : undefined}
+              />
             </li>
           );
         })}

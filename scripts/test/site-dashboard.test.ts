@@ -91,3 +91,47 @@ test("dashboard URLs come from one helper", () => {
 test("the footer nav hugs its links", () => {
   assert.match(read("src/components/site/SiteFooter.tsx"), /aria-label="Footer" className="[^"]*self-start/);
 });
+
+test("row actions are real: RowActions posts to rowAction, which activates through activateLocation", () => {
+  const rows = read("src/components/app/RowActions.tsx");
+  assert.match(rows, /import \{ rowAction \} from "@\/app\/\(app\)\/dashboard\/actions"/);
+  assert.doesNotMatch(rows, /previewRowAction/);
+  const actions = read("src/app/(app)/dashboard/actions.ts");
+  assert.match(actions, /activateLocation/);
+  assert.match(actions, /deactivateLocation/);
+  assert.match(actions, /const session = await requireAccountSession\(\)/);
+});
+
+test("every row intent checks the session's account owns the location", () => {
+  const src = read("src/app/(app)/dashboard/actions.ts");
+  assert.match(src, /listGhlAccountsForAccount\(session\.accountId\)/);
+  for (const intent of ["activate", "deactivate", "disconnect", "send-link", "show-qr"]) {
+    assert.match(src, new RegExp(`"${intent}"`), intent);
+  }
+  // The tenant id comes from the owned row, never from the form.
+  assert.doesNotMatch(src, /formData\.get\("tenant/);
+});
+
+test("the connect link never rides in the redirect URL", () => {
+  const src = read("src/app/(app)/dashboard/actions.ts");
+  assert.doesNotMatch(src, /mintConnectLinkToken/);
+  assert.match(read("src/app/(app)/dashboard/page.tsx"), /connectLinkForOwnedLocation/);
+  assert.match(read("src/lib/account-data/connect-link.ts"), /location\.accountId !== accountId/);
+});
+
+test("the account WhatsApp actions each re-check the session's ownership", () => {
+  const src = read("src/app/(app)/dashboard/whatsapp-actions.ts");
+  assert.match(src, /^"use server"/);
+  const exported = src.match(/export async function \w+/g) ?? [];
+  assert.equal(exported.length, 3);
+  assert.equal((src.match(/await requireAccountSession\(\)/g) ?? []).length, 3);
+  assert.equal((src.match(/listGhlAccountsForAccount\(/g) ?? []).length, 1); // one shared owned-lookup helper
+  assert.doesNotMatch(src, /assertOwner/);
+});
+
+test("the QR panel is a client component over the shared WhatsApp panel", () => {
+  const src = read("src/components/app/LocationQrPanel.tsx");
+  assert.match(src, /^"use client"/);
+  assert.match(src, /WhatsappConnectionPanel/);
+  assert.match(src, /Link WhatsApp for /);
+});

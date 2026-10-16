@@ -46,3 +46,16 @@ export function toLocationRow(
     providerNudge,
   };
 }
+
+/** The panel's session summary, derived from the dashboard row (null when there is nothing to show). */
+export function panelSummaryFromRow(row: LocationRow): WhatsappSessionSummary | null {
+  const base = { coachId: "", lastDisconnectReason: null, sentToday: row.sentToday } as const;
+  switch (row.state.kind) {
+    case "connected":
+      return { ...base, status: "connected", phoneNumber: row.state.number || null, lastConnectedAt: null };
+    case "disconnected":
+      return { ...base, status: "disconnected", phoneNumber: null, lastConnectedAt: new Date(0).toISOString() };
+    default:
+      return null;
+  }
+}
