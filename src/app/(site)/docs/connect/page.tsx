@@ -11,7 +11,7 @@ export function generateMetadata(): Metadata {
   const { name } = brandConfig();
   return {
     title: `How to connect your WhatsApp number | ${name}`,
-    description: `A one-page help sheet for linking a WhatsApp number to ${name}: what you need, the steps, and what to do if something goes wrong. Print it or download the PDF.`,
+    description: `A two-page help sheet for linking a WhatsApp number to ${name}: what you need, the steps, and what to do if something goes wrong. Print it or download the PDF.`,
   };
 }
 

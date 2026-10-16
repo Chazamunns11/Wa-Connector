@@ -127,7 +127,7 @@ function walk(dir: string): string[] {
 }
 
 test("marketing code has no client JS beyond the islands", () => {
-  const allowed = new Set(["PricingCalculator.tsx", "AudienceTabs.tsx", "PrintButton.tsx"]);
+  const allowed = new Set(["PricingCalculator.tsx", "AudienceTabs.tsx", "PrintButton.tsx", "ResaleCalculator.tsx"]);
   const files = [...walk("src/app/(site)"), ...walk("src/components/site")].filter((f) => /\.tsx?$/.test(f));
   const clients = files
     .filter((f) => /^\s*["']use client["']/m.test(readFileSync(f, "utf8")))

@@ -72,7 +72,7 @@ export default async function SetupPage({
         <p className="mt-3 text-[1.05rem] font-medium">
           Handing the scan to a client? Send them the{" "}
           <Link href={SITE_ROUTES.connect} className="underline underline-offset-2">
-            one-page how-to-connect sheet
+            two-page how-to-connect sheet
           </Link>
           .
         </p>
