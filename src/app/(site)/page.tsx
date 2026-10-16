@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
+import { CustomerResults } from "@/components/site/CustomerResults";
 import { Container } from "@/components/site/Container";
 import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
 import { HeroWorkflow } from "@/components/site/HeroWorkflow";
 import { HowItWorks } from "@/components/site/HowItWorks";
 import { PricingSummary } from "@/components/site/PricingSummary";
+import { ReminderResearch } from "@/components/site/ReminderResearch";
 import { SafetyThread } from "@/components/site/SafetyThread";
 import { brandConfig } from "@/lib/brand-config";
 import { faqEntries } from "@/lib/site/faq";
@@ -53,6 +55,14 @@ export default function HomePage() {
           <HowItWorks steps={copy.steps} />
         </Container>
       </section>
+
+      <section className={`${SECTION} ${BAND}`}>
+        <Container>
+          <ReminderResearch headingClass={H2} />
+        </Container>
+      </section>
+
+      <CustomerResults headingClass={H2} />
 
       <section className={`${SECTION} surface-dark`}>
         <Container>

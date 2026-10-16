@@ -67,3 +67,7 @@ Fonts: Bricolage Grotesque 500 and 800 for headings (h1/h2 800, smaller 500). Bo
 ### Measured contrast (WCAG ratio)
 
 Ink on Cream 14.65; Ink on white 16.46; ink-dim on Cream 7.88; ink-faint on Cream 5.39, on raised 4.98; Wren on Cream 6.32, on raised 5.84, on white 7.11; Ink on Coral (buttons) 5.30; white on Coral 3.10 (not used); Coral on Cream 2.76 (never used as text). Ink scope: Cream 14.65, ink-dim 9.91, ink-faint 6.03 (4.95 on raised), Tan 7.48, Coral text 5.30. Status chips 5.99 to 6.29 (light), 7.46 to 8.79 (dark). Focus ring 14.65 (Cream), 7.48 (Ink). Control borders 3.29 (Cream), 4.30 (Ink). Every rendered text node on every page passes 4.5:1 (3:1 for large) in a computed check.
+
+## Social proof (Task 9d)
+
+Home has a cited "Why reminders on WhatsApp" band (two published trials, each linked, small-study caveat shown) and a customer-results slot. Ruling W25: only true, cited proof. No open-rate or read-rate claims (PingWren cannot measure reads), no invented customers. Add real client results to `src/lib/site/proof.ts` with the client's written permission; `CUSTOMER_RESULTS` ships empty and the slot renders nothing until it has entries.
