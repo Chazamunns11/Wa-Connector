@@ -86,6 +86,6 @@ test("signup pages are noindex and no longer preview", () => {
   assert.equal(existsSync(join(root, "src/app/(site)/signup/checkout/page.tsx")), false);
 });
 
-test("the preview badge stacks on its own line below 640px", () => {
+test("the auth shell header stacks below 640px", () => {
   assert.match(read("src/components/auth/AuthShell.tsx"), /flex-col[^"]*sm:flex-row|flex-col[^"]*sm:items/);
 });

@@ -1,4 +1,4 @@
-import { formatMoney, monthlyCost, type PricingConfig } from "@/lib/pricing";
+import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS } from "@/lib/pricing";
 import type { AccountSummary, LocationRow } from "./types";
 
 const DAY_MS = 86_400_000;
@@ -20,8 +20,8 @@ export interface PlanStatus {
 export function planStatus(account: AccountSummary, now: Date): PlanStatus {
   switch (account.billingStatus) {
     case "pending":
-      // Checkout abandoned: Task 9 wires the working "add a card" button.
-      return { label: "Card needed", tone: "warn", banner: "Add a card to start your trial" };
+      // Checkout abandoned: the dashboard offers a working "add a card" button.
+      return { label: "Trial not started", tone: "warn", banner: `Add a card to start your ${TRIAL_DAYS}-day free trial.` };
     case "trialing": {
       const n = trialDaysLeft(account.trialEndsAt, now);
       if (n === 0) return { label: "Trial ended", tone: "warn", banner: null };
@@ -59,10 +59,10 @@ export function activeCount(rows: LocationRow[]): number {
   return rows.filter((r) => r.activated).length;
 }
 
-/** e.g. "2 numbers active · £58/month". Price per activated number (W14). */
-export function headline(rows: LocationRow[], pricing: PricingConfig): string {
+/** e.g. "2 numbers active · £29.98/month". Volume pricing over activated numbers. */
+export function headline(rows: LocationRow[]): string {
   const n = activeCount(rows);
-  const cost = formatMoney(monthlyCost(n), pricing.currency);
+  const cost = formatMoney(monthlyCostPence(n) / 100, pricingConfig().currency);
   return `${n} ${n === 1 ? "number" : "numbers"} active · ${cost}/month`;
 }
 
@@ -86,7 +86,7 @@ export function rowActionsFor(row: LocationRow): RowActions {
 }
 
 export interface PrimaryAction {
-  /** Matches a RowActions key; the preview action treats it as an intent. */
+  /** Matches a RowActions key; the row action treats it as an intent. */
   key: "activate" | "show-qr";
   label: string;
 }

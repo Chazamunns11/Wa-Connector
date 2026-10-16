@@ -29,7 +29,7 @@ function Cell({ label, children, className = "", hideLabel = false }: { label: s
   );
 }
 
-export function LocationTable({ rows, scenario, filter }: { rows: LocationRow[]; scenario: string; filter: string }) {
+export function LocationTable({ rows, filter }: { rows: LocationRow[]; filter: string }) {
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
       <div
@@ -48,7 +48,7 @@ export function LocationTable({ rows, scenario, filter }: { rows: LocationRow[];
           const primary = primaryActionFor(row);
           const pct = row.dailyCap > 0 ? Math.min(100, Math.round((row.sentToday / row.dailyCap) * 100)) : 0;
           return (
-            <li key={row.id}>
+            <li key={row.id} id={`row-${row.id}`}>
               <div className={`grid gap-3 px-4 py-4 md:px-6 ${GRID}`}>
                 <Cell label="Sub-account" hideLabel>
                   <p className="font-semibold text-ink">{row.name}</p>
@@ -90,12 +90,12 @@ export function LocationTable({ rows, scenario, filter }: { rows: LocationRow[];
                   ) : null}
                   {primary ? (
                     <div className="mt-2">
-                      <PrimaryAction row={row} action={primary} scenario={scenario} filter={filter} />
+                      <PrimaryAction row={row} action={primary} filter={filter} />
                     </div>
                   ) : null}
                 </Cell>
               </div>
-              <LocationRowDetail row={row} actions={<RowActions row={row} scenario={scenario} filter={filter} />} />
+              <LocationRowDetail row={row} actions={<RowActions row={row} filter={filter} />} />
             </li>
           );
         })}

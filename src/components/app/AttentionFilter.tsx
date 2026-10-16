@@ -1,16 +1,13 @@
 import Link from "next/link";
-import type { PreviewScenario } from "@/lib/account-data";
 import { dashboardHref, type DashboardFilter } from "@/lib/site/dashboard-url";
 
 const LINK = "inline-flex min-h-11 items-center rounded border px-4 text-sm font-medium";
 
 export function AttentionFilter({
-  scenario,
   filter,
   total,
   attention,
 }: {
-  scenario: PreviewScenario;
   filter: DashboardFilter;
   total: number;
   attention: number;
@@ -26,7 +23,7 @@ export function AttentionFilter({
         return (
           <Link
             key={i.id}
-            href={dashboardHref({ scenario, filter: i.id })}
+            href={dashboardHref({ filter: i.id })}
             aria-current={current ? "page" : undefined}
             className={`${LINK} ${current ? "border-accent bg-accent text-accent-ink" : "border-border-strong text-ink hover:bg-raised"}`}
           >

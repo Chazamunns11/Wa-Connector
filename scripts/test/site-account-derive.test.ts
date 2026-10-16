@@ -15,7 +15,7 @@ const NOW = new Date("2026-10-16T12:00:00Z");
 const day = 86_400_000;
 
 function acct(billingStatus: BillingStatus, trialEndsAt: string | null = null): AccountSummary {
-  return { id: "a", name: "Sample Co", kind: "business", email: "o@example.com", billingStatus, trialEndsAt };
+  return { id: "a", name: "Sample Co", kind: "business", email: "o@example.com", billingStatus, trialEndsAt, stripeCustomerId: null, stripeSubscriptionId: null };
 }
 function row(over: Partial<LocationRow> = {}): LocationRow {
   return {
@@ -50,6 +50,14 @@ test("planStatus per billing status", () => {
   assert.deepEqual(planStatus(acct("cancelled"), NOW), { label: "Cancelled", tone: "muted", banner: null });
 });
 
+test("planStatus pending: an abandoned Checkout shows the trial has not started", () => {
+  assert.deepEqual(planStatus(acct("pending"), NOW), {
+    label: "Trial not started",
+    tone: "warn",
+    banner: "Add a card to start your 7-day free trial.",
+  });
+});
+
 test("needsAttention reasons in priority order: disconnected, waiting_qr, providerNudge, cap, null", () => {
   const all = { providerNudge: true, sentToday: 150, dailyCap: 150 };
   assert.equal(needsAttention(row({ ...all, state: { kind: "disconnected", waiting: 4 } })), "Disconnected — 4 messages waiting");
@@ -63,13 +71,12 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
 });
 
 test("headline reads '2 numbers active · £29.98/month' and switches to the volume price at 10", () => {
-  const pricing = { currency: "GBP" };
   const rows = [row(), row(), row({ activated: false, state: { kind: "not_active" } })];
-  assert.equal(headline(rows, pricing), "2 numbers active · £29.98/month");
-  assert.equal(headline([row()], pricing), "1 number active · £14.99/month");
-  assert.equal(headline([], pricing), "0 numbers active · £0.00/month");
-  assert.equal(headline(Array.from({ length: 9 }, () => row()), pricing), "9 numbers active · £134.91/month");
-  assert.equal(headline(Array.from({ length: 10 }, () => row()), pricing), "10 numbers active · £79.90/month");
+  assert.equal(headline(rows), "2 numbers active · £29.98/month");
+  assert.equal(headline([row()]), "1 number active · £14.99/month");
+  assert.equal(headline([]), "0 numbers active · £0.00/month");
+  assert.equal(headline(Array.from({ length: 9 }, () => row())), "9 numbers active · £134.91/month");
+  assert.equal(headline(Array.from({ length: 10 }, () => row())), "10 numbers active · £79.90/month");
 });
 
 test("activeCount counts activated rows only", () => {

@@ -1,7 +1,7 @@
 import { brandConfig } from "@/lib/brand-config";
 
 /**
- * Three rows of the real dashboard (src/lib/account-data/preview.ts), with the
+ * Three illustrative rows in the shape of the real dashboard, with the
  * chips and notes the app prints. A static mock: it does not import the app's
  * LocationTable, which is interactive. Rows are a grid from 768px and small
  * stacked blocks below, from the same markup.

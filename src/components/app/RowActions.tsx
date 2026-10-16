@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/Button";
 import { rowActionsFor, type PrimaryAction as Primary } from "@/lib/account-data/derive";
 import type { LocationRow } from "@/lib/account-data";
-import { previewRowAction } from "@/app/(app)/dashboard/actions";
+import { rowAction } from "@/app/(app)/dashboard/actions";
 
 const ACTIONS = [
   { key: "activate", label: "Activate", can: "activate" },
@@ -11,18 +11,14 @@ const ACTIONS = [
   { key: "deactivate", label: "Deactivate", can: "deactivate" },
 ] as const;
 
-/**
- * Preview: each button posts to previewRowAction, which does nothing real.
- * Which buttons are enabled comes only from rowActionsFor.
- */
-export function RowActions({ row, scenario, filter }: { row: LocationRow; scenario: string; filter: string }) {
+/** Each button posts to rowAction. Which buttons are enabled comes only from rowActionsFor. */
+export function RowActions({ row, filter }: { row: LocationRow; filter: string }) {
   const allowed = rowActionsFor(row);
   return (
     <ul className="flex flex-wrap gap-2" aria-label={`Actions for ${row.name}`}>
       {ACTIONS.map((a) => (
         <li key={a.key}>
-          <form action={previewRowAction}>
-            <input type="hidden" name="scenario" value={scenario} />
+          <form action={rowAction}>
             <input type="hidden" name="filter" value={filter} />
             <input type="hidden" name="location" value={row.id} />
             <input type="hidden" name="intent" value={a.key} />
@@ -43,11 +39,10 @@ export function RowActions({ row, scenario, filter }: { row: LocationRow; scenar
   );
 }
 
-/** The row's one inline action (Activate / Show QR / Reconnect). Same preview action as the rest. */
-export function PrimaryAction({ row, action, scenario, filter }: { row: LocationRow; action: Primary; scenario: string; filter: string }) {
+/** The row's one inline action (Activate / Show QR / Reconnect). Same action as the rest. */
+export function PrimaryAction({ row, action, filter }: { row: LocationRow; action: Primary; filter: string }) {
   return (
-    <form action={previewRowAction}>
-      <input type="hidden" name="scenario" value={scenario} />
+    <form action={rowAction}>
       <input type="hidden" name="filter" value={filter} />
       <input type="hidden" name="location" value={row.id} />
       <input type="hidden" name="intent" value={action.key} />

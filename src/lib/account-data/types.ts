@@ -10,6 +10,8 @@ export interface AccountSummary {
   billingStatus: BillingStatus;
   /** ISO timestamp, or null when there is no trial. */
   trialEndsAt: string | null;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
 }
 
 export type WhatsappState =
@@ -40,6 +42,8 @@ export interface BillingSummary {
   /** ISO 4217 code of `nextInvoiceAmount` (from pricingConfig()). */
   currency: string;
   portalAvailable: boolean;
+  /** True when the subscription ends at the period end (cancelled in the portal). */
+  cancelAtPeriodEnd: boolean;
 }
 
 export interface AccountDataSource {

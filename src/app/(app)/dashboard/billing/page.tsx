@@ -1,12 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ScenarioSwitcher } from "@/components/app/ScenarioSwitcher";
 import { Container } from "@/components/site/Container";
-import { PreviewBadge } from "@/components/site/PreviewBadge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
-import { getAccountDataSource, parseScenario } from "@/lib/account-data";
+import { getAccountDataSource } from "@/lib/account-data";
 import { headline, planStatus } from "@/lib/account-data/derive";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
@@ -17,21 +15,15 @@ import { dashboardHref } from "@/lib/site/dashboard-url";
 export const dynamic = "force-dynamic";
 
 export function generateMetadata(): Metadata {
-  return { title: `Billing (preview) — ${brandConfig().name}`, robots: { index: false } };
+  return { title: `Billing — ${brandConfig().name}`, robots: { index: false } };
 }
 
 const DATE = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 
-export default async function BillingPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  await requireAccountSession();
-  const params = await searchParams;
-  const scenario = parseScenario(params.scenario);
+export default async function BillingPage() {
+  const session = await requireAccountSession();
   const now = new Date();
-  const source = getAccountDataSource({ scenario, now });
+  const source = getAccountDataSource(session, now);
   const [account, rows, billing] = await Promise.all([source.getAccount(), source.listLocations(), source.getBilling()]);
   const status = planStatus(account, now);
   const next =
@@ -42,10 +34,7 @@ export default async function BillingPage({
   return (
     <Container className="py-8 md:py-12">
       <div className="mx-auto max-w-2xl">
-        <header className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h1 className="font-display text-[clamp(28px,5vw,40px)] leading-[1.15]">Billing</h1>
-          <PreviewBadge />
-        </header>
+        <h1 className="font-display text-[clamp(28px,5vw,40px)] leading-[1.15]">Billing</h1>
         {status.banner ? (
           <div role="alert" className="mt-4 rounded-lg border border-loss/30 bg-loss-soft p-4 font-medium text-ink">
             {status.banner}
@@ -58,16 +47,16 @@ export default async function BillingPage({
             <dd>
               <div className="flex flex-wrap items-center gap-2">
                 <Chip tone={status.tone}>{status.label}</Chip>
-                <span className="text-ink-dim">{headline(rows, pricingConfig())}</span>
+                <span className="text-ink-dim">{headline(rows)}</span>
               </div>
               <p className="mt-1 text-sm text-ink-faint">
                 Billed per active number: {standardPrice(pricingConfig().currency)} a month each, or {volumePrice(pricingConfig().currency)} each at {VOLUME_FROM} or more.
               </p>
             </dd>
             <dt className="text-ink-faint">Card</dt>
-            <dd>{billing.cardLast4 ? <>Ending {billing.cardLast4} <span className="text-ink-faint">(sample)</span></> : "No card on file"}</dd>
+            <dd>{billing.cardLast4 ? <>Ending {billing.cardLast4}</> : "No card on file"}</dd>
             <dt className="text-ink-faint">Next invoice</dt>
-            <dd className="tabular-nums">{next} <span className="text-ink-faint">(sample)</span></dd>
+            <dd className="tabular-nums">{next}</dd>
           </dl>
         </Card>
 
@@ -81,16 +70,10 @@ export default async function BillingPage({
         </div>
 
         <p className="mt-8">
-          <Link href={dashboardHref({ scenario })} className="text-accent-text underline underline-offset-2">
+          <Link href={dashboardHref()} className="text-accent-text underline underline-offset-2">
             Back to the dashboard
           </Link>
         </p>
-        {source.preview ? (
-          <div className="mt-6 border-t border-divider pt-4">
-            <ScenarioSwitcher scenario={scenario} billing />
-            <p className="mt-1 text-sm text-ink-faint">Sample data. Nothing here is a real account.</p>
-          </div>
-        ) : null}
       </div>
     </Container>
   );

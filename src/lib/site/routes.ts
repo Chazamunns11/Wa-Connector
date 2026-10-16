@@ -15,6 +15,11 @@ export const SITE_ROUTES = {
   billing: "/dashboard/billing",
 } as const;
 
+/** Route handlers that leave the app (not pages, so not in SITE_ROUTES): link with a plain <a>. */
+export const APP_ROUTE_HANDLERS = {
+  connectGhl: "/api/crm/oauth/start",
+} as const;
+
 /** The sitemap set: pages a search engine should index. */
 export const PUBLIC_ROUTES: readonly string[] = [
   SITE_ROUTES.home,
