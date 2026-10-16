@@ -1417,6 +1417,12 @@ async function resolveAttachmentPartOutcome(
     await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED });
     return { resolved: true, sent: false, reason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED };
   }
+  // Billing/activation may have changed since intake — same gate as the text part.
+  const gateReason = await retryGateReason(repo, await repo.getGhlAccountByLocationId(row.locationId));
+  if (gateReason) {
+    await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: gateReason });
+    return { resolved: true, sent: false, reason: gateReason };
+  }
   result.retried++;
   const sendResult = await deps.sendAttachment({
     coachId: row.tenantId,

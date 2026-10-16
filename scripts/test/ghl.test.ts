@@ -1910,6 +1910,38 @@ test("drainMultipartRow: a transiently-failing attachment part stays pending_sen
   assert.equal(statusCalls.length, 0);
 });
 
+test("retry gate: a pending_send attachment part of a multipart row for a paused account is not sent, marked refused and reported failed", async () => {
+  const seeded = createFakeRepo([makeAccount()]);
+  const messageId = "msg-mp-attachment-gate";
+  await withMediaOutboundEnabled(() =>
+    handleProviderOutboundMessage(
+      seeded.repo,
+      samplePayloadFor({ messageId, message: "text part", attachments: ["https://x/a.pdf"] }),
+      makeDeps({
+        sendAttachment: async () => ({ ok: false, code: "unreachable", message: "bridge unreachable" }),
+      }).deps
+    )
+  );
+  const row = [...seeded.rows.values()].find((r) => r.ghlMessageId === messageId)!;
+  const part = [...seeded.attachments.values()].find((a) => a.outboundMessageId === row.id)!;
+  assert.equal(part.sendState, "pending_send");
+  // The text part already went out; billing then lapsed.
+  seeded.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "sent", error: null });
+  const paused = createFakeRepo([makeAccount()], { status: "cancelled" });
+  for (const [k, v] of seeded.rows) paused.rows.set(k, v);
+  for (const [k, v] of seeded.attachments) paused.attachments.set(k, v);
+  for (const [k, v] of seeded.bridgeLedger) paused.bridgeLedger.set(k, v);
+
+  const { deps, sendAttachmentCalls, statusCalls } = makeDeps();
+  const result = await withMediaOutboundEnabled(() => drainGhlOutboundStatuses(paused.repo, deps));
+  assert.equal(sendAttachmentCalls.length, 0);
+  assert.equal(part.sendState, "refused");
+  assert.equal(result.failed, 1);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.match(statusCalls[0].errorMessage ?? "", /partially delivered/, "text part already sent, attachment refused -> the partial-delivery failure");
+  assert.match(part.refusalReason ?? "", /subscription inactive/);
+});
+
 // ---------------------------------------------------------------------------
 // QA Major 5 — an attachment part's `pending_send` retries must be bounded
 // by its OWN `send_attempts` (migration 0074, WRITTEN NOT APPLIED), exactly
