@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pricing - &lt;Brand&gt; (A)</title>
+<meta name="description" content="Pricing draft A: dark, calculator left and terms rail right.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Chakra+Petch:wght@600;700&display=swap">
+<!-- DRAFT: static design variant. Tokens copied from src/app/globals.css (dark) and its .surface-light scope. No new hex values. -->
+<style>
+:root{--bg:#0B0C0D;--card:#121417;--raised:#1A1D21;--well:#0F1113;--border:rgba(255,255,255,.07);--divider:rgba(255,255,255,.05);--ink:#FFFFFF;--dim:#C9CED1;--faint:#8C9296;--accent:#17BEB4;--accent-ink:#0B0C0D;--accent-text:#3ED2C7;--win:#2FBF71;--loss:#E5484D;--warn:#F2B23E;--info:#3E9BEE;--win-soft:rgba(47,191,113,.12);--loss-soft:rgba(229,72,77,.12);--warn-soft:rgba(242,178,62,.12);--accent-soft:rgba(23,190,180,.12);--hair:rgba(255,255,255,.16)}
+.light{--bg:#FFFFFF;--card:#FFFFFF;--raised:#F6F7F8;--well:#F6F7F8;--border:#E1E4E6;--divider:#EDEFF0;--ink:#0B0C0D;--dim:#1A1D21;--faint:#6E757A;--accent-text:#0C7C76;--win:#12805A;--loss:#C0272C;--warn:#8A5B08;--info:#1F5FC4;--win-soft:#E8F8EF;--loss-soft:#FDECEC;--warn-soft:#FDF4E3;--accent-soft:#E6FAF8;--hair:#C9CED1}
+
+*{box-sizing:border-box;border-color:var(--border)}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.6 Barlow,ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{font-family:"Chakra Petch",ui-sans-serif,system-ui,sans-serif;margin:0;line-height:1.15;letter-spacing:.005em}
+h1{font-size:clamp(32px,6vw,48px);font-weight:700}h2{font-size:clamp(24px,4vw,32px);font-weight:700}h3{font-size:18px;font-weight:600}
+p{margin:0}a{color:var(--accent-text)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.skip{position:absolute;left:-999px;top:8px;background:var(--accent);color:var(--accent-ink);padding:8px 16px;border-radius:4px;z-index:50}.skip:focus{left:16px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 16px}
+@media(min-width:768px){.wrap{padding:0 32px}}
+section{padding:48px 0}@media(min-width:768px){section{padding:80px 0}}
+.lede{font-size:18px;color:var(--dim);max-width:60ch;margin-top:16px}
+.muted{color:var(--faint);font-size:14px}.dim{color:var(--dim)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 20px;border-radius:4px;font:600 16px/1 Barlow,sans-serif;text-decoration:none;border:1px solid transparent;cursor:pointer;transition:filter 120ms,border-color 120ms}
+.btn-primary{background:var(--accent);color:var(--accent-ink)}.btn-primary:hover{filter:brightness(1.1)}
+.btn-secondary{background:transparent;color:var(--dim);border-color:var(--hair)}.btn-secondary:hover{color:var(--ink)}
+.btn-ghost{background:transparent;color:var(--dim)}.btn-sm{min-height:44px;padding:0 14px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:24px}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid;border-radius:4px;padding:4px 10px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-win{color:var(--win);border-color:var(--win);background:var(--win-soft)}.c-loss{color:var(--loss);border-color:var(--loss);background:var(--loss-soft)}.c-warn{color:var(--warn);border-color:var(--warn);background:var(--warn-soft)}.c-accent{color:var(--accent-text);border-color:var(--accent);background:transparent}.c-muted{color:var(--faint);background:var(--raised)}
+.nums{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+header.site{border-bottom:1px solid var(--border)}
+header.site .wrap{display:flex;align-items:center;justify-content:space-between;min-height:64px;gap:12px}
+.logo{font:700 18px "Chakra Petch",sans-serif;color:var(--ink);text-decoration:none}
+nav.main{display:none;gap:24px}nav.main a{color:var(--dim);text-decoration:none;font-size:14px;padding:12px 0}
+@media(min-width:768px){nav.main{display:flex}}
+.hdr-actions{display:flex;gap:8px;align-items:center}
+.grid{display:grid;gap:16px}@media(min-width:768px){.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}}
+footer{border-top:1px solid var(--border);padding:32px 0;color:var(--faint);font-size:14px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:16px 24px;justify-content:space-between}footer a{color:var(--dim);padding:12px 0;display:inline-block}
+details{border-bottom:1px solid var(--divider)}summary{min-height:44px;padding:12px 0;cursor:pointer;font-weight:600;list-style:none;display:flex;justify-content:space-between}
+summary::after{content:"+";color:var(--accent-text)}details[open] summary::after{content:"\2212"}details p{padding:0 0 16px;color:var(--dim);max-width:62ch}
+.svg-panel{background:var(--well);border:1px solid var(--border);border-radius:8px;padding:16px}
+.svg-panel svg{width:100%;height:auto;display:block}
+.svg-panel figcaption{font-size:12px;color:var(--faint);margin-top:8px}
+.preview{font-size:12px;font-weight:600;color:var(--warn);border:1px solid var(--warn);background:var(--warn-soft);border-radius:4px;padding:2px 8px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}th{text-align:left;font-weight:500;color:var(--faint);padding:12px 16px;border-bottom:1px solid var(--border)}td{padding:12px 16px;border-bottom:1px solid var(--divider);vertical-align:middle}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.hd{padding:56px 0 24px}.cols{display:grid;gap:24px;margin-top:32px}@media(min-width:900px){.cols{grid-template-columns:1.2fr .8fr}}ul.ticks{list-style:none;padding:0;margin:16px 0 0;display:grid;gap:12px}ul.ticks li{padding-left:28px;position:relative}ul.ticks li::before{content:'';position:absolute;left:4px;top:7px;width:8px;height:12px;border:solid var(--accent-text);border-width:0 2px 2px 0;transform:rotate(45deg)}</style></head>
+<body class=""><a class="skip" href="#main">Skip to content</a>
+<header class="site"><div class="wrap"><a class="logo" href="#">&lt;Brand&gt;</a>
+<nav class="main" aria-label="Main"><a href="#">How it works</a><a href="#">Pricing</a><a href="#">Setup guide</a><a href="#">FAQ</a></nav>
+<div class="hdr-actions"><a class="btn btn-ghost btn-sm" href="#">Log in</a><a class="btn btn-primary btn-sm" href="#">Start free trial</a></div></div></header><main id="main"><section class="hd"><div class="wrap"><h1>One price per number</h1><p class="lede">Pay for the WhatsApp numbers you connect. No setup fee, no per-message charge.</p>
+<div class="cols"><div><div class="card"><label for="n" style="font-weight:600">How many WhatsApp numbers?</label>
+<div style="display:flex;align-items:center;gap:16px;margin:16px 0;flex-wrap:wrap"><input id="n" type="range" min="1" max="25" value="5" style="flex:1;min-width:200px;min-height:44px;accent-color:var(--accent)" aria-describedby="out"><output class="nums" style="font:700 24px 'Chakra Petch',sans-serif">5</output></div>
+<p id="out" class="nums" style="font:700 32px 'Chakra Petch',sans-serif">5 numbers = £X per month</p><p class="muted">Billed monthly. Add or remove numbers any time.</p></div><div class="card" style="margin-top:16px"><h2 style="font-size:18px">Price for common sizes</h2><div style="margin-top:12px"><div class="table-wrap"><table><caption class="muted" style="text-align:left;padding:0 0 8px">Monthly price by number of numbers</caption><thead><tr><th scope="col">Numbers</th><th scope="col">Per month</th></tr></thead><tbody><tr><td class='nums'>1</td><td class='nums'>1 × £X</td></tr><tr><td class='nums'>3</td><td class='nums'>3 × £X</td></tr><tr><td class='nums'>5</td><td class='nums'>5 × £X</td></tr><tr><td class='nums'>10</td><td class='nums'>10 × £X</td></tr><tr><td class='nums'>25</td><td class='nums'>25 × £X</td></tr></tbody></table></div></div></div></div>
+<aside class="card" aria-labelledby="t"><h2 id="t" style="font-size:24px">Trial and billing</h2><ul class="ticks"><li>7-day free trial with 3 numbers</li><li>Card taken up front, nothing charged until the trial ends</li><li>Cancel any time from the billing portal</li><li>If a payment fails, sending continues while we retry and pauses if the subscription ends unpaid</li></ul><a class="btn btn-primary" style="margin-top:24px;width:100%" href="#">Start 7-day free trial</a></aside></div></div></section>
+<section><div class="wrap"><h2>Billing questions</h2><div style="margin-top:16px;max-width:760px"><details><summary>Will my number get banned?</summary><p>It can happen. WhatsApp does not approve of automated messaging to people who have not asked for it. The connector paces sends, caps each number daily and honours STOP replies to lower the risk, but it cannot remove it. Message people who expect to hear from you.</p></details><details><summary>Is this the official WhatsApp Business API?</summary><p>No. It links your existing WhatsApp number as a linked device, the same way WhatsApp Web does. There is no template approval and no per-conversation fee.</p></details><details><summary>What happens if a phone goes offline?</summary><p>Messages wait while the phone is disconnected and go out once it reconnects. Nothing is dropped silently.</p></details><details><summary>Do I have to rebuild my workflows?</summary><p>No. You choose the connector as the Telephony Provider and your existing Send SMS actions and conversations carry on.</p></details><details><summary>What if someone replies STOP?</summary><p>They are opted out and no further messages go to them from your account.</p></details><details><summary>What if a payment fails?</summary><p>Sending continues while the payment is retried and pauses if the subscription ends unpaid. You can cancel any time from the billing portal.</p></details></div></div></section></main><footer><div class="wrap"><span>&lt;Brand&gt; is a linked-device connector, not the official WhatsApp Business API. Not affiliated with WhatsApp or GoHighLevel.</span><nav aria-label="Footer"><a href="#">Terms</a> &nbsp; <a href="#">Privacy</a> &nbsp; <a href="#">Support</a></nav></div></footer>
+</body></html>
