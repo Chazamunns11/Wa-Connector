@@ -880,6 +880,45 @@ export async function upsertGhlContact(accessToken: string, locationId: string, 
   }
 }
 
+/** T10 — opt-in switch for mirroring STOP/START onto the GoHighLevel contact's DND. Off unless exactly "true". */
+export function isGhlDndSyncEnabled(): boolean {
+  return process.env.GHL_SYNC_DND === "true";
+}
+
+/**
+ * Sets (`dnd: true`) or clears (`dnd: false`) the contact's WhatsApp and SMS
+ * Do-Not-Disturb via `PUT /contacts/{id}` with `dndSettings`. NOT otherwise
+ * used in this codebase: shaped from GHL's documented "Update Contact"
+ * (`dndSettings.<channel>.status` = "active" | "inactive"), so verify at first
+ * go-live like `CONTACTS_API_VERSION`. The blanket `dnd` flag is deliberately
+ * not sent (it would block every channel, e.g. email). Never throws, never
+ * logs the token or the response body.
+ */
+export async function setGhlContactDnd(accessToken: string, contactId: string, dnd: boolean): Promise<{ ok: true } | { ok: false; error: string }> {
+  const status = dnd ? "active" : "inactive";
+  const entry = dnd ? { status, message: "Opted out via WhatsApp reply", code: "STOP" } : { status };
+  try {
+    const res = await fetch(`${API_BASE}/contacts/${encodeURIComponent(contactId)}`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Version: CONTACTS_API_VERSION,
+      },
+      body: JSON.stringify({ dndSettings: { WhatsApp: entry, SMS: entry } }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[ghl] contacts dnd update rejected: HTTP ${res.status}`);
+      return { ok: false, error: `dnd update rejected: HTTP ${res.status}` };
+    }
+    return { ok: true };
+  } catch {
+    console.error("[ghl] contacts dnd update unreachable");
+    return { ok: false, error: "dnd update unreachable" };
+  }
+}
+
 /**
  * Media plan (docs/MEDIA-PLAN.md §6.2, decision I2's stated fallback) — see
  * `addGhlInboundMessage`'s own JSDoc for the full rationale. This is

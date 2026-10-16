@@ -486,6 +486,7 @@ live sessions fight over one WhatsApp account.
 | `GHL_CONVERSATION_PROVIDER_ID` | Yes for replies to reach GHL | unset (replies queue) | Provider id from 4f |
 | `GHL_SSO_SHARED_SECRET` | Yes for the Custom Page | unset (embed off) | Decrypts GHL's SSO payload |
 | `GHL_EMBED_FRAME_ANCESTORS` | No | unset (GHL's own hosts only) | Extra `frame-ancestors` origins for whitelabel domains |
+| `GHL_SYNC_DND` | No | `false` | Exactly `true` mirrors STOP/START onto the GHL contact's WhatsApp and SMS DND (`PUT /contacts/{id}` `dndSettings`; verify at first go-live). Failures are logged and never block the opt-out |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Supabase Storage bucket for inbound media; must match the bridge |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | Web-app side media switch; see the flip order below |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | Lifetime of signed media URLs |

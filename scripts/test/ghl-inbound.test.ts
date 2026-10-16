@@ -865,3 +865,84 @@ test("opt-out is recorded even when the GHL push later fails (ordering: before u
   assert.equal(result.retried, 1);
   assert.equal(optOuts.get(`${TENANT_ID}:${PHONE}`)?.keyword, "STOP");
 });
+
+// ---------------------------------------------------------------------------
+// T10 — optional GHL DND sync (GHL_SYNC_DND, off by default)
+// ---------------------------------------------------------------------------
+type DndCall = { accessToken: string; contactId: string; dnd: boolean };
+function withDnd(flag: string | undefined, overrides: Partial<GhlInboundDeps> = {}) {
+  const dndCalls: DndCall[] = [];
+  const made = makeDeps({
+    setContactDnd: async (accessToken, contactId, dnd) => {
+      dndCalls.push({ accessToken, contactId, dnd });
+      return { ok: true };
+    },
+    ...overrides,
+  });
+  if (flag === undefined) delete process.env.GHL_SYNC_DND;
+  else process.env.GHL_SYNC_DND = flag;
+  return { ...made, dndCalls };
+}
+const savedDndFlag = process.env.GHL_SYNC_DND;
+afterEach(() => {
+  if (savedDndFlag === undefined) delete process.env.GHL_SYNC_DND;
+  else process.env.GHL_SYNC_DND = savedDndFlag;
+});
+
+test("DND sync on: STOP sets DND once with the upserted contact id", async () => {
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [makeRow({ body: "STOP" })]);
+  const { deps, dndCalls } = withDnd("true");
+  await drainGhlInboundReplies(repo, deps);
+  assert.equal(dndCalls.length, 1);
+  assert.equal(dndCalls[0]!.contactId, "contact-1");
+  assert.equal(dndCalls[0]!.dnd, true);
+  assert.equal(optOuts.get(`${TENANT_ID}:${PHONE}`)?.ghlContactId, "contact-1");
+});
+
+test("DND sync on: START clears DND", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow({ body: "START" })]);
+  const { deps, dndCalls } = withDnd("true");
+  await drainGhlInboundReplies(repo, deps);
+  assert.deepEqual(dndCalls.map((c) => c.dnd), [false]);
+});
+
+test("DND sync on: an ordinary message makes no DND call", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow({ body: "hello there" })]);
+  const { deps, dndCalls } = withDnd("true");
+  await drainGhlInboundReplies(repo, deps);
+  assert.equal(dndCalls.length, 0);
+});
+
+test("DND sync off (unset, and 'false'): never called", async () => {
+  for (const flag of [undefined, "false"]) {
+    const { repo } = createFakeRepo([makeAccount()], [makeRow({ body: "STOP" })]);
+    const { deps, dndCalls } = withDnd(flag);
+    await drainGhlInboundReplies(repo, deps);
+    assert.equal(dndCalls.length, 0);
+  }
+});
+
+test("DND sync on: a failing or throwing DND call does not change resolution and logs once", async () => {
+  for (const impl of [
+    async () => ({ ok: false as const, error: "dnd update rejected: HTTP 500" }),
+    async (): Promise<never> => {
+      throw new Error("boom");
+    },
+  ]) {
+    const row = makeRow({ body: "STOP" });
+    const { repo, rowsById, optOuts } = createFakeRepo([makeAccount()], [row]);
+    const { deps } = withDnd("true", { setContactDnd: impl });
+    const logged: unknown[][] = [];
+    const realErr = console.error;
+    console.error = (...a: unknown[]) => void logged.push(a);
+    try {
+      await drainGhlInboundReplies(repo, deps);
+    } finally {
+      console.error = realErr;
+    }
+    assert.equal(rowsById.get(row.id)!.resolution, "ghl_pushed");
+    assert.ok(optOuts.has(`${TENANT_ID}:${PHONE}`));
+    assert.equal(logged.length, 1);
+    assert.equal(JSON.stringify(logged).includes("access-token-fresh"), false);
+  }
+});

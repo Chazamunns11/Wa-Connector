@@ -173,6 +173,8 @@ import {
   describeStoredMediaLabel,
   describeTooLargeMediaPlaceholder,
   ghlConversationProviderId,
+  isGhlDndSyncEnabled,
+  setGhlContactDnd,
   refreshGhlToken,
   upsertGhlContact,
   type AddGhlInboundMessageResult,
@@ -214,11 +216,14 @@ export interface GhlInboundDeps extends GhlTokenRefreshDeps {
     accessToken: string,
     input: { contactId: string; conversationProviderId: string; body: string; timestampIso?: string; attachments?: string[] }
   ) => Promise<AddGhlInboundMessageResult>;
+  /** T10 — only called when `GHL_SYNC_DND === "true"`. */
+  setContactDnd: (accessToken: string, contactId: string, dnd: boolean) => Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
 export const defaultGhlInboundDeps: GhlInboundDeps = {
   upsertContact: upsertGhlContact,
   addInboundMessage: addGhlInboundMessage,
+  setContactDnd: setGhlContactDnd,
   refreshToken: refreshGhlToken,
   refreshWaitMs: 1000,
   // Same runtime-import rationale as `defaultGhlProviderDeps` — see that
@@ -481,6 +486,18 @@ async function processGhlInboundRow(
     breaker.consecutiveContactUpsertFailures = 0;
     contactId = upsert.contactId;
     contactIdByKey.set(memoKey, contactId);
+  }
+
+  // T10 — optional DND mirror (GHL_SYNC_DND, off by default). Never blocks the
+  // opt-out (already persisted above) or the push; failures are logged only.
+  if (optOutOutcome && isGhlDndSyncEnabled()) {
+    try {
+      const dnd = await deps.setContactDnd(accessToken, contactId, optOutOutcome === "opt_out");
+      if (!dnd.ok) console.error(`[ghl-inbound] DND sync failed (non-fatal): ${dnd.error}`);
+      if (optOutOutcome === "opt_out") await applyOptOutKeyword(repo, row, contactId); // idempotent; records the contact id
+    } catch (err) {
+      console.error("[ghl-inbound] DND sync threw (non-fatal):", err instanceof Error ? err.message : "unknown error");
+    }
   }
 
   // Step 3 — atomic claim, reused verbatim from the coach drain (see this
