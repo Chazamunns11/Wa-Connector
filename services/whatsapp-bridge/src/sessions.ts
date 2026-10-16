@@ -105,6 +105,7 @@ import { useSupabaseAuthState } from "./auth-state.js";
 import { SessionLock } from "./lock.js";
 import { PendingWrites } from "./pending-writes.js";
 import { SessionPacer } from "./pacing.js";
+import { simulateTyping, typingDurationMs } from "./typing.js";
 import { isE164 } from "./phone.js";
 import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
@@ -1359,6 +1360,23 @@ export class SessionManager {
             continue;
           }
           messageContent = buildBaileysMediaContent(resolved, payload.attachment.fileName);
+        }
+
+        // Typing simulation (src/typing.ts) — "typing…" before a TEXT part,
+        // to the JID WhatsApp returned above. Best effort: presence errors
+        // never fail the send. The socket can drop during the window, so it
+        // is re-checked after: nothing has been dispatched yet, so a drop
+        // here fails the row as NOT attempted (safe to reissue), the same as
+        // the existence-check failure branch above.
+        if (payload.kind === "text") {
+          const typingMs = typingDurationMs(payload.text, { enabled: this.config.typingIndicatorEnabled, maxMs: this.config.typingMaxMs });
+          await simulateTyping(sock, jid, typingMs, sleep, (err) =>
+            this.log.warn({ coachId: session.coachId, messageId: record.id, err: err.message }, "typing presence update failed — sending anyway")
+          );
+          if (session.sock !== sock || session.status !== "connected") {
+            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "session disconnected before sending — not dispatched", false));
+            continue;
+          }
         }
 
         session.pacer.recordSend(); // count the ATTEMPT — see pacer JSDoc.

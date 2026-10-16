@@ -162,6 +162,13 @@ still exists on the linked phone regardless.
   blow through the cap before any of them has actually dispatched. A ban
   lands on the client's real business number — that is why these defaults
   are conservative.
+- Before each outbound text part the worker shows "typing…" in the
+  recipient's chat (`src/typing.ts`, `WA_TYPING_INDICATOR_ENABLED`,
+  `WA_TYPING_MAX_MS`): 1s plus 30ms per character, ±20%, capped at 4s by
+  default. It runs after the existence check (it needs WhatsApp's JID) and
+  before the attempt is recorded. If the socket drops during the window the
+  row fails as not dispatched, so it is safe to reissue. Presence errors are
+  logged and never fail the send.
 - Two concurrent `/connect` calls for the same tenant (a double-clicked
   Connect button, or one landing mid-redeploy) collapse onto one in-flight
   attempt (`SessionManager.starting`) rather than racing two independent

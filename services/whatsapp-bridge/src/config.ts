@@ -27,6 +27,10 @@ export interface BridgeConfig {
   sendJitterMs: number;
   /** Max sends per coach per UTC day. */
   dailyCap: number;
+  /** Show "typing…" before each outbound text part (src/typing.ts). */
+  typingIndicatorEnabled: boolean;
+  /** Longest single typing window (ms); 0 disables typing like the flag does. */
+  typingMaxMs: number;
   /**
    * Session-lease heartbeat interval (ms) — see src/lock.ts. Default 10s.
    * `lockTtlMs` is 3x this: a holder is declared dead only after missing 3
@@ -184,6 +188,8 @@ export function loadConfig(): BridgeConfig {
     sendMinGapMs: intWithDefault("WA_SEND_MIN_GAP_MS", 45_000),
     sendJitterMs: intWithDefault("WA_SEND_JITTER_MS", 30_000),
     dailyCap: intWithDefault("WA_DAILY_CAP", 150),
+    typingIndicatorEnabled: boolWithDefault("WA_TYPING_INDICATOR_ENABLED", true),
+    typingMaxMs: intWithDefault("WA_TYPING_MAX_MS", 4_000),
     lockHeartbeatMs: intWithDefault("WA_LOCK_HEARTBEAT_MS", 10_000),
     lockTtlMs: intWithDefault("WA_LOCK_TTL_MS", 30_000),
     shutdownFlushTimeoutMs: intWithDefault("WA_SHUTDOWN_FLUSH_TIMEOUT_MS", 5_000),

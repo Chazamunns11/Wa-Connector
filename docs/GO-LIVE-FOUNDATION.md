@@ -507,6 +507,8 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_SEND_MIN_GAP_MS` | No | `45000` | Minimum gap between sends on one number |
 | `WA_SEND_JITTER_MS` | No | `30000` | Random jitter added to the gap |
 | `WA_DAILY_CAP` | No | `150` | Max sends per number per UTC day |
+| `WA_TYPING_INDICATOR_ENABLED` | No | `true` | Show "typing…" before each outbound text |
+| `WA_TYPING_MAX_MS` | No | `4000` | Longest typing window per message (ms) |
 | `WA_LOCK_HEARTBEAT_MS` | No | `10000` | Session lease heartbeat |
 | `WA_LOCK_TTL_MS` | No | `30000` | Lease staleness TTL; must exceed the heartbeat |
 | `WA_SHUTDOWN_FLUSH_TIMEOUT_MS` | No | `5000` | Shutdown write-flush ceiling; 500 to 5999 |
