@@ -53,20 +53,20 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     disconnected: {
       question: "What happens if a phone goes offline?",
       answer:
-        "Its messages are held, not dropped. They wait in the queue and send when the phone reconnects. You can see which numbers are disconnected from your dashboard.",
+        "Its messages are held. They wait in the queue and send when the phone reconnects. You can see which numbers are disconnected from your dashboard.",
     },
     stop: {
       question: "What if someone replies STOP?",
       answer:
-        "They are opted out straight away and no further messages go to them from your account.",
+        "That contact is opted out straight away and gets no more messages from that number.",
     },
     "daily-cap": {
       question: "What is the daily cap?",
-      answer: `Each number has a limit on how many messages it sends in a day, and messages go out at a steady pace rather than all at once. Anything over the cap waits until the next day. This is there to protect your number, so it is not something you switch off.`,
+      answer: `Each number has a limit on how many messages it sends in a day, and messages go out at a steady pace rather than all at once. Once a number reaches its daily cap, further messages that day are reported back to GoHighLevel as not sent. The number starts again at midnight (UTC). This is there to protect your number, so it is not something you switch off.`,
     },
     trial: {
       question: "How does the free trial work?",
-      answer: `You get ${TRIAL_DAYS} days free with up to ${TRIAL_MAX_NUMBERS} numbers. We take your card up front and charge nothing until the trial ends. After that it is ${one}.`,
+      answer: `You get ${TRIAL_DAYS} days free with up to ${TRIAL_MAX_NUMBERS} numbers. We take your card up front and charge nothing until the trial ends. After that you pay per number: ${one}.`,
     },
     cancel: {
       question: "Can I cancel, and what if a payment fails?",
@@ -79,7 +79,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     "white-label": {
       question: "Does it work on a white-labelled GoHighLevel account?",
-      answer: `Usually, but some agencies block app installs on their white-label accounts. If the install link is blocked, ask your agency to allow ${name} for your sub-account. The setup guide has the wording to send them.`,
+      answer: `It depends on the agency. Some block app installs on white-label accounts. If the install link is blocked, ask your agency to allow ${name} for your sub-account. The setup guide has the wording to send them.`,
     },
   };
   return FAQ_IDS.map((id) => ({ id, ...copy[id] }));

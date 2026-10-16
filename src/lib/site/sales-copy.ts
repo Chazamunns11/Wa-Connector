@@ -37,7 +37,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     safety: [
       {
         title: "Paced sending",
-        body: "Messages leave at a steady rate, not in one burst, and each number has a daily cap. It will not send more than the cap in a day.",
+        body: "Messages leave at a steady rate, spread out over the day, and each number has a daily cap. It will not send more than the cap in a day.",
       },
       {
         title: "Held while disconnected",
@@ -45,7 +45,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
       },
       {
         title: "STOP opt-outs",
-        body: "When someone replies STOP, they are opted out and no more messages go to them from your account.",
+        body: "When someone replies STOP, that contact is opted out and gets no more messages from that number.",
       },
     ],
     ctaLabel: "Start 7-day free trial",

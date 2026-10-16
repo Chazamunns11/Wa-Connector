@@ -43,6 +43,17 @@ test("official-api answer says linked device and not the official Business API",
   assert.match(a, /green tick/i);
 });
 
+test("daily-cap, stop and white-label answers state the real behaviour", () => {
+  const get = (id: string) => faqEntries(brand).find((e) => e.id === id)!.answer;
+  assert.match(get("daily-cap"), /reported back to GoHighLevel as not sent/);
+  assert.match(get("daily-cap"), /midnight \(UTC\)/);
+  assert.match(get("stop"), /from that number/);
+  assert.match(get("white-label"), /It depends on the agency/);
+  assert.match(get("white-label"), /ask your agency to allow Testbrand/);
+  assert.match(get("trial"), /After that you pay per number: 1 number = /);
+  assert.ok(!salesCopy(brand).safety.some((s) => /from your account/.test(s.body)));
+});
+
 test("salesCopy has 3 steps and the three safety items", () => {
   const c = salesCopy(brand);
   assert.equal(c.steps.length, 3);

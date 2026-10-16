@@ -12,8 +12,8 @@ export function SiteFooter() {
     <footer className="border-t py-8 text-sm text-ink-faint">
       <Container className="flex flex-wrap justify-between gap-x-6 gap-y-4">
         <p className="max-w-[62ch]">
-          {name} is a linked-device connector, not the official WhatsApp Business API. Not
-          affiliated with WhatsApp or GoHighLevel.
+          {name} is a linked-device connector, not the official WhatsApp Business API. {name} is
+          not affiliated with or endorsed by Meta, WhatsApp or HighLevel.
         </p>
         <nav aria-label="Footer" className="flex flex-wrap gap-x-6">
           <Link href={SITE_ROUTES.terms} className={LINK}>
