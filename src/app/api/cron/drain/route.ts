@@ -12,7 +12,7 @@
  * hour even if every poke silently fails.
  *
  * ORDER (copied from the reminders route): outbound statuses, then inbound
- * replies, then the 90-day inbound purge — a row must be fully processed
+ * replies, then the 90-day inbound purge, then the 14-day cancelled-account cleanup — a row must be fully processed
  * before it's ever eligible to be deleted. Each pass is non-fatal: its own
  * try/catch, so one failing never stops the others.
  *
@@ -24,6 +24,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { repo } from "@/lib/data";
 import { drainGhlOutboundStatuses } from "@/lib/ghl-provider";
 import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
+import { purgeCancelledAccounts } from "@/lib/billing/cleanup";
+import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
 
 export const dynamic = "force-dynamic";
 
@@ -99,5 +101,19 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] whatsapp-inbound purge failed (non-fatal):", err);
   }
 
-  return NextResponse.json({ ok: true, ghlOutboundStatuses, ghlInboundReplies, whatsappInboundPurged });
+  // Fourth pass: accounts cancelled 14+ days ago lose their stored WhatsApp
+  // credentials. Idempotent; logs counts only (never ids, emails or Stripe refs).
+  let cancelledCleanup = { accounts: 0, locations: 0, failures: 0 };
+  try {
+    cancelledCleanup = await purgeCancelledAccounts(repo, { logout: logoutWhatsappSession, now: () => new Date(now) });
+    if (cancelledCleanup.accounts > 0) {
+      console.log(
+        `[cron/drain] cancelled cleanup: ${cancelledCleanup.accounts} account(s), ${cancelledCleanup.locations} location(s), ${cancelledCleanup.failures} failure(s).`
+      );
+    }
+  } catch (err) {
+    console.error("[cron/drain] cancelled-account cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
+  }
+
+  return NextResponse.json({ ok: true, ghlOutboundStatuses, ghlInboundReplies, whatsappInboundPurged, cancelledCleanup });
 }
