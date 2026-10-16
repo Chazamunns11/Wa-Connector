@@ -31,9 +31,25 @@ export function SignupForm({
   return (
     <form action={action} noValidate className="flex flex-col gap-5">
       {hasErrors ? (
-        <p role="alert" className="rounded border border-loss/40 bg-loss-soft p-3 text-sm text-ink">
-          Some details need another look. Nothing has been saved.
-        </p>
+        <div
+          id="signup-errors"
+          tabIndex={-1}
+          role="alert"
+          className="rounded border border-loss/40 bg-loss-soft p-3 text-sm text-ink"
+        >
+          <p className="font-semibold">Some details need another look. Nothing has been saved.</p>
+          <ul className="mt-2 grid gap-1">
+            {errors.accountName ? (
+              <li><a href="#accountName" className="underline underline-offset-2">{errors.accountName}</a></li>
+            ) : null}
+            {errors.kind ? (
+              <li><a href="#kind-agency" className="underline underline-offset-2">{errors.kind}</a></li>
+            ) : null}
+            {errors.email ? (
+              <li><a href="#email" className="underline underline-offset-2">{errors.email}</a></li>
+            ) : null}
+          </ul>
+        </div>
       ) : null}
       {claim ? <input type="hidden" name="claim" value={claim} /> : null}
 
@@ -71,6 +87,7 @@ export function SignupForm({
             className="flex min-h-11 cursor-pointer items-start gap-3 rounded border bg-well p-3 has-[:checked]:border-accent"
           >
             <input
+              id={`kind-${o.value}`}
               type="radio"
               name="kind"
               value={o.value}

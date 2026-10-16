@@ -6,7 +6,7 @@ import { buttonClasses } from "@/components/ui/Button";
 import { Container } from "@/components/site/Container";
 import { PreviewBadge } from "@/components/site/PreviewBadge";
 import { brandConfig } from "@/lib/brand-config";
-import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, priceLine, pricingConfig } from "@/lib/pricing";
+import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, formatMoney, pricingConfig } from "@/lib/pricing";
 import { SITE_ROUTES } from "@/lib/site/routes";
 import { validateSignup } from "@/lib/site/signup";
 
@@ -29,6 +29,7 @@ export default async function CheckoutPage({
   const result = validateSignup({ accountName: one(p.name), kind: one(p.kind), email: one(p.email) });
   if (!result.ok) redirect(SITE_ROUTES.signup);
   const { accountName, kind, email } = result.value;
+  const claim = typeof p.claim === "string" && p.claim ? p.claim : null;
   const brand = brandConfig();
   const pricing = pricingConfig();
 
@@ -43,6 +44,7 @@ export default async function CheckoutPage({
           This is a preview of the last step. Nothing here creates an account, sends an email or takes a card.
         </p>
 
+        {claim ? <p className="mt-3 text-ink-dim">You arrived from GoHighLevel.</p> : null}
         <div className="mt-8 grid gap-4">
           <Card>
             <h2 className="font-display text-xl font-bold">Your details</h2>
@@ -55,18 +57,18 @@ export default async function CheckoutPage({
               <dd className="break-all">{email}</dd>
             </dl>
             <p className="mt-4">
-              <Link href={SITE_ROUTES.signup} className="text-accent-text underline underline-offset-2">
+              <Link href={claim ? `${SITE_ROUTES.signup}?claim=${encodeURIComponent(claim)}` : SITE_ROUTES.signup} className="text-accent-text underline underline-offset-2">
                 Change these details
               </Link>
             </p>
           </Card>
 
           <Card>
-            <h2 className="font-display text-xl font-bold">What happens at checkout</h2>
+            <h2 className="font-display text-xl font-bold">What happens next</h2>
             <ul className="mt-4 grid gap-3 text-ink-dim">
               <li>
-                <span className="font-semibold text-ink">{priceLine(1, pricing)}</span> for each active number, once the
-                trial ends.
+                <span className="font-semibold text-ink">{formatMoney(pricing.pricePerNumber, pricing.currency)}</span> per
+                active number per month, once the trial ends.
               </li>
               <li>
                 A {TRIAL_DAYS}-day free trial, with up to {TRIAL_MAX_NUMBERS} numbers.

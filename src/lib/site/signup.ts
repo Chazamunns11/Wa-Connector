@@ -6,11 +6,21 @@ export interface SignupInput {
   email: string;
 }
 
-export type SignupErrors = Partial<Record<keyof SignupInput, string>>;
+export type SignupField = keyof SignupInput;
+/** Codes travel in the URL; only the messages below are ever rendered. */
+export type SignupErrorCode = "name_length" | "kind_required" | "email_invalid";
+export type SignupErrorCodes = Partial<Record<SignupField, SignupErrorCode>>;
+export type SignupErrors = Partial<Record<SignupField, string>>;
+
+export const SIGNUP_ERROR_MESSAGES: Record<SignupErrorCode, string> = {
+  name_length: "Enter a name between 2 and 80 characters.",
+  kind_required: "Choose agency or single business.",
+  email_invalid: "Enter an email address like name@example.com.",
+};
 
 export type SignupResult =
   | { ok: true; value: SignupInput }
-  | { ok: false; errors: SignupErrors; values: Partial<SignupInput> };
+  | { ok: false; errors: SignupErrorCodes; values: Partial<SignupInput> };
 
 const FIELDS = ["accountName", "kind", "email"] as const;
 const KINDS: readonly AccountKind[] = ["agency", "business"];
@@ -37,13 +47,13 @@ export function validateSignup(form: Record<string, FormDataEntryValue | null>):
   const accountName = (asString(form.accountName) ?? "").trim();
   const kindRaw = asString(form.kind);
   const email = (asString(form.email) ?? "").trim().toLowerCase();
-  const errors: SignupErrors = {};
+  const errors: SignupErrorCodes = {};
 
   if (accountName.length < 2 || accountName.length > 80) {
-    errors.accountName = "Enter a name between 2 and 80 characters.";
+    errors.accountName = "name_length";
   }
-  if (!isKind(kindRaw)) errors.kind = "Choose agency or single business.";
-  if (!validEmail(email)) errors.email = "Enter an email address like name@example.com.";
+  if (!isKind(kindRaw)) errors.kind = "kind_required";
+  if (!validEmail(email)) errors.email = "email_invalid";
 
   if (Object.keys(errors).length === 0 && isKind(kindRaw)) {
     return { ok: true, value: { accountName, kind: kindRaw, email } };
@@ -55,8 +65,9 @@ export function validateSignup(form: Record<string, FormDataEntryValue | null>):
   return { ok: false, errors, values };
 }
 
-export function checkoutQuery(input: SignupInput): string {
+export function checkoutQuery(input: SignupInput, claim?: string): string {
   const q = new URLSearchParams({ name: input.accountName, kind: input.kind, email: input.email });
+  if (claim) q.set("claim", claim.slice(0, 200));
   return `?${q.toString()}`;
 }
 
@@ -81,8 +92,10 @@ export function signupStateFromParams(params: Params): { errors: SignupErrors; v
   const errors: SignupErrors = {};
   const values: Partial<SignupInput> = {};
   for (const f of FIELDS) {
-    const e = asString(params[`error.${f}`]);
-    if (e) errors[f] = e.slice(0, 200);
+    const code = asString(params[`error.${f}`]);
+    if (code && Object.hasOwn(SIGNUP_ERROR_MESSAGES, code)) {
+      errors[f] = SIGNUP_ERROR_MESSAGES[code as SignupErrorCode];
+    }
     const v = asString(params[`v.${f}`]);
     if (!v) continue;
     if (f === "kind") {

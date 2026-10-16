@@ -8,16 +8,17 @@ import { checkoutQuery, signupRedirectQuery, validateSignup } from "@/lib/site/s
  * sends no email and takes no payment.
  */
 export async function previewSignupAction(formData: FormData): Promise<void> {
+  const rawClaim = formData.get("claim");
+  const claim = typeof rawClaim === "string" && rawClaim ? rawClaim.slice(0, 200) : undefined;
   const result = validateSignup({
     accountName: formData.get("accountName"),
     kind: formData.get("kind"),
     email: formData.get("email"),
   });
   if (!result.ok) {
-    const claim = formData.get("claim");
     const q = new URLSearchParams(signupRedirectQuery(result));
-    if (typeof claim === "string" && claim) q.set("claim", claim.slice(0, 200));
-    redirect(`/signup?${q.toString()}`);
+    if (claim) q.set("claim", claim);
+    redirect(`/signup?${q.toString()}#signup-errors`);
   }
-  redirect(`/signup/checkout${checkoutQuery(result.value)}`);
+  redirect(`/signup/checkout${checkoutQuery(result.value, claim)}`);
 }
