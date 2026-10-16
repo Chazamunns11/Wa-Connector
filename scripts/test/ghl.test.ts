@@ -33,7 +33,7 @@ import {
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
 import type { BridgeSendResult, BridgeSessionResult, SendWhatsappAttachmentInput, SendWhatsappInput } from "@/lib/whatsapp-bridge";
-import type { Account, GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, GhlOutboundMessageDraft } from "@/lib/types";
+import type { Account, WhatsappSessionSummary, GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, GhlOutboundMessageDraft } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // 1. Ed25519 synthetic fixture — src/lib/ghl.ts's verifyGhlSignature
@@ -45,7 +45,7 @@ function samplePayload(): Record<string, unknown> {
     locationId: "loc-1",
     messageId: "msg-1",
     phone: "+447700900123",
-    message: "hello from GHL",
+    message: "hi there",
     attachments: [] as string[],
     userId: "user-1",
     type: "SMS",
@@ -369,6 +369,9 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
   // attachment parts, keyed by their own id (mirrors `rows` above).
   const attachments = new Map<string, GhlOutboundAttachment>();
   const calls: FakeCall[] = [];
+  // Reliability (T7): session summaries by tenant and opt-outs keyed `${tenantId}:${phone}`.
+  const sessionsByTenant = new Map<string, WhatsappSessionSummary>();
+  const optOuts = new Set<string>();
   let nextId = 1;
   let nextAttachmentId = 1;
   let claimedAt: number | null = null;
@@ -379,6 +382,14 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
       if (billing === null) return null;
       const status = billing === "default" ? "active" : billing.status;
       return { id, name: "Acme", kind: "business", ownerEmail: "o@x.test", stripeCustomerId: null, stripeSubscriptionId: null, billingStatus: status, trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, createdAt: "2026-10-01T00:00:00Z" } as Account;
+    },
+    async getWhatsappSessionSummary(coachId: string) {
+      calls.push({ method: "getWhatsappSessionSummary", args: [coachId] });
+      return sessionsByTenant.get(coachId) ?? null;
+    },
+    async isOptedOut(tenantId: string, phone: string) {
+      calls.push({ method: "isOptedOut", args: [tenantId, phone] });
+      return optOuts.has(`${tenantId}:${phone}`);
     },
     async getGhlAccountByLocationId(locationId: string) {
       calls.push({ method: "getGhlAccountByLocationId", args: [locationId] });
@@ -411,15 +422,16 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
     },
     async updateGhlOutboundSendState(
       id: string,
-      patch: { sendState: GhlOutboundMessage["sendState"]; sendAttempts?: number; refusalReason?: string }
+      patch: { sendState: GhlOutboundMessage["sendState"]; sendAttempts?: number; refusalReason?: string; onlyIfSendState?: GhlOutboundMessage["sendState"] }
     ) {
       calls.push({ method: "updateGhlOutboundSendState", args: [id, patch] });
       const row = rows.get(id);
       if (!row) throw new Error(`no such row ${id}`);
+      if (patch.onlyIfSendState !== undefined && row.sendState !== patch.onlyIfSendState) return;
       row.sendState = patch.sendState;
       if (patch.sendAttempts !== undefined) row.sendAttempts = patch.sendAttempts;
       // Mirrors src/lib/data/supabase.ts's own clearing rule (0070).
-      if (patch.sendState !== "pending_send") row.pendingText = null;
+      if (patch.sendState !== "pending_send" && patch.sendState !== "held") row.pendingText = null;
       // Mirrors src/lib/data/supabase.ts's own stamp-once rule (0071).
       if (patch.sendState === "refused" && patch.refusalReason !== undefined) row.refusalReason = patch.refusalReason;
     },
@@ -526,7 +538,7 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
     },
   };
 
-  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls };
+  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls, sessionsByTenant, optOuts };
 }
 
 function makeSendResult(overrides: Partial<Extract<BridgeSendResult, { ok: true }>["message"]> = {}): BridgeSendResult {
@@ -704,6 +716,104 @@ test("handleProviderOutboundMessage: bridge 409 session_not_connected -> inline 
   assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.notConnected });
   assert.equal(statusCalls.length, 1);
   assert.equal(statusCalls[0].status, "failed");
+});
+
+// ---------------------------------------------------------------------------
+// Reliability T7 — hold on disconnect, refuse opted-out contacts
+// ---------------------------------------------------------------------------
+
+function sessionSummary(overrides: Partial<WhatsappSessionSummary> = {}): WhatsappSessionSummary {
+  return { coachId: TENANT_ID, status: "disconnected", phoneNumber: "+447700900000", lastConnectedAt: "2026-10-15T10:00:00Z", lastDisconnectReason: null, sentToday: 0, heldMessages: 0, ...overrides };
+}
+const notConnectedSend: Partial<GhlProviderDeps> = {
+  sendWhatsapp: async () => ({ ok: false, code: "session_not_connected", message: "not connected" }),
+};
+
+test("webhook: bridge says session_not_connected for a previously linked number -> row held, no status report", async () => {
+  const { repo, rows, sessionsByTenant } = createFakeRepo([makeAccount()]);
+  sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const { deps, statusCalls } = makeDeps(notConnectedSend);
+  const out = await handleProviderOutboundMessage(repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "held" });
+  const row = [...rows.values()][0];
+  assert.equal(row.sendState, "held");
+  assert.equal(row.pendingText, "hi there");
+  assert.equal(statusCalls.length, 0);
+});
+
+test("webhook: session_not_connected for a never-linked number -> refused notConnected, reported failed", async () => {
+  const { repo, sessionsByTenant } = createFakeRepo([makeAccount()]);
+  sessionsByTenant.set(TENANT_ID, sessionSummary({ lastConnectedAt: null, status: "waiting_qr" }));
+  const { deps, statusCalls } = makeDeps(notConnectedSend);
+  const out = await handleProviderOutboundMessage(repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.notConnected });
+  assert.equal(statusCalls[0].status, "failed");
+});
+
+test("webhook: banned number -> refused numberBanned, reported failed", async () => {
+  const { repo, sessionsByTenant } = createFakeRepo([makeAccount()]);
+  sessionsByTenant.set(TENANT_ID, sessionSummary({ status: "banned" }));
+  const { deps, statusCalls } = makeDeps(notConnectedSend);
+  const out = await handleProviderOutboundMessage(repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.numberBanned });
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.numberBanned);
+});
+
+test("webhook: opted-out contact -> refused optedOut BEFORE any bridge call, reported failed", async () => {
+  const { repo, optOuts, rows } = createFakeRepo([makeAccount()]);
+  optOuts.add(`${TENANT_ID}:+447700900123`);
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOut });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.optedOut);
+  assert.equal([...rows.values()][0].sendState, "refused");
+});
+
+test("webhook: opt-out is per number: same phone opted out on another tenant still sends here", async () => {
+  const { repo, optOuts } = createFakeRepo([makeAccount()]);
+  optOuts.add(`other-tenant:+447700900123`);
+  const { deps, sendCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+});
+
+test("webhook: W11 over cap is still reported not sent, never held", async () => {
+  const { repo } = createFakeRepo([makeAccount()]);
+  const { deps, statusCalls } = makeDeps({ sendWhatsapp: async () => ({ ok: false, code: "daily_cap_reached", message: "cap" }) });
+  const out = await handleProviderOutboundMessage(repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.capReached });
+  assert.equal(statusCalls[0].status, "failed");
+});
+
+test("drain pending_send: bridge now says session_not_connected for a linked number -> held (not refused), no report", async () => {
+  const bundle = createFakeRepo([makeAccount()]);
+  bundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const { deps, statusCalls } = makeDeps({
+    ...notConnectedSend,
+  });
+  // intake while the bridge is unreachable so the row stays pending_send
+  await handleProviderOutboundMessage(bundle.repo, samplePayloadFor(), makeDeps({ sendWhatsapp: async () => ({ ok: false, code: "unreachable", message: "x" }) }).deps);
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.sendState, "pending_send");
+  const result = await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(row.sendState, "held");
+  assert.equal(row.pendingText, "hi there");
+  assert.equal(result.held, 1);
+  assert.equal(statusCalls.length, 0);
+});
+
+test("drain pending_send: contact opted out since -> refused optedOut, no resend, reported failed", async () => {
+  const bundle = createFakeRepo([makeAccount()]);
+  await handleProviderOutboundMessage(bundle.repo, samplePayloadFor(), makeDeps({ sendWhatsapp: async () => ({ ok: false, code: "unreachable", message: "x" }) }).deps);
+  bundle.optOuts.add(`${TENANT_ID}:+447700900123`);
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.optedOut);
+  assert.equal([...bundle.rows.values()][0].sendState, "refused");
 });
 
 test("handleProviderOutboundMessage: bridge unreachable -> row stays pending_send, no status call, handler still resolves ok (always-200 contract)", async () => {

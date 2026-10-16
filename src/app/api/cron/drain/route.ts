@@ -63,6 +63,7 @@ export async function GET(request: NextRequest) {
     failed: 0,
     retried: 0,
     stillPending: 0,
+    held: 0,
     unresolved: 0,
     reportFailed: 0,
     timeBudgetExceeded: false,
@@ -71,7 +72,7 @@ export async function GET(request: NextRequest) {
     ghlOutboundStatuses = await drainGhlOutboundStatuses(repo);
     if (ghlOutboundStatuses.candidates > 0) {
       console.log(
-        `[cron/drain] ghl outbound statuses: ${ghlOutboundStatuses.candidates} candidate(s), delivered ${ghlOutboundStatuses.delivered}, failed ${ghlOutboundStatuses.failed}, retried ${ghlOutboundStatuses.retried}, still pending ${ghlOutboundStatuses.stillPending}${ghlOutboundStatuses.timeBudgetExceeded ? " (time budget exceeded — remaining rows left for next pass)" : ""}.`
+        `[cron/drain] ghl outbound statuses: ${ghlOutboundStatuses.candidates} candidate(s), delivered ${ghlOutboundStatuses.delivered}, failed ${ghlOutboundStatuses.failed}, retried ${ghlOutboundStatuses.retried}, still pending ${ghlOutboundStatuses.stillPending}, held ${ghlOutboundStatuses.held}${ghlOutboundStatuses.timeBudgetExceeded ? " (time budget exceeded — remaining rows left for next pass)" : ""}.`
       );
     }
   } catch (err) {

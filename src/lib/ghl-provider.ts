@@ -107,6 +107,7 @@ import {
   type SendWhatsappInput,
 } from "@/lib/whatsapp-bridge";
 import type { GhlRepository } from "@/lib/data";
+import { decideNotConnected, REASON_NUMBER_BANNED, type NotConnectedDecision } from "@/lib/ghl-held-rules";
 import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage } from "@/lib/types";
 
 /** Repo slice this module needs — every method it touches is already on `GhlRepository` (Phase 2's extension of Phase 1's interface — see that Pick list's own comment, src/lib/data/index.ts). Both entry points are only ever driven via `webhookRepo` (the webhook route, the poke route, the reminders cron — none carry a user session). */
@@ -114,6 +115,8 @@ export type GhlProviderRepo = Pick<
   GhlRepository,
   | "getGhlAccountByLocationId"
   | "getAccountById"
+  | "getWhatsappSessionSummary"
+  | "isOptedOut"
   | "recordGhlOutboundMessage"
   | "updateGhlOutboundSendState"
   | "listUnreportedGhlOutboundMessages"
@@ -267,6 +270,8 @@ const REASON_TOO_LONG = "message with attachments too long for WhatsApp bridge";
 const REASON_NEEDS_REAUTH = `GHL provider needs re-authorising — reconnect from your ${brandConfig().name} dashboard`;
 const REASON_DISABLED = "this GHL WhatsApp number has been disabled";
 const REASON_NOT_CONNECTED = `WhatsApp isn't connected for this number yet — connect it from your ${brandConfig().name} dashboard first`;
+/** Reliability (W10) — the recipient replied STOP to this number; checked before the bridge, so nothing is sent. */
+const REASON_OPTED_OUT = "contact replied STOP to this number — not sent (they can reply START to opt back in)";
 /** Plan's D7, verbatim (including the cap value — this is the bridge's own documented default, restated here as a fixed string rather than parsed out of the bridge's response text). */
 const REASON_CAP_REACHED = "daily WhatsApp cap (150) reached for this number — resumes at UTC midnight";
 const REASON_IDEMPOTENCY_CONFLICT = "message could not be sent — a conflicting send already used this message id";
@@ -311,7 +316,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Every non-transient bridge failure code mapped to a fixed, human-readable reason — never the bridge's own `message` text (which can embed a recipient's stored phone number, e.g. `idempotency_conflict`'s message — see `services/whatsapp-bridge/src/server.ts`). */
-function mapBridgeFailureReason(code: string): string {
+export function mapBridgeFailureReason(code: string): string {
   switch (code) {
     case "daily_cap_reached":
       return REASON_CAP_REACHED;
@@ -356,6 +361,10 @@ function mapBridgeFailureReason(code: string): string {
  */
 const TERMINAL_BRIDGE_FAILURE_CODES = new Set<string>([
   "daily_cap_reached",
+  // Terminal for the bridge call itself; the single-text paths turn it into a
+  // HOLD via `resolveNotConnected` for a previously linked number. The
+  // multipart/media paths still refuse it (holding multipart rows is out of
+  // scope while WA_MEDIA_OUTBOUND_ENABLED is off by default).
   "session_not_connected",
   "idempotency_conflict",
   "invalid_phone",
@@ -370,7 +379,7 @@ const TERMINAL_BRIDGE_FAILURE_CODES = new Set<string>([
   "media_outbound_disabled",
 ]);
 
-function isTransientBridgeFailure(code: string): boolean {
+export function isTransientBridgeFailure(code: string): boolean {
   return !TERMINAL_BRIDGE_FAILURE_CODES.has(code);
 }
 
@@ -498,7 +507,7 @@ export async function resolveGhlAccessToken(repo: GhlTokenRefreshRepo, deps: Ghl
  * Phase 2 JSDoc for the "leave unreported, stamp report_error" contract this
  * relies on when the PUT itself fails.
  */
-async function reportGhlOutcome(
+export async function reportGhlOutcome(
   repo: GhlProviderRepo,
   deps: GhlProviderDeps,
   account: GhlAccount | null,
@@ -528,6 +537,8 @@ export type HandleProviderOutboundOutcome =
   | { kind: "ignored"; reason: "non_sms_type" | "malformed_payload" | "unknown_location" }
   | { kind: "duplicate" }
   | { kind: "accepted" }
+  /** The number is offline (linked once before): the row is `held` and sends when it reconnects. Nothing is reported to GoHighLevel yet. */
+  | { kind: "held" }
   | { kind: "pending_retry" }
   | { kind: "refused"; reason: string }
   /**
@@ -661,6 +672,15 @@ export async function handleProviderOutboundMessage(
       return { kind: "refused", reason: gateReason };
     }
 
+    // Reliability (W10): a contact who replied STOP to THIS number gets
+    // nothing — refused before the media split and before any bridge call,
+    // reported to GoHighLevel as not sent with a fixed reason.
+    if (toPhone && (await repo.isOptedOut(account.tenantId, toPhone))) {
+      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_OPTED_OUT });
+      await reportGhlOutcome(repo, deps, account, row, "failed", REASON_OPTED_OUT);
+      return { kind: "refused", reason: REASON_OPTED_OUT };
+    }
+
     // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — split off
     // ENTIRELY before any of the legacy single-send logic below runs. With
     // `mediaSplit` false (flag off, or no attachments), execution never
@@ -727,6 +747,14 @@ export async function handleProviderOutboundMessage(
       // write), no status call. The drain retries under the SAME
       // idempotency key (plan's D3), bounded by `PENDING_SEND_MAX_ATTEMPTS`.
       return { kind: "pending_retry" };
+    }
+
+    if (sendResult.code === "session_not_connected") {
+      const decision = await resolveNotConnected(repo, account, row);
+      if (decision.kind === "hold") return { kind: "held" };
+      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: decision.reason });
+      await reportGhlOutcome(repo, deps, account, row, "failed", decision.reason);
+      return { kind: "refused", reason: decision.reason };
     }
 
     const reason = mapBridgeFailureReason(sendResult.code);
@@ -1029,6 +1057,21 @@ async function handleMediaSplitOutbound(
   return anyTransientRetry ? { kind: "pending_retry" } : { kind: "accepted" };
 }
 
+/**
+ * The bridge said `session_not_connected`. Decide from the number's session
+ * summary: a number that was linked once and is offline is HELD (the row's
+ * `send_state` becomes `held`, `pending_text` kept, nothing reported to
+ * GoHighLevel); banned or never-linked is refused with a fixed reason.
+ * Attachment rows have no `held` state and stay `pending_send` while their
+ * parent is held. Exported for the release pass.
+ */
+export async function resolveNotConnected(repo: GhlProviderRepo, account: GhlAccount, row: GhlOutboundMessage): Promise<NotConnectedDecision> {
+  const summary = await repo.getWhatsappSessionSummary(account.tenantId);
+  const decision = decideNotConnected(summary, REASON_NOT_CONNECTED);
+  if (decision.kind === "hold") await repo.updateGhlOutboundSendState(row.id, { sendState: "held" });
+  return decision;
+}
+
 export interface DrainGhlOutboundStatusesResult {
   /** Unreported rows this pass looked at (capped at `DRAIN_BATCH_CAP`). */
   candidates: number;
@@ -1040,6 +1083,8 @@ export interface DrainGhlOutboundStatusesResult {
   retried: number;
   /** `pending_send` rows still pending after this pass (bridge still unreachable, attempts remaining). */
   stillPending: number;
+  /** `pending_send` rows moved to `held` this pass (the number is offline; they send on reconnect). */
+  held: number;
   /** `accepted` rows whose bridge-side outcome hasn't resolved yet — left for the next pass. */
   unresolved: number;
   /** Rows where the PUT to GHL itself failed — left unreported, `report_error` stamped, retried next pass. */
@@ -1063,6 +1108,7 @@ export async function drainGhlOutboundStatuses(
     failed: 0,
     retried: 0,
     stillPending: 0,
+    held: 0,
     unresolved: 0,
     reportFailed: 0,
     timeBudgetExceeded: false,
@@ -1313,10 +1359,13 @@ async function resolveTextPartOutcome(
  * change between intake and a drain pass, so a queued `pending_send` row must
  * be re-checked before the bridge is called again. `null` means "may send".
  */
-async function retryGateReason(repo: GhlProviderRepo, account: GhlAccount | null): Promise<string | null> {
+export async function outboundRefusalReason(repo: GhlProviderRepo, account: GhlAccount | null, toPhone: string | null): Promise<string | null> {
   if (!account) return sendingGate({ accountId: null, activatedAt: null }, null, brandConfig().name);
   const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
-  return sendingGate(account, owner?.billingStatus ?? null, brandConfig().name);
+  const gate = sendingGate(account, owner?.billingStatus ?? null, brandConfig().name);
+  if (gate) return gate;
+  if (toPhone && (await repo.isOptedOut(account.tenantId, toPhone))) return REASON_OPTED_OUT;
+  return null;
 }
 
 async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage, result: DrainGhlOutboundStatusesResult): Promise<PartOutcome> {
@@ -1342,7 +1391,7 @@ async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: 
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED });
     return { resolved: true, sent: false, reason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED };
   }
-  const gateReason = await retryGateReason(repo, await repo.getGhlAccountByLocationId(row.locationId));
+  const gateReason = await outboundRefusalReason(repo, await repo.getGhlAccountByLocationId(row.locationId), row.toPhone);
   if (gateReason) {
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
     return { resolved: true, sent: false, reason: gateReason };
@@ -1418,7 +1467,7 @@ async function resolveAttachmentPartOutcome(
     return { resolved: true, sent: false, reason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED };
   }
   // Billing/activation may have changed since intake — same gate as the text part.
-  const gateReason = await retryGateReason(repo, await repo.getGhlAccountByLocationId(row.locationId));
+  const gateReason = await outboundRefusalReason(repo, await repo.getGhlAccountByLocationId(row.locationId), row.toPhone);
   if (gateReason) {
     await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: gateReason });
     return { resolved: true, sent: false, reason: gateReason };
@@ -1516,7 +1565,7 @@ async function drainPendingSend(
     return;
   }
 
-  const gateReason = await retryGateReason(repo, account);
+  const gateReason = await outboundRefusalReason(repo, account, row.toPhone);
   if (gateReason) {
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
     const gated = await reportGhlOutcome(repo, deps, account, row, "failed", gateReason);
@@ -1562,6 +1611,19 @@ async function drainPendingSend(
   if (isTransientBridgeFailure(sendResult.code)) {
     await repo.updateGhlOutboundSendState(row.id, { sendState: "pending_send", sendAttempts: row.sendAttempts + 1 });
     result.stillPending++;
+    return;
+  }
+
+  if (sendResult.code === "session_not_connected") {
+    const decision = await resolveNotConnected(repo, account, row);
+    if (decision.kind === "hold") {
+      result.held++;
+      return;
+    }
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: decision.reason });
+    const refused = await reportGhlOutcome(repo, deps, account, row, "failed", decision.reason);
+    if (refused === "reported") result.failed++;
+    else result.reportFailed++;
     return;
   }
 
@@ -1617,6 +1679,8 @@ export const GHL_PROVIDER_REASONS = {
   disabled: REASON_DISABLED,
   notConnected: REASON_NOT_CONNECTED,
   capReached: REASON_CAP_REACHED,
+  optedOut: REASON_OPTED_OUT,
+  numberBanned: REASON_NUMBER_BANNED,
   idempotencyConflict: REASON_IDEMPOTENCY_CONFLICT,
   bridgeUnconfigured: REASON_BRIDGE_UNCONFIGURED,
   bridgeRefused: REASON_BRIDGE_REFUSED,
