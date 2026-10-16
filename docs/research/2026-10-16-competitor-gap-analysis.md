@@ -2,6 +2,8 @@
 
 16 Oct 2026. Question: what do similar and competing WhatsApp-for-GoHighLevel products offer that PingWren doesn't?
 
+Updated the same day after a final follow-up pass and the first build work (see "What's been built since").
+
 Method: a deep-research run (5 search angles, 20 sources, 25 claims checked by three independent reviewers each, 4 killed), then five follow-up passes on the gaps it left: Stevo/WhatsHub/ChatArchitect and other GHL connectors; TimelinesAI, 2Chat, Maytapi, Callbell, Respond.io; reliability, support and message-level features; native GHL WhatsApp, Coexistence and UK/EU compliance; user reviews and GHL Marketplace numbers.
 
 **Read this with one caveat.** Almost everything comes from vendors' own pages. It shows what they advertise, not what works. The only independent evidence is GHL Marketplace ratings and installs (pulled from the Marketplace's public API on 16 Oct), the GHL ideas board, and a handful of Trustpilot and GetApp reviews. Reddit, G2 and Capterra refused automated access.
@@ -13,7 +15,7 @@ PingWren is behind on four things, in this order of importance for agencies and 
 1. **How it's sold.** Every QR competitor prices per sub-account with 3 to 5 numbers included, runs a free trial without a card, offers white-label, and pays affiliates 15 to 30% recurring. PingWren does none of these.
 2. **How deep it goes into GHL.** The leader (GoGHL) adds its own workflow actions and triggers, syncs WhatsApp groups into Conversations, and sends voice notes and buttons. PingWren rides GHL's "Send SMS" step and stops there.
 3. **Multiple numbers and groups.** These are the two biggest wishes on GHL's own ideas board (607 and 325 votes). Native GHL can't do either yet. Every serious QR rival does both.
-4. **Visible ban protection.** Rivals sell proxies, drip pacing, spintax, typing simulation and number warm-up. PingWren has a daily cap and doesn't talk about it.
+4. **Visible ban protection.** Rivals sell proxies, drip pacing, spintax, typing simulation and number warm-up. PingWren already had a 45-75 second jittered gap between sends and a daily cap, and now also has typing simulation and an optional warm-up. It doesn't market any of it yet.
 
 PingWren is ahead on onboarding (QR inside GHL plus shareable connect links), held messages, STOP opt-outs and disconnect alerts. No competitor page mentions held messages or opt-out handling. Users' top complaint across QR apps is disconnects and downtime, so reliability is the opening, as long as PingWren can show it on screen.
 
@@ -22,8 +24,8 @@ PingWren is ahead on onboarding (QR inside GHL plus shareable connect links), he
 | Product | Connection | Marketplace installs / rating (reviews) | Price | Trial |
 |---|---|---|---|---|
 | **GoGHL / MessageSync** | QR | 64,086 / 4.7 (126) | $29, $22 at 3+, $19 at 10+ per sub-account; 5 numbers incl., extra $9 | 7 days, no card |
-| **myCRMSIM** | QR (SMS, iMessage, WA) | 89,987 / 4.4 (13) | Free listing | none on Marketplace |
-| **"WA Connector – Unlimited WhatsApp"** (Whizz Solutions) | QR | 27,991 / 4.5 (8) | not checked | not checked |
+| **myCRMSIM** | QR (SMS, iMessage, WA) | 89,987 / 4.4 (13) | WhatsApp $29 per line | none (a review con) |
+| **"WA Connector – Unlimited WhatsApp"** (Whizz Solutions) | QR | 27,991 / 4.5 (8) | same as WAGHL (it is WAGHL) | 14 days, no card |
 | **waautoreply** | QR | 13,146 / 3.1 (37) | not checked | not checked |
 | **WAGHL** | QR | 5,232 / 5.0 (1) | $29 per sub-account (3 numbers, extra $10); $19 at 11+ | 14 days, no card, 50% off 3 months |
 | **WAsendr** | QR | 2,631 / 3.7 (8) | not checked | not checked |
@@ -35,7 +37,7 @@ PingWren is ahead on onboarding (QR inside GHL plus shareable connect links), he
 | **Stevo** (Brazil) | QR (Evolution API) + official option | no listing | $11 (1 number), $25 (3), $37 (5) | 5 days, no card |
 | **GHL native WhatsApp** | Official Cloud API | built in | $10 per sub-account + Meta message fees | – |
 
-**Name clash:** a Marketplace app already called "WA Connector – Unlimited WhatsApp" has about 28,000 installs. Don't ship under the working name. PingWren is clear.
+**Name clash:** a Marketplace app already called "WA Connector – Unlimited WhatsApp" has about 28,000 installs. It is the WAGHL team relisted: its website, waconnector.com, redirects to waghl.com, and its in-app page is titled "WAGHL". Listed 16 Sep 2026, it reached 28,000 installs in a month, which makes WAGHL a much bigger player than its old 5,232-install listing suggests. Don't ship under the working name. PingWren is clear.
 
 Not GHL competitors: ChatArchitect (official API, no GHL integration), Maytapi (developer API, $24 per phone), 2Chat (Make.com recipe only), Callbell and Respond.io (official API, Zapier only). TimelinesAI does have a GHL app, but inbound messages land as contact notes, not in GHL Conversations, and the inbox stays in TimelinesAI. "WhatsHub" as a GHL product couldn't be found.
 
@@ -46,7 +48,7 @@ Not GHL competitors: ChatArchitect (official API, no GHL integration), Maytapi (
 - **Unit.** The market charges per sub-account and includes 3 to 5 numbers. Going rate: $19 to $29 per sub-account per month. Cheap end: Stevo $11 for one number, WhatGHL $14.99 for five sessions. PingWren's per-number price looks dear to any client with two numbers.
 - **Card at signup.** Every rival we could check runs a no-card trial of 5 to 14 days. PingWren's card-required 7-day trial is the outlier. It does protect against free-trial abuse, but it costs signups.
 - **Annual billing.** GoGHL gives two months free, Wazzap 20% off, Stevo 20 to 30% off.
-- **Price anchor.** Native GHL WhatsApp is $10 per sub-account plus Meta fees. Agencies resell it at $30 to $100. GHL dropped its 5% WhatsApp processing fee from 1 Oct 2026. (GHL's changelog also says service messages become billable from 1 Oct with 1,000 free per number. Meta's own pages still say non-template messages are free. Unresolved.)
+- **Price anchor.** Native GHL WhatsApp is $10 per sub-account plus Meta fees. Agencies resell it at $30 to $100. GHL dropped its 5% WhatsApp processing fee from 1 Oct 2026. **Meta now charges for service messages too:** from 1 Oct 2026 every business number gets 1,000 free service messages a month, then pays per message, and in-window utility messages are billable. Meta's live pricing page and GHL's changelog agree. That strengthens the QR pitch: no per-message fees at all.
 - **Cost stacking** is a user complaint: one ideas-board user puts QR providers at "$40 to $50 a month".
 
 ### 2. Agency resale
@@ -82,7 +84,7 @@ Not GHL competitors: ChatArchitect (official API, no GHL integration), Maytapi (
 - Whapi: automatic number-warming module on Premium; support moves a banned channel to a new server and proxy.
 - Maytapi: a warm-up tool.
 - Stevo: proxy subscriptions.
-- PingWren: a daily cap. Nobody else mentions held messages or STOP handling.
+- PingWren: a 45-second minimum gap plus 0-30 seconds of random jitter between sends (already built, `src/pacing.ts`), a daily cap of 150, and now typing simulation and an optional warm-up (see below). Nobody else mentions held messages or STOP handling.
 
 User evidence on bans is thin but real. A TimelinesAI Trustpilot reviewer wrote: "Tried sending to 40 contacts and it suspended my number."
 
@@ -97,16 +99,26 @@ A public status page, a stated support response time, and held messages shown on
 ### 7. Official API path
 
 - ChatDaddy tells users to move to the official API in Coexistence mode for "lower ban risk". Stevo has a Meta Embedded Signup path. WAGHL has a separate "Official APP" listing (165 installs).
-- Coexistence (phone app and Cloud API on one number) is in GHL native, capped at one number. Meta's limits: groups don't sync, broadcast lists switch off, calls aren't supported, 20 messages per second. UK/EU availability is reported by vendors from late 2025 but not confirmed on a Meta page, and Callbell and Respond.io still say it's blocked in the UK and EU.
+- Coexistence (phone app and Cloud API on one number) is in GHL native, capped at one number. Meta's limits: groups don't sync, broadcast lists switch off, calls aren't supported, 20 messages per second. **It is available in the UK and EU:** Meta's own WhatsApp Platform changelog lists the EEA, EU and UK as supported (reported as dated 20 Oct 2025). Callbell's and Respond.io's "blocked in the UK/EU" pages are out of date. So the official route is a real option for UK coaches who want it.
 - That leaves QR with groups, broadcast lists, calls on the phone, several numbers, no templates, no 24-hour window and no per-message fees. That's the pitch.
 
 ## Compliance and risk
 
 - **WhatsApp's EEA terms** forbid reverse engineering, using automated means, and building software "that function[s] substantially the same as our Services" without authorisation. A Baileys client almost certainly breaches them. No Meta lawsuit against QR vendors was found for 2025 to 2026.
 - **How rivals handle it:** Whapi says plainly it is "unofficial… not endorsed by… WhatsApp" and not responsible for bans. GREEN-API says bans depend on user behaviour, not the app. TimelinesAI hosts in Frankfurt and builds a GDPR Article 28 DPA into its terms. No terms or DPA pages were found for WAGHL, GoGHL or Wazzap. PingWren's planned DPA, plain unofficial-use wording and UK/EU positioning would be ahead of the GHL-specific rivals.
-- **Technical risk:** a vendor blog reports that a late-June 2026 WhatsApp passkey change broke Baileys linking with 428 errors. Unconfirmed, but worth watching.
+- **Technical risk, confirmed and unfixed:** since late June 2026 WhatsApp can ask for a passkey when a new device links ("You may need to scan another QR code to use your passkey"). Baileys issue [#2672](https://github.com/WhiskeySockets/Baileys/issues/2672) is still open, a workaround PR (#2676) was closed unmerged, and a separate new-pairing 428 failure ([#2691](https://github.com/WhiskeySockets/Baileys/issues/2691)) is also open. 7.0.0-rc14, which PingWren is locked to, is still the latest release, so no fixed version exists. Some users say the prompt later stopped appearing. **This hits PingWren's core flow (scan a QR to link) and every Baileys-based rival equally.** Test new-number linking on several real accounts before the soft launch, and watch #2672.
 - **Security:** CVE-2026-48063 affects Baileys before 6.7.22 and 7.0.0-rc12. PingWren's bridge is locked to 7.0.0-rc14, so it's not affected.
 - **Meta's AI rule** (from 15 Jan 2026) bars general-purpose AI assistants from the Business Platform. It doesn't touch businesses using AI to serve their own customers, so it gives QR no real selling point.
+
+## What's been built since
+
+On branch `claude/eloquent-mccarthy-m60n6c`, all with tests (bridge 299 passing on Node 24, app 345 passing, production build clean):
+
+- **Typing simulation** (`services/whatsapp-bridge/src/typing.ts`). "Typing…" shows in the recipient's chat before each text: 1 second plus 30ms per character, ±20%, capped at 4 seconds. A dropped socket during the window fails the message as not sent, so it's safe to retry. On by default (`WA_TYPING_INDICATOR_ENABLED`, `WA_TYPING_MAX_MS`).
+- **Warm-up for new numbers** (`src/pacing.ts`, migration `0002`). Daily cap of 20 for days 0-2, 50 for days 3-6, 100 for days 7-13, then the normal cap. **Off by default** (`WA_WARMUP_ENABLED`), because FitClosers' 11 established numbers will be re-scanned during the move and would count as new. Migration 0002 must be applied before this bridge is deployed.
+- **Public status page** at `/status`. One state each for "WhatsApp sending" and "GoHighLevel sync", no customer data, cached for 60 seconds.
+
+The rest of the list below needs either a decision from Charlie or its own spec. See `docs/superpowers/plans/2026-10-16-competitor-gap-roadmap.md`.
 
 ## What to do, in priority order
 
@@ -117,17 +129,24 @@ This is judgement built on the findings above.
 3. **White-label, agency-level install with auto-provisioning, and an affiliate programme** (20% recurring is the middle of the market).
 4. **Custom GHL workflow triggers and actions.** Start with Inbound WhatsApp, Disconnected and Send WhatsApp. These also fix the "Telephony Provider not set" support problem the spec already worries about.
 5. **Groups in GHL Conversations.** High demand, native can't do it, and it matters for coaches running accountability groups.
-6. **Visible ban protection.** Pacing and jitter between sends, typing simulation, a warm-up mode for new numbers, built on the existing daily cap. Market it with held messages and opt-outs as "built not to get you banned".
+6. **Visible ban protection.** Pacing, jitter, typing and warm-up are now built. What's left is to market it, with held messages and opt-outs, as "built not to get you banned", and to decide when to turn warm-up on.
 7. **Voice notes, then reactions, quoted replies, edits and deletes synced to GHL.** Voice notes are table stakes. The message-level sync is something nobody else claims.
-8. **A public status page and a stated support response time.** Cheap to do, and nobody in the GHL QR market has both.
+8. **A public status page and a stated support response time.** The status page is built. The response time is Charlie's to set and publish.
 9. **Later:** AI replies (through GHL's own AI agents, not a bespoke bot), SMS fallback, missed-call text-back, and an official-API upgrade path.
 
-## Open questions
+## Settled in the follow-up pass
+
+- **"WhatsHub"** isn't a GHL product. None of the 2,675 GHL Marketplace apps match (about 55 are WhatsApp apps), and whatshub.io redirects to a Pipedrive tool.
+- **"WA Connector" (28,000 installs)** is WAGHL relisted (above).
+- **myCRMSIM** charges $29 per WhatsApp line per month and has no free trial. It advertises no templates, no 24-hour window and SMS fallback.
+- **Meta billing:** service messages are billable from 1 Oct 2026 after 1,000 free a month (above).
+- **Coexistence** is supported in the UK and EU per Meta (above).
+- **Passkey linking problem:** real and unfixed (above).
+
+## Still open
 
 - Which advertised features actually work: buttons over WhatsApp Web, group sync, proxies and warm-up. Only hands-on trials will tell.
-- What the 28,000-install "WA Connector" app and myCRMSIM charge and do.
-- Whether GHL's "service messages billable from 1 Oct 2026" is real (Meta's pages disagree).
-- UK/EU Coexistence availability, from a Meta source.
+- Whether Wazzap's 7-day trial takes a card. Its sign-up funnel has a Stripe step but the page shows no card field.
 - Whether GHL ships multiple numbers per sub-account soon. It's "in progress" with 607 votes and has already slipped once.
 
 ## Sources

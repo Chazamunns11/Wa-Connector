@@ -100,7 +100,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 16px; }
     <p class="eyebrow">Research · 16 Oct 2026</p>
     <h1>ping<span>wren</span> competitor gaps</h1>
     <p class="lede">What the other WhatsApp-for-GoHighLevel products offer that PingWren doesn't, and which gaps matter most for winning agencies and coaches.</p>
-    <p class="note">Built from a deep-research run (20 sources, 25 claims each checked three times) and five follow-up passes. Most evidence is the vendors' own pages, so it shows what they advertise. The independent evidence is GHL Marketplace installs and ratings (pulled 16 Oct), GHL's ideas board, and a few Trustpilot and GetApp reviews.</p>
+    <p class="note">Built from a deep-research run (20 sources, 25 claims each checked three times) and six follow-up passes. Updated after the first build work: typing simulation, an optional warm-up and a public status page are now on the branch. Most evidence is the vendors' own pages, so it shows what they advertise. The independent evidence is GHL Marketplace installs and ratings (pulled 16 Oct), GHL's ideas board, and a few Trustpilot and GetApp reviews.</p>
   </header>
 
   <section>
@@ -115,7 +115,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 16px; }
           <li>No white-label, agency install or affiliate scheme.</li>
           <li>No WhatsApp triggers or actions in GHL workflows.</li>
           <li>One number per location, and no groups.</li>
-          <li>No visible ban protection beyond a daily cap.</li>
+          <li>Ban protection that isn't marketed. A jittered 45-75s gap and a daily cap already existed. Typing simulation and an optional warm-up are now built.</li>
         </ul>
       </div>
       <div>
@@ -129,8 +129,12 @@ footer { border-top: 1px solid var(--rule); padding-top: 16px; }
       </div>
     </div>
     <div class="callout">
+      <h3>Launch risk: passkey prompt when linking</h3>
+      <p>Since late June 2026 WhatsApp can ask for a passkey when a new device links. Baileys issue #2672 is still open and no release fixes it, including the 7.0.0-rc14 the bridge uses. It hits every QR rival too. Test linking new numbers on several real accounts before the soft launch.</p>
+    </div>
+    <div class="callout">
       <h3>Name clash</h3>
-      <p>A Marketplace app called "WA Connector – Unlimited WhatsApp" (Whizz Solutions) already has about 28,000 installs. Ship as PingWren only.</p>
+      <p>A Marketplace app called "WA Connector – Unlimited WhatsApp" (Whizz Solutions) already has about 28,000 installs. It is WAGHL relisted: waconnector.com redirects to waghl.com. Ship as PingWren only.</p>
     </div>
   </section>
 
@@ -150,11 +154,11 @@ footer { border-top: 1px solid var(--rule); padding-top: 16px; }
           <tr><th scope="row">Groups in GHL Conversations</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Yes</span></td><td><span class="chip m">?</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip n">No</span></td></tr>
           <tr><th scope="row">Buttons and lists</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td></tr>
           <tr><th scope="row">AI replies or voice notes</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Transcription</span></td><td><span class="chip m">?</span></td></tr>
-          <tr><th scope="row">Ban protection (proxies, pacing, spintax)</th><td class="us"><span class="chip m">Daily cap</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Pacing</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Proxies</span></td><td><span class="chip m">n/a</span></td></tr>
+          <tr><th scope="row">Ban protection (proxies, pacing, spintax)</th><td class="us"><span class="chip y">Pacing, typing, warm-up</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Pacing</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Proxies</span></td><td><span class="chip m">n/a</span></td></tr>
           <tr><th scope="row">Missed calls in GHL</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Trigger</span></td><td><span class="chip y">Yes</span></td><td><span class="chip m">?</span></td><td><span class="chip y">Add-on</span></td><td><span class="chip m">?</span></td></tr>
           <tr><th scope="row">Held messages on disconnect</th><td class="us"><span class="chip y">Yes</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">n/a</span></td></tr>
           <tr><th scope="row">STOP opt-outs</th><td class="us"><span class="chip y">Yes</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip y">Yes</span></td></tr>
-          <tr><th scope="row">Published uptime figure</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">99.9%</span></td><td><span class="chip y">99.9%</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">n/a</span></td></tr>
+          <tr><th scope="row">Public status page</th><td class="us"><span class="chip y">Built</span></td><td><span class="chip m">99.9% claim</span></td><td><span class="chip m">99.9% claim</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">n/a</span></td></tr>
         </tbody>
       </table>
     </div>
@@ -168,8 +172,8 @@ footer { border-top: 1px solid var(--rule); padding-top: 16px; }
         <thead><tr><th scope="col">Product</th><th scope="col">Price per month</th><th scope="col">Numbers incl.</th><th scope="col">Trial</th><th scope="col">Marketplace installs</th><th scope="col">Rating (reviews)</th></tr></thead>
         <tbody>
           <tr><th scope="row">GoGHL / MessageSync</th><td class="num">$29 · $22 at 3+ · $19 at 10+</td><td class="num">5, then $9</td><td>7 days, no card</td><td class="num">64,086</td><td class="num">4.7 (126)</td></tr>
-          <tr><th scope="row">myCRMSIM</th><td>Free listing</td><td>–</td><td>none listed</td><td class="num">89,987</td><td class="num">4.4 (13)</td></tr>
-          <tr><th scope="row">"WA Connector" (Whizz)</th><td>not checked</td><td>–</td><td>–</td><td class="num">27,991</td><td class="num">4.5 (8)</td></tr>
+          <tr><th scope="row">myCRMSIM</th><td class="num">$29 per line</td><td class="num">1</td><td>none</td><td class="num">89,987</td><td class="num">4.4 (13)</td></tr>
+          <tr><th scope="row">"WA Connector" (WAGHL relisted)</th><td class="num">as WAGHL</td><td class="num">3, then $10</td><td>14 days, no card</td><td class="num">27,991</td><td class="num">4.5 (8)</td></tr>
           <tr><th scope="row">waautoreply</th><td>not checked</td><td>–</td><td>–</td><td class="num">13,146</td><td class="num">3.1 (37)</td></tr>
           <tr><th scope="row">WAGHL</th><td class="num">$29 · $19 at 11+</td><td class="num">3, then $10</td><td>14 days, no card</td><td class="num">5,232</td><td class="num">5.0 (1)</td></tr>
           <tr><th scope="row">AppLevel</th><td class="num">$49 · $39 · $34</td><td class="num">5</td><td>no card</td><td class="num">1,796</td><td class="num">4.3 (3)</td></tr>
@@ -199,10 +203,11 @@ footer { border-top: 1px solid var(--rule); padding-top: 16px; }
   <section>
     <h2>Official API and risk</h2>
     <ul>
-      <li>Meta's Coexistence (phone app and Cloud API on one number) is in GHL native, capped at one number. Groups don't sync, broadcast lists switch off, calls aren't supported. UK/EU availability isn't confirmed on a Meta page.</li>
+      <li>Meta's Coexistence (phone app and Cloud API on one number) is in GHL native, capped at one number, and Meta's changelog lists the UK and EU as supported. Groups don't sync, broadcast lists switch off, calls aren't supported.</li>
+      <li>From 1 Oct 2026 Meta charges for service messages after 1,000 free per number a month. QR has no per-message fees at all.</li>
       <li>QR keeps groups, broadcast lists, calls on the phone, several numbers, no templates, no 24-hour window and no per-message fees. That's the pitch.</li>
       <li>WhatsApp's EEA terms ban automated access and look-alike software. A Baileys client almost certainly breaches them. No Meta lawsuit against QR vendors was found for 2025 to 2026.</li>
-      <li>A vendor reports a June 2026 passkey change that broke Baileys linking (unconfirmed). The Baileys CVE-2026-48063 doesn't affect PingWren, which is locked to 7.0.0-rc14.</li>
+      <li>The Baileys CVE-2026-48063 doesn't affect PingWren, which is locked to 7.0.0-rc14. The passkey linking problem above does.</li>
     </ul>
   </section>
 
@@ -215,9 +220,9 @@ footer { border-top: 1px solid var(--rule); padding-top: 16px; }
       <li><b>White-label, agency install and affiliates</b><span>Auto-add new sub-accounts. 20% recurring is the middle of the market.</span></li>
       <li><b>WhatsApp triggers and actions in GHL</b><span>Inbound WhatsApp, Disconnected and Send WhatsApp first. These also solve the "Telephony Provider not set" support problem.</span></li>
       <li><b>Groups in Conversations</b><span>High demand, native can't do it, and coaches run accountability groups.</span></li>
-      <li><b>Ban protection you can see</b><span>Pacing and jitter between sends, typing simulation, a warm-up mode for new numbers, on top of the daily cap.</span></li>
+      <li><b>Ban protection you can see</b><span>Built: jittered pacing, typing simulation, optional warm-up. Left: market it, and decide when to switch warm-up on.</span></li>
       <li><b>Voice notes, then reactions, replies, edits and deletes</b><span>Voice notes are expected. Syncing reactions, quoted replies, edits and deletes into GHL is something nobody else claims.</span></li>
-      <li><b>A public status page and a stated response time</b><span>Cheap to do, and no GHL QR rival has both.</span></li>
+      <li><b>A public status page and a stated response time</b><span>Status page built at /status. The response time is Charlie's to set.</span></li>
       <li><b>Later</b><span>AI replies through GHL's own AI agents, SMS fallback, missed-call text-back, an official-API upgrade path.</span></li>
     </ol>
   </section>
