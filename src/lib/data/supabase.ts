@@ -697,7 +697,7 @@ export class SupabaseGhlRepository implements GhlRepository {
   async updateGhlOutboundSendState(
     id: string,
     patch: { sendState: GhlOutboundSendState; sendAttempts?: number; refusalReason?: string; onlyIfSendState?: GhlOutboundSendState }
-  ) {
+  ): Promise<number> {
     const supabase = getServiceClient();
     const update: Record<string, unknown> = { send_state: patch.sendState };
     if (patch.sendAttempts !== undefined) update.send_attempts = patch.sendAttempts;
@@ -733,12 +733,13 @@ export class SupabaseGhlRepository implements GhlRepository {
     // because it's the only one that can race a state transition already in
     // flight from elsewhere.
     // An explicit `onlyIfSendState` replaces the automatic guard: the held
-    // release pass writes held -> pending_send, where the automatic
+    // release pass writes held -> accepted/refused, where the automatic
     // `.eq("send_state","pending_send")` would match nothing.
     if (patch.onlyIfSendState !== undefined) query = query.eq("send_state", patch.onlyIfSendState);
     else if (patch.sendState === "pending_send") query = query.eq("send_state", "pending_send");
-    const { error } = await query;
+    const { data, error } = await query.select("id");
     if (error) throw error;
+    return (data ?? []).length;
   }
 
   /**
@@ -776,9 +777,22 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async listHeldTenantIds() {
     const supabase = getServiceClient();
-    const { data, error } = await supabase.from("ghl_outbound_messages").select("tenant_id").eq("send_state", "held").limit(1000);
-    if (error) throw error;
-    return [...new Set(((data ?? []) as { tenant_id: string }[]).map((r) => r.tenant_id))];
+    // Tenant-fair: keyset-page on tenant_id, so a tenant with thousands of held rows cannot hide the others.
+    const PAGE = 1000;
+    const MAX_TENANTS = 1000;
+    const ids: string[] = [];
+    let after: string | null = null;
+    for (let pages = 0; pages < 50 && ids.length < MAX_TENANTS; pages++) {
+      let q = supabase.from("ghl_outbound_messages").select("tenant_id").eq("send_state", "held").order("tenant_id", { ascending: true }).limit(PAGE);
+      if (after !== null) q = q.gt("tenant_id", after);
+      const { data, error } = await q;
+      if (error) throw error;
+      const page = ((data ?? []) as { tenant_id: string }[]).map((r) => r.tenant_id);
+      for (const id of page) if (ids[ids.length - 1] !== id) ids.push(id);
+      if (page.length < PAGE) break;
+      after = page[page.length - 1];
+    }
+    return ids;
   }
 
   async listHeldGhlOutboundMessages(tenantId: string, limit = 50) {
@@ -1391,7 +1405,11 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async recordOptOut(input: { tenantId: string; phone: string; keyword: string; ghlContactId: string | null }) {
     const phone = normalisePhoneE164(input.phone, DEFAULT_PHONE_REGION);
-    if (!phone) throw new Error("recordOptOut: phone is not a valid number");
+    if (!phone) {
+      // Skip, don't throw: the caller would retry the same inbound row on every pass and the reply would never reach GHL.
+      console.error(`[opt-out] recordOptOut: phone is not a valid number (tenant ${input.tenantId}); opt-out not recorded`);
+      return;
+    }
     const supabase = getServiceClient();
     const { error } = await supabase.from("whatsapp_opt_outs").upsert(
       {

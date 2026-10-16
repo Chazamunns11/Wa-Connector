@@ -552,8 +552,18 @@ launch publicly until each of these is built or the copy is changed to match:
   Messages to a previously linked, offline number are held and released oldest
   first when it reconnects (reconnect poke and the hourly drain). A message held
   longer than `OUTBOUND_HOLD_MAX_HOURS` (default 24) is reported to GoHighLevel
-  as failed, never sent late.
+  as failed, never sent late. New messages for a number with held rows wait
+  behind them, so order is kept.
 - **(b) STOP opt-outs.** Built — `src/lib/opt-out.ts` + `src/lib/ghl-inbound.ts`. Whole-message, case-insensitive keywords. Opt-out: STOP, STOPALL, STOP ALL, UNSUBSCRIBE, END, QUIT, OPT OUT, OPTOUT (CANCEL is deliberately excluded: it cancels appointments). Opt-in: START, UNSTOP, SUBSCRIBE, OPT IN, OPTIN. The reply is still delivered to GoHighLevel.
+- **Known limits of (a) and (b).**
+  - A message already inside the bridge's paced queue when a STOP lands still
+    sends. The opt-out applies from the next send on every path.
+  - Picture and file messages are not held while a phone is offline. With
+    `WA_MEDIA_OUTBOUND_ENABLED` on they are refused, not queued.
+  - The GoHighLevel do-not-disturb endpoint (`GHL_SYNC_DND`, off by default) is
+    not live-verified. A failure is logged and never blocks anything.
+  - The hold limit is `OUTBOUND_HOLD_MAX_HOURS` (default 24, accepted 1 to 168).
+    Older messages are reported to GoHighLevel as not sent, never sent late.
 - **(e) Real legal text.** Replace the draft notice and the "(drafts)" label
   on the privacy, terms and related pages with reviewed legal text.
 

@@ -41,6 +41,9 @@ function constantTimeEqualStr(a: string, b: string): boolean {
   return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
 }
 
+/** Release (25 s budget) then status drain (25 s budget) run back to back; same ceiling as the cron route. */
+export const maxDuration = 300;
+
 export async function POST(request: Request) {
   const secret = process.env.WHATSAPP_INBOUND_POKE_SECRET;
 

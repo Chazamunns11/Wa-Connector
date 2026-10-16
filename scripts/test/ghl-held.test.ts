@@ -39,22 +39,26 @@ function setup(rowList: GhlOutboundMessage[]) {
   const optOuts = new Set<string>();
   const ledger = new Set<string>();
   let failListTenants = false;
+  let onIsOptedOut: (() => void) | undefined;
+  let onLedgerRead: (() => void) | undefined;
   const repo = {
     async getGhlAccountByLocationId() { return account(); },
     async getAccountById(id: string) {
       return { id, name: "A", kind: "business", ownerEmail: "o@x.test", stripeCustomerId: null, stripeSubscriptionId: null, billingStatus: "active", trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, createdAt: "2026-10-01T00:00:00Z" } as Account;
     },
-    async isOptedOut(t: string, p: string) { return optOuts.has(`${t}:${p}`); },
+    async isOptedOut(t: string, p: string) { onIsOptedOut?.(); return optOuts.has(`${t}:${p}`); },
     async getWhatsappSessionSummary() { return null; },
     async getWhatsappMessagesByTenantKeys(pairs: { tenantId: string; idempotencyKey: string }[]) {
+      onLedgerRead?.();
       return pairs.filter((p) => ledger.has(p.idempotencyKey)).map((p) => ({ coachId: p.tenantId, idempotencyKey: p.idempotencyKey, status: "sent", error: null }));
     },
     async updateGhlOutboundSendState(id: string, patch: { sendState: GhlOutboundMessage["sendState"]; refusalReason?: string; sendAttempts?: number; onlyIfSendState?: GhlOutboundMessage["sendState"] }) {
       const row = rows.get(id)!;
-      if (patch.onlyIfSendState !== undefined && row.sendState !== patch.onlyIfSendState) return;
+      if (patch.onlyIfSendState !== undefined && row.sendState !== patch.onlyIfSendState) return 0;
       row.sendState = patch.sendState;
       if (patch.sendState !== "pending_send" && patch.sendState !== "held") row.pendingText = null;
       if (patch.sendState === "refused" && patch.refusalReason !== undefined) row.refusalReason = patch.refusalReason;
+      return 1;
     },
     async markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundMessage["reportedStatus"]; reportError: string | null }) {
       const row = rows.get(id)!;
@@ -93,6 +97,8 @@ function setup(rowList: GhlOutboundMessage[]) {
     repo, deps, rows, optOuts, ledger, sendCalls, statusCalls,
     setSend(fn: typeof sendImpl) { sendImpl = fn; },
     failTenants() { failListTenants = true; },
+    onIsOptedOut(fn: () => void) { onIsOptedOut = fn; },
+    onLedgerRead(fn: () => void) { onLedgerRead = fn; },
   };
 }
 const fail = (code: string): BridgeSendResult => ({ ok: false, code, message: code } as BridgeSendResult);
@@ -162,13 +168,32 @@ test("expired: refused with heldExpiredReason(24) and reported failed, not sent"
   assert.equal(res.expired, 1);
 });
 
-test("expiry guard: a row a concurrent pass already released is not refused or reported", async () => {
-  const s = setup([heldRow(1, 25, { sendState: "accepted", pendingText: null })]);
-  s.ledger.add("key-1");
+test("expiry guard: a row a concurrent pass moved on between listing and the guarded write is not reported failed", async () => {
+  const s = setup([heldRow(1, 25)]);
+  // the other pass accepts the row (no ledger entry visible yet) just before our guarded refuse
+  s.onLedgerRead(() => { s.rows.get("row-1")!.sendState = "accepted"; });
   const res = await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
   assert.equal(s.rows.get("row-1")!.sendState, "accepted");
   assert.equal(s.statusCalls.length, 0);
-  assert.equal(res.expired, 0);
+  assert.equal(res.reportFailed, 0);
+});
+
+test("lost race on a gate refusal: the other pass won the row, so GoHighLevel is not told it failed", async () => {
+  const s = setup([heldRow(1, 5)]);
+  s.optOuts.add(`${TENANT}:+447700900123`);
+  s.onIsOptedOut(() => { s.rows.get("row-1")!.sendState = "accepted"; });
+  await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.rows.get("row-1")!.sendState, "accepted");
+  assert.equal(s.statusCalls.length, 0);
+  assert.equal(s.rows.get("row-1")!.reportedStatus, null);
+});
+
+test("never sent late: with more expired rows than the sweep batch, none is sent", async () => {
+  const s = setup(Array.from({ length: 60 }, (_, i) => heldRow(i + 1, 30 + i * 0.001)));
+  const res = await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.sendCalls.length, 0);
+  assert.equal(res.expired, 60);
+  assert.equal(s.statusCalls.length, 60);
 });
 
 test("OUTBOUND_HOLD_MAX_HOURS=48: a 30h-old row is released, not expired", async () => {

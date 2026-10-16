@@ -37,8 +37,8 @@ export function LocationRowDetail({
       </summary>
       <div className="grid gap-5 px-4 pb-5 md:px-6">
         <dl className="grid gap-4 sm:grid-cols-3">
-          <Stat label="Messages waiting">
-            {row.heldMessages === 0 ? "None" : `${row.heldMessages} ${row.heldMessages === 1 ? "message" : "messages"} waiting for the phone to reconnect`}
+          <Stat label="Messages waiting to send">
+            {row.heldMessages === 0 ? "None" : `${row.heldMessages} ${row.heldMessages === 1 ? "message" : "messages"}`}
           </Stat>
           <Stat label="Failed in the last 7 days">
             {count === 0 ? (

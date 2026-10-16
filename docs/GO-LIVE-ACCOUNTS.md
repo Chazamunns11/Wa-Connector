@@ -371,6 +371,7 @@ Railway. Never put a real value in this file.
 | `BRAND_SUPPORT_EMAIL` | No | `help@example.com` | `src/lib/brand-config.ts` |
 | `BRAND_SUPPORT_WHATSAPP` | No | `+447700900000` | `src/lib/brand-config.ts` |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | `src/lib/data/supabase.ts` |
+| `OUTBOUND_HOLD_MAX_HOURS` | No | `24` (1 to 168) | `src/lib/ghl-held-rules.ts` |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | `src/lib/ghl.ts` |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | `src/lib/data/supabase.ts` |
 
@@ -397,6 +398,12 @@ line for that one run. Do not add them to Vercel.
 
 ## Known limitations. Read before launch.
 
+- **Held messages and STOP have limits.** A message already in the bridge's
+  paced queue when a STOP lands still sends. Picture and file messages are not
+  held while a phone is offline. The GoHighLevel do-not-disturb endpoint is not
+  live-verified (it is off unless `GHL_SYNC_DND` is `true`). Held messages
+  older than `OUTBOUND_HOLD_MAX_HOURS` (default 24) are reported to
+  GoHighLevel as not sent.
 - **Sign-up with an unverified email can squat an address.** Someone can sign
   up with an email they do not own. That address is then taken, and the real
   owner is told it already exists. Tighten this before launch, for example by

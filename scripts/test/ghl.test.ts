@@ -427,13 +427,18 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
       calls.push({ method: "updateGhlOutboundSendState", args: [id, patch] });
       const row = rows.get(id);
       if (!row) throw new Error(`no such row ${id}`);
-      if (patch.onlyIfSendState !== undefined && row.sendState !== patch.onlyIfSendState) return;
+      if (patch.onlyIfSendState !== undefined && row.sendState !== patch.onlyIfSendState) return 0;
       row.sendState = patch.sendState;
       if (patch.sendAttempts !== undefined) row.sendAttempts = patch.sendAttempts;
       // Mirrors src/lib/data/supabase.ts's own clearing rule (0070).
       if (patch.sendState !== "pending_send" && patch.sendState !== "held") row.pendingText = null;
       // Mirrors src/lib/data/supabase.ts's own stamp-once rule (0071).
       if (patch.sendState === "refused" && patch.refusalReason !== undefined) row.refusalReason = patch.refusalReason;
+      return 1;
+    },
+    async listHeldGhlOutboundMessages(tenantId: string, limit = 50) {
+      calls.push({ method: "listHeldGhlOutboundMessages", args: [tenantId, limit] });
+      return [...rows.values()].filter((r) => r.tenantId === tenantId && r.sendState === "held").slice(0, limit);
     },
     /**
      * Mirrors src/lib/data/supabase.ts's `ghl_accounts!inner(status)` filter
@@ -1331,7 +1336,8 @@ test("handleProviderOutboundMessage: a repo failure BEFORE the intake row exists
     async recordGhlOutboundMessage() {
       throw new Error("unreachable in this test");
     },
-    async updateGhlOutboundSendState() {},
+    async updateGhlOutboundSendState() { return 1; },
+    async listHeldGhlOutboundMessages() { return []; },
     async listUnreportedGhlOutboundMessages() {
       return [];
     },
@@ -1356,7 +1362,7 @@ test("handleProviderOutboundMessage: a repo failure AFTER the intake row exists 
   const { repo: baseRepo } = createFakeRepo([makeAccount()]);
   const repo: GhlProviderRepo = {
     ...baseRepo,
-    async updateGhlOutboundSendState() {
+    async updateGhlOutboundSendState(): Promise<number> {
       throw new Error("simulated transient Supabase error, mid-handler");
     },
   };
@@ -2429,4 +2435,33 @@ test("listGhlInstalledLocations: an unreachable endpoint returns null, never thr
     );
     assert.equal(result, null);
   });
+});
+
+// Reliability final review I3: a new message never overtakes rows already held for the tenant.
+test("webhook: tenant already has a held row -> new message is held behind it, bridge not called", async () => {
+  const { repo, rows, sessionsByTenant } = createFakeRepo([makeAccount()]);
+  sessionsByTenant.set(TENANT_ID, sessionSummary());
+  await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "older" }), makeDeps(notConnectedSend).deps);
+  assert.equal([...rows.values()][0].sendState, "held");
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "newer" }), deps);
+  assert.deepEqual(out, { kind: "held" });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 0);
+  const newer = [...rows.values()].find((r) => r.ghlMessageId === "newer")!;
+  assert.equal(newer.sendState, "held");
+  assert.equal(newer.pendingText, "hi there");
+});
+
+test("drain pending_send: tenant already has a held row -> pending row is held behind it, bridge not called", async () => {
+  const bundle = createFakeRepo([makeAccount()]);
+  await handleProviderOutboundMessage(bundle.repo, samplePayloadFor({ messageId: "pend" }), makeDeps({ sendWhatsapp: async () => ({ ok: false, code: "unreachable", message: "x" }) }).deps);
+  const pending = [...bundle.rows.values()][0];
+  assert.equal(pending.sendState, "pending_send");
+  bundle.rows.set("older-held", { ...pending, id: "older-held", ghlMessageId: "old", idempotencyKey: "old-key", sendState: "held" });
+  const { deps, sendCalls } = makeDeps();
+  const result = await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(pending.sendState, "held");
+  assert.equal(result.held, 1);
 });

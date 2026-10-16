@@ -224,8 +224,10 @@ export interface GhlRepository {
    *
    * `onlyIfSendState` (Review Focus 4): when set, the write also requires the
    * row's CURRENT `send_state` to equal it (0 rows affected, no error, if it
-   * has moved on). The held-release pass uses `held` → `pending_send`/`refused`
+   * has moved on). The held-release pass uses `held` → `accepted`/`refused`
    * under this guard so it never overwrites a row another pass already moved.
+   * Returns the number of rows matched (0 or 1): a caller that reports the
+   * outcome to GoHighLevel must only do so when it won the write (1).
    * Attachment rows have no `held` state and stay `pending_send` while their
    * parent message is held.
    */
@@ -237,7 +239,7 @@ export interface GhlRepository {
       refusalReason?: string;
       onlyIfSendState?: GhlOutboundSendState;
     }
-  ): Promise<void>;
+  ): Promise<number>;
 
   /**
    * Oldest-first, `reported_status IS NULL` rows, capped at `limit` — Phase
@@ -258,8 +260,9 @@ export interface GhlRepository {
   listUnreportedGhlOutboundMessages(limit?: number): Promise<GhlOutboundMessage[]>;
 
   /**
-   * Distinct tenant ids with at least one `send_state = 'held'` row (capped at
-   * 1000 rows read) — the release pass's work list.
+   * Distinct tenant ids with at least one `send_state = 'held'` row (paged by
+   * tenant, so one busy tenant cannot hide the others; capped at 1000 tenants)
+   * — the release pass's work list.
    */
   listHeldTenantIds(): Promise<string[]>;
 

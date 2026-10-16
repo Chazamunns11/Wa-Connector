@@ -59,11 +59,11 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     disconnected: {
       question: "What happens if the phone goes offline?",
       answer:
-        "That number's messages are held. They wait in the queue and send when the phone reconnects, and the dashboard shows which numbers are disconnected and how many messages are waiting.",
+        "If a phone is offline, messages wait for up to 24 hours and go out at the usual paced rate once it reconnects; anything older is reported back to GoHighLevel as not sent. The dashboard shows which numbers are disconnected and how many messages are waiting. Picture and file messages aren't held while a phone is offline.",
     },
     stop: {
       question: "What if someone replies STOP?",
-      answer: "They're opted out straight away and get no more messages from that number.",
+      answer: "They're opted out and get no more messages from that number. A message already in the sending queue at that moment can still go out; nothing after it does.",
     },
     "daily-cap": {
       question: "What is the daily cap?",

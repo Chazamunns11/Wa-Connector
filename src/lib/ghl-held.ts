@@ -30,7 +30,7 @@ import {
   type GhlProviderDeps,
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
-import { heldExpiredReason, holdMaxHours } from "@/lib/ghl-held-rules";
+import { heldExpiredReason, holdMaxHours, isHeldExpired } from "@/lib/ghl-held-rules";
 import type { GhlOutboundMessage } from "@/lib/types";
 
 export type GhlHeldRepo = GhlProviderRepo & Pick<GhlRepository, "listHeldTenantIds" | "listHeldGhlOutboundMessages" | "listExpiredHeldGhlOutboundMessages">;
@@ -61,9 +61,10 @@ export async function releaseHeldOutboundMessages(
     return result.timeBudgetExceeded;
   };
 
-  /** Refuse a held row (guarded) and tell GHL it failed. */
+  /** Refuse a held row (guarded) and tell GHL it failed, but only if this pass won the row. */
   async function refuseAndReport(row: GhlOutboundMessage, reason: string): Promise<boolean> {
-    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason, onlyIfSendState: "held" });
+    const won = await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason, onlyIfSendState: "held" });
+    if (won !== 1) return false; // another pass already moved the row; it owns the report
     const account = await repo.getGhlAccountByLocationId(row.locationId);
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", reason);
     if (outcome !== "reported") result.reportFailed++;
@@ -99,6 +100,12 @@ export async function releaseHeldOutboundMessages(
       for (const row of rows) {
         if (overBudget()) break;
         try {
+          if (isHeldExpired(row.createdAt, nowMs, hours)) {
+            // Never send late, whatever the sweep's batch cap left behind.
+            await refuseAndReport(row, heldExpiredReason(hours));
+            result.expired++;
+            continue;
+          }
           if (row.toPhone === null || row.pendingText === null) {
             await refuseAndReport(row, GHL_PROVIDER_REASONS.bridgeUnreachableExhausted);
             result.refused++;

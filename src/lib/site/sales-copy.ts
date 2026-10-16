@@ -60,7 +60,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
       },
       {
         title: "Held while disconnected",
-        body: "If the phone goes offline, that number's messages wait and go out when it reconnects. The dashboard shows how many are waiting.",
+        body: "If a phone is offline, messages wait for up to 24 hours and go out when it reconnects; anything older is reported back to GoHighLevel as not sent. The dashboard shows how many are waiting.",
       },
       {
         title: "STOP opt-outs",

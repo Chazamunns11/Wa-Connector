@@ -60,7 +60,7 @@ export function connectSheet(brand: Pick<BrandConfig, "name">) {
     ] satisfies SheetItem[],
     after: [
       "Keep the phone switched on and online.",
-      `If the phone goes offline, your messages wait for it. They send once it's connected again. If the page says ${L.disconnected}, click ${L.reconnect}.`,
+      `If the phone goes offline, your messages wait for it for up to 24 hours and send once it's connected again. Anything older is reported to GoHighLevel as not sent. If the page says ${L.disconnected}, click ${L.reconnect}.`,
       "Don't log out of the linked device in WhatsApp → Settings → Linked devices. That disconnects your number.",
     ],
     problems: [

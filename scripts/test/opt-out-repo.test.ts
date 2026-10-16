@@ -74,9 +74,17 @@ test("recordOptOut is idempotent: repeating it sends the same upsert, never an i
   }
 });
 
-test("recordOptOut refuses a phone it cannot normalise, with no request sent", async () => {
+test("recordOptOut skips a phone it cannot normalise: logs, does not throw (so the inbound row is not retried forever), no request sent", async () => {
   const repo = new SupabaseGhlRepository();
-  await assert.rejects(() => repo.recordOptOut({ tenantId: TENANT, phone: "not a number", keyword: "STOP", ghlContactId: null }), /phone/i);
+  const logged: unknown[][] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    await repo.recordOptOut({ tenantId: TENANT, phone: "not a number", keyword: "STOP", ghlContactId: null });
+  } finally {
+    console.error = original;
+  }
+  assert.equal(logged.length, 1);
   assert.equal(seen.length, 0);
 });
 

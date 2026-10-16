@@ -119,6 +119,7 @@ export type GhlProviderRepo = Pick<
   | "isOptedOut"
   | "recordGhlOutboundMessage"
   | "updateGhlOutboundSendState"
+  | "listHeldGhlOutboundMessages"
   | "listUnreportedGhlOutboundMessages"
   | "getWhatsappMessagesByTenantKeys"
   | "markGhlOutboundReported"
@@ -724,6 +725,10 @@ export async function handleProviderOutboundMessage(
       return { kind: "refused", reason };
     }
 
+    // Ordering: older messages for this number still waiting (held) go first,
+    // so this one waits behind them and the release pass sends in order.
+    if (await holdBehindHeldRows(repo, account.tenantId, row)) return { kind: "held" };
+
     const sendResult = await deps.sendWhatsapp({
       coachId: account.tenantId,
       to: toPhone,
@@ -1070,6 +1075,18 @@ export async function resolveNotConnected(repo: GhlProviderRepo, account: GhlAcc
   const decision = decideNotConnected(summary, REASON_NOT_CONNECTED);
   if (decision.kind === "hold") await repo.updateGhlOutboundSendState(row.id, { sendState: "held" });
   return decision;
+}
+
+/**
+ * Ordering rule: if the tenant already has held rows, a newer message waits
+ * behind them (row becomes `held`, nothing sent) and the release pass sends
+ * oldest first. Returns true when the row was held.
+ */
+async function holdBehindHeldRows(repo: GhlProviderRepo, tenantId: string, row: GhlOutboundMessage): Promise<boolean> {
+  const held = await repo.listHeldGhlOutboundMessages(tenantId, 1);
+  if (held.length === 0) return false;
+  await repo.updateGhlOutboundSendState(row.id, { sendState: "held" });
+  return true;
 }
 
 export interface DrainGhlOutboundStatusesResult {
@@ -1602,6 +1619,10 @@ async function drainPendingSend(
   // simpler and no less safe than adding a new RPC purely to tighten a
   // number that only ever gates "how many more times might we retry",
   // never "did this send happen".
+  if (await holdBehindHeldRows(repo, row.tenantId, row)) {
+    result.held++;
+    return;
+  }
   const sendResult = await deps.sendWhatsapp({ coachId: row.tenantId, to: row.toPhone, text: row.pendingText, idempotencyKey: row.idempotencyKey });
 
   if (sendResult.ok) {
