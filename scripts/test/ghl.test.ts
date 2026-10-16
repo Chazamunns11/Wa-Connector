@@ -951,6 +951,51 @@ test("drainGhlOutboundStatuses: a pending_send row is retried with the SAME idem
   assert.equal(result.stillPending, 1);
 });
 
+for (const [label, accountOver, billing, reasonMatch] of [
+  ["a paused (cancelled) account", {}, { status: "cancelled" as const }, /subscription inactive/],
+  ["a not-activated number", { activatedAt: null }, "default" as const, /isn't activated/],
+  ["an unclaimed location", { accountId: null }, "default" as const, /isn't activated/],
+] as const) {
+  test(`retry gate: a pending_send row for ${label} is not sent and is reported failed`, async () => {
+    const repoBundle = createFakeRepo([makeAccount(accountOver)], billing);
+    const row = seedAcceptedRow(repoBundle, { sendState: "pending_send", pendingText: "hold me", sendAttempts: 1 });
+    const sendCalls: SendWhatsappInput[] = [];
+    const { deps, statusCalls } = makeDeps({
+      sendWhatsapp: async (input) => {
+        sendCalls.push(input);
+        return { ok: true, message: makeSendResult() } as never;
+      },
+    });
+    const result = await drainGhlOutboundStatuses(repoBundle.repo, deps);
+    assert.equal(sendCalls.length, 0);
+    assert.equal(row.sendState, "refused");
+    assert.equal(result.failed, 1);
+    assert.equal(statusCalls[0].status, "failed");
+    assert.match(statusCalls[0].errorMessage ?? "", reasonMatch);
+  });
+}
+
+test("retry gate: a multipart text part retry for a paused account is not sent", async () => {
+  const { repoBundle, row } = await seedMultipartRow({ messageId: "msg-mp-gate" });
+  const sendCalls: SendWhatsappInput[] = [];
+  row.sendState = "pending_send";
+  row.pendingText = "retry text";
+  row.sendAttempts = 1;
+  const paused = createFakeRepo([makeAccount()], { status: "cancelled" });
+  // Re-use the seeded rows/parts but swap in a repo whose owner is cancelled.
+  for (const [k, v] of repoBundle.rows) paused.rows.set(k, v);
+  for (const [k, v] of repoBundle.attachments) paused.attachments.set(k, v);
+  const { deps } = makeDeps({
+    sendWhatsapp: async (input) => {
+      sendCalls.push(input);
+      return { ok: true, message: makeSendResult() } as never;
+    },
+  });
+  await withMediaOutboundEnabled(() => drainGhlOutboundStatuses(paused.repo, deps));
+  assert.equal(sendCalls.length, 0);
+  assert.equal(row.sendState, "refused");
+});
+
 test("drainGhlOutboundStatuses: a pending_send retry that succeeds transitions the row to accepted", async () => {
   const repoBundle = createFakeRepo([makeAccount()]);
   const row = seedAcceptedRow(repoBundle, { sendState: "pending_send", pendingText: "resend me please", sendAttempts: 1 });

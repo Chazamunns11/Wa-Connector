@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { handleBillingEvent, type WebhookDeps, type WebhookRepo } from "@/lib/billing/webhook-handler";
 import { syncSubscriptionQuantity, type QuantityDeps } from "@/lib/billing/quantity";
 import type { Account } from "@/lib/types";
-import type { StripeCheckoutSession, StripeSubscription } from "@/lib/stripe/billing";
+import { parseSubscription, type StripeCheckoutSession, type StripeSubscription } from "@/lib/stripe/billing";
 
 function account(over: Partial<Account> = {}): Account {
   return {
@@ -27,7 +27,11 @@ function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Ac
   const log: string[] = [];
   const patches: Array<{ id: string; patch: unknown }> = [];
   const notes: string[] = [];
+  const state: { body: Record<string, unknown>; live: Record<string, unknown> | null } = { body: {}, live: null };
   const repo: WebhookRepo = {
+    deleteStripeEvent: async () => {
+      log.push("unrecord");
+    },
     recordStripeEvent: async () => {
       log.push("record");
       return opts.fresh ?? true;
@@ -48,6 +52,12 @@ function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Ac
       log.push(`retrieve:${id}`);
       return { ok: true, data: session };
     }) as never,
+    retrieveSubscription: (async (id: string) => {
+      log.push(`live:${id}`);
+      const raw = { ...(state.live ?? state.body), items: { data: [] } };
+      const data = parseSubscription(raw);
+      return data ? { ok: true, data } : { ok: false, status: 500, code: null, message: "bad" };
+    }) as never,
     syncQuantity: async () => {
       log.push("sync");
     },
@@ -55,7 +65,13 @@ function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Ac
       notes.push(t);
     },
   };
-  return { repo, deps, log, patches, notes };
+  return { repo, deps, log, patches, notes, state };
+}
+
+type H = ReturnType<typeof harness>;
+function run(h: H, event: Parameters<typeof handleBillingEvent>[2]) {
+  h.state.body = event.data.object;
+  return handleBillingEvent(h.repo, h.deps, event);
 }
 
 const sub = (over: Record<string, unknown> = {}) => ({
@@ -68,14 +84,14 @@ const sub = (over: Record<string, unknown> = {}) => ({
 
 test("duplicate event id does nothing else", async () => {
   const h = harness({ fresh: false });
-  const out = await handleBillingEvent(h.repo, h.deps, { id: "evt_1", type: "checkout.session.completed", data: { object: { id: "cs_1" } } });
+  const out = await run(h, { id: "evt_1", type: "checkout.session.completed", data: { object: { id: "cs_1" } } });
   assert.deepEqual(out, { kind: "duplicate" });
   assert.deepEqual(h.log, ["record"]);
 });
 
 test("checkout.session.completed retrieves fresh, applies, syncs quantity", async () => {
   const h = harness();
-  const out = await handleBillingEvent(h.repo, h.deps, {
+  const out = await run(h, {
     id: "evt_2",
     type: "checkout.session.completed",
     data: { object: { id: "cs_1", subscription: "ignored-body-value" } },
@@ -86,7 +102,7 @@ test("checkout.session.completed retrieves fresh, applies, syncs quantity", asyn
 
 test("subscription.updated past_due writes the mapped status", async () => {
   const h = harness();
-  const out = await handleBillingEvent(h.repo, h.deps, {
+  const out = await run(h, {
     id: "evt_3",
     type: "customer.subscription.updated",
     data: { object: sub({ status: "past_due" }) },
@@ -99,7 +115,7 @@ test("subscription.updated past_due writes the mapped status", async () => {
 
 test("subscription.deleted writes cancelled with cancelledAt", async () => {
   const h = harness();
-  await handleBillingEvent(h.repo, h.deps, {
+  await run(h, {
     id: "evt_4",
     type: "customer.subscription.deleted",
     data: { object: sub({ status: "canceled", canceled_at: 1_800_000_000 }) },
@@ -114,7 +130,7 @@ test("subscription.deleted writes cancelled with cancelledAt", async () => {
 
 test("trialing carries trialEndsAt", async () => {
   const h = harness();
-  await handleBillingEvent(h.repo, h.deps, {
+  await run(h, {
     id: "evt_t",
     type: "customer.subscription.updated",
     data: { object: sub({ status: "trialing", trial_end: 1_800_000_000 }) },
@@ -124,7 +140,7 @@ test("trialing carries trialEndsAt", async () => {
 
 test("no metadata falls back to customer lookup", async () => {
   const h = harness({ byCustomer: account({ id: "acc-9" }) });
-  const out = await handleBillingEvent(h.repo, h.deps, {
+  const out = await run(h, {
     id: "evt_5",
     type: "customer.subscription.updated",
     data: { object: sub({ metadata: {} }) },
@@ -135,7 +151,7 @@ test("no metadata falls back to customer lookup", async () => {
 
 test("unknown account notifies once and reports unknown_account", async () => {
   const h = harness({ byCustomer: null });
-  const out = await handleBillingEvent(h.repo, h.deps, {
+  const out = await run(h, {
     id: "evt_6",
     type: "customer.subscription.updated",
     data: { object: sub({ metadata: {} }) },
@@ -145,9 +161,50 @@ test("unknown account notifies once and reports unknown_account", async () => {
   assert.equal(h.patches.length, 0);
 });
 
+test("a failing handler releases the event id so Stripe's retry is processed", async () => {
+  const h = harness();
+  let fail = true;
+  const original = h.deps.applyCheckout;
+  h.deps.applyCheckout = async (s) => {
+    if (fail) throw new Error("db down");
+    return original(s);
+  };
+  const seen = new Set<string>();
+  h.repo.recordStripeEvent = async (id) => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  };
+  h.repo.deleteStripeEvent = async (id) => {
+    seen.delete(id);
+    h.log.push("unrecord");
+  };
+  const ev = { id: "evt_r", type: "checkout.session.completed", data: { object: { id: "cs_1" } } };
+  await assert.rejects(run(h, ev), /db down/);
+  assert.ok(h.log.includes("unrecord"));
+  fail = false;
+  const out = await run(h, ev);
+  assert.deepEqual(out, { kind: "handled", type: "checkout.session.completed" });
+});
+
+test("a stale updated(active) after deleted(canceled) leaves the account cancelled", async () => {
+  const h = harness();
+  h.state.live = { ...sub({ status: "canceled", canceled_at: 1_800_000_000 }) };
+  await run(h, { id: "evt_s1", type: "customer.subscription.updated", data: { object: sub({ status: "active" }) } });
+  assert.equal((h.patches[0].patch as { billingStatus: string }).billingStatus, "cancelled");
+  assert.ok(h.log.includes("live:sub"));
+});
+
+test("events for a different subscription than the account's are ignored", async () => {
+  const h = harness();
+  const out = await run(h, { id: "evt_o", type: "customer.subscription.updated", data: { object: sub({ id: "sub_old", status: "canceled" }) } });
+  assert.deepEqual(out, { kind: "ignored", type: "customer.subscription.updated" });
+  assert.equal(h.patches.length, 0);
+});
+
 test("incomplete status leaves billing untouched", async () => {
   const h = harness();
-  const out = await handleBillingEvent(h.repo, h.deps, {
+  const out = await run(h, {
     id: "evt_7",
     type: "customer.subscription.updated",
     data: { object: sub({ status: "incomplete" }) },
@@ -158,7 +215,7 @@ test("incomplete status leaves billing untouched", async () => {
 
 test("invoice.payment_failed notifies with the customer id, no billing write", async () => {
   const h = harness();
-  const out = await handleBillingEvent(h.repo, h.deps, {
+  const out = await run(h, {
     id: "evt_8",
     type: "invoice.payment_failed",
     data: { object: { customer: "cus_42" } },
@@ -171,7 +228,7 @@ test("invoice.payment_failed notifies with the customer id, no billing write", a
 
 test("other event types are ignored", async () => {
   const h = harness();
-  const out = await handleBillingEvent(h.repo, h.deps, { id: "evt_9", type: "customer.created", data: { object: {} } });
+  const out = await run(h, { id: "evt_9", type: "customer.created", data: { object: {} } });
   assert.deepEqual(out, { kind: "ignored", type: "customer.created" });
 });
 

@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
       {
         applyCheckout: (session) => applyCheckoutSession(repo, session),
         retrieveCheckoutSession,
+        retrieveSubscription,
         syncQuantity: (account) =>
           syncSubscriptionQuantity(repo, { retrieveSubscription, setQuantity: setSubscriptionItemQuantity, notify }, account),
         notify,

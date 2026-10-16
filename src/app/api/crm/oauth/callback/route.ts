@@ -10,11 +10,14 @@
  * ============ WHY THE STATE IS RE-VERIFIED AGAINST THE SESSION ============
  * Mirrors `src/app/api/calendar/google/callback/route.ts`'s identical
  * rationale: a signed state proves the START route was hit recently by an
- * authenticated owner; it does NOT prove the browser arriving now is still
- * that owner (someone could capture the state and replay the callback from
- * a different session). So the current session is independently re-checked
- * to still be an owner before anything is written — two facts have to agree:
- * the signature, and who is actually signed in right now.
+ * authenticated owner or account; it does NOT prove the browser arriving now
+ * is still that person (someone could capture the state and replay the
+ * callback from a different session). So the current session is independently
+ * re-checked before anything is written: when a state is present its account
+ * id must equal the session's account id (null for an owner), else the install
+ * is refused. The one exception is GoHighLevel's own Marketplace install,
+ * which arrives with no session and no state and installs an UNCLAIMED row
+ * for a new account to claim from /signup (see the three cases below).
  *
  * ============ INSTALL VS. REINSTALL ============
  * `tokens.locationId` (from GHL's own token response, never anything this

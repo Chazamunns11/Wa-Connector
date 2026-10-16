@@ -51,17 +51,18 @@ const METHODS = [
   "getWhatsappSessionSummariesForTenants",
   "getLocationStats",
   "recordStripeEvent",
+  "deleteStripeEvent",
 ] as const;
 
-test("SupabaseGhlRepository implements all 43 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 43);
-  assert.equal(new Set(METHODS).size, 43);
+test("SupabaseGhlRepository implements all 44 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 44);
+  assert.equal(new Set(METHODS).size, 44);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 43", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 44", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });

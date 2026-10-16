@@ -685,6 +685,12 @@ export async function handleProviderOutboundMessage(
       return { kind: "refused", reason };
     }
 
+    // Ordering note: `embedStateFor` (dashboard) reports disabled/needs_reauth
+    // before the account gate because it describes the *first thing the owner
+    // must fix*. This path deliberately gates first: a refusal for billing or
+    // activation is the commercial truth and reaches GoHighLevel with the
+    // fixed customer string either way, and no message is sent in both orders.
+    //
     // needs_reauth / disabled — never attempt the bridge for a known-bad
     // account. Still reported inline where possible — see
     // `resolveGhlAccessToken`'s JSDoc (finding 3) for why `needs_reauth`
@@ -1302,6 +1308,17 @@ async function resolveTextPartOutcome(
   return retryTextPart(repo, deps, row, result);
 }
 
+/**
+ * Re-runs the accounts sending gate for a retry. Billing or activation can
+ * change between intake and a drain pass, so a queued `pending_send` row must
+ * be re-checked before the bridge is called again. `null` means "may send".
+ */
+async function retryGateReason(repo: GhlProviderRepo, account: GhlAccount | null): Promise<string | null> {
+  if (!account) return sendingGate({ accountId: null, activatedAt: null }, null, brandConfig().name);
+  const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
+  return sendingGate(account, owner?.billingStatus ?? null, brandConfig().name);
+}
+
 async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage, result: DrainGhlOutboundStatusesResult): Promise<PartOutcome> {
   if (row.sendAttempts >= PENDING_SEND_MAX_ATTEMPTS) {
     // Same finding-4 check as `drainPendingSend`: the send may genuinely
@@ -1324,6 +1341,11 @@ async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: 
     // defensive branch.
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED });
     return { resolved: true, sent: false, reason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED };
+  }
+  const gateReason = await retryGateReason(repo, await repo.getGhlAccountByLocationId(row.locationId));
+  if (gateReason) {
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
+    return { resolved: true, sent: false, reason: gateReason };
   }
   result.retried++;
   const sendResult = await deps.sendWhatsapp({ coachId: row.tenantId, to: row.toPhone, text: row.pendingText, idempotencyKey: row.idempotencyKey });
@@ -1484,6 +1506,15 @@ async function drainPendingSend(
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED });
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_BRIDGE_UNREACHABLE_EXHAUSTED);
     if (outcome === "reported") result.failed++;
+    else result.reportFailed++;
+    return;
+  }
+
+  const gateReason = await retryGateReason(repo, account);
+  if (gateReason) {
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
+    const gated = await reportGhlOutcome(repo, deps, account, row, "failed", gateReason);
+    if (gated === "reported") result.failed++;
     else result.reportFailed++;
     return;
   }

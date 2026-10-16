@@ -592,4 +592,6 @@ export interface GhlRepository {
   getLocationStats(locationIds: string[], sinceIso: string): Promise<Record<string, LocationStats>>;
   /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */
   recordStripeEvent(eventId: string, type: string): Promise<boolean>;
+  /** Releases a recorded Stripe event id after a processing failure so Stripe's retry is handled, not dropped as a duplicate. */
+  deleteStripeEvent(eventId: string): Promise<void>;
 }

@@ -1,6 +1,6 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import type { Account } from "@/lib/types";
-import { parseSubscription, type StripeCheckoutSession, type retrieveCheckoutSession } from "@/lib/stripe/billing";
+import { parseSubscription, type StripeCheckoutSession, type retrieveCheckoutSession, type retrieveSubscription } from "@/lib/stripe/billing";
 import { mapStripeSubscriptionStatus } from "@/lib/billing/status";
 
 export interface StripeEvent {
@@ -11,12 +11,13 @@ export interface StripeEvent {
 
 export type WebhookRepo = Pick<
   GhlRepository,
-  "recordStripeEvent" | "getAccountById" | "getAccountByStripeCustomerId" | "updateAccountBilling"
+  "recordStripeEvent" | "deleteStripeEvent" | "getAccountById" | "getAccountByStripeCustomerId" | "updateAccountBilling"
 >;
 
 export interface WebhookDeps {
   applyCheckout: (session: StripeCheckoutSession) => Promise<unknown>;
   retrieveCheckoutSession: typeof retrieveCheckoutSession;
+  retrieveSubscription: typeof retrieveSubscription;
   syncQuantity: (account: Account) => Promise<unknown>;
   notify: (text: string) => void;
 }
@@ -43,7 +44,20 @@ function customerId(raw: unknown): string | null {
  */
 export async function handleBillingEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeEvent): Promise<WebhookOutcome> {
   if (!(await repo.recordStripeEvent(event.id, event.type))) return { kind: "duplicate" };
+  try {
+    return await processEvent(repo, deps, event);
+  } catch (err) {
+    // Release the id so Stripe's retry is processed rather than dropped as a duplicate.
+    try {
+      await repo.deleteStripeEvent(event.id);
+    } catch {
+      // If even this fails the original error still surfaces as a 500.
+    }
+    throw err;
+  }
+}
 
+async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeEvent): Promise<WebhookOutcome> {
   switch (event.type) {
     case "checkout.session.completed": {
       const id = event.data.object.id;
@@ -73,12 +87,18 @@ export async function handleBillingEvent(repo: WebhookRepo, deps: WebhookDeps, e
         deps.notify(`Stripe ${event.type} for unknown customer ${sub.customer}`);
         return { kind: "unknown_account", type: event.type };
       }
-      const status = mapStripeSubscriptionStatus(sub.status);
+      // A subscription other than the account's current one (e.g. a replaced, cancelled one) must not overwrite it.
+      if (account.stripeSubscriptionId && account.stripeSubscriptionId !== sub.id) return { kind: "ignored", type: event.type };
+      // Events can arrive out of order: apply the subscription's current state, never the event body's.
+      const fetchedSub = await deps.retrieveSubscription(sub.id);
+      if (!fetchedSub.ok) throw new Error(`subscription ${sub.id} could not be retrieved: ${fetchedSub.message}`);
+      const live = fetchedSub.data;
+      const status = mapStripeSubscriptionStatus(live.status);
       if (status === null) return { kind: "handled", type: event.type };
       await repo.updateAccountBilling(account.id, {
         billingStatus: status,
-        trialEndsAt: status === "trialing" ? iso(sub.trialEnd) : null,
-        cancelledAt: status === "cancelled" ? (iso(sub.canceledAt) ?? new Date().toISOString()) : null,
+        trialEndsAt: status === "trialing" ? iso(live.trialEnd) : null,
+        cancelledAt: status === "cancelled" ? (iso(live.canceledAt) ?? new Date().toISOString()) : null,
         stripeSubscriptionId: sub.id,
       });
       return { kind: "handled", type: event.type };

@@ -1306,6 +1306,12 @@ export class SupabaseGhlRepository implements GhlRepository {
     return (data ?? []).length === 1;
   }
 
+  async deleteStripeEvent(eventId: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("stripe_events").delete().eq("id", eventId);
+    if (error) throw error;
+  }
+
   async getGhlHealthSnapshot() {
     const supabase = getServiceClient();
 
