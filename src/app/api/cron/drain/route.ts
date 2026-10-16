@@ -23,6 +23,7 @@ import { timingSafeEqual } from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { repo } from "@/lib/data";
 import { drainGhlOutboundStatuses } from "@/lib/ghl-provider";
+import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
 import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
 import { purgeCancelledAccounts } from "@/lib/billing/cleanup";
 import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
@@ -56,6 +57,18 @@ export async function GET(request: NextRequest) {
   }
 
   const now = Date.now();
+
+  // Held messages first: a released row becomes 'accepted' and is then
+  // picked up by the status drain below.
+  let heldRelease = { tenantsChecked: 0, released: 0, stillHeld: 0, expired: 0, refused: 0, reportFailed: 0, timeBudgetExceeded: false };
+  try {
+    heldRelease = await releaseHeldOutboundMessages(repo);
+    if (heldRelease.released > 0 || heldRelease.stillHeld > 0 || heldRelease.expired > 0) {
+      console.log(`[cron/drain] held release: released ${heldRelease.released}, still held ${heldRelease.stillHeld}, expired ${heldRelease.expired}.`);
+    }
+  } catch (err) {
+    console.error("[cron/drain] held release failed (non-fatal):", err);
+  }
 
   let ghlOutboundStatuses = {
     candidates: 0,
@@ -116,5 +129,5 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] cancelled-account cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
-  return NextResponse.json({ ok: true, ghlOutboundStatuses, ghlInboundReplies, whatsappInboundPurged, cancelledCleanup });
+  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlInboundReplies, whatsappInboundPurged, cancelledCleanup });
 }

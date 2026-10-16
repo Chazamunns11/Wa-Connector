@@ -478,6 +478,7 @@ live sessions fight over one WhatsApp account.
 | `WHATSAPP_BRIDGE_SECRET` | Yes for sending | unset (fail closed) | Must equal the bridge's `WA_BRIDGE_SECRET` |
 | `WHATSAPP_INBOUND_POKE_SECRET` | Yes for pokes | unset (poke routes return 503; the hourly cron still drains) | Must equal the bridge's `WA_INBOUND_POKE_SECRET`; guards both poke routes |
 | `CRON_SECRET` | Yes | unset (`/api/cron/drain` returns 503) | Bearer secret for the hourly drain |
+| `OUTBOUND_HOLD_MAX_HOURS` | No | `24` (accepted 1 to 168) | How long a message to a disconnected number is held before it is reported as failed |
 | `ONBOARD_STATE_SECRET` | Yes for connect links and the embed | unset (those features show "not switched on") | Signs connect-link and embed tokens; separate from `CRON_SECRET` |
 | `SLACK_WEBHOOK_URL` | No | unset (alerts skipped) | Operational alerts |
 | `GHL_CLIENT_ID` | Yes for GHL | unset (GHL features off) | Marketplace app client id |
@@ -547,8 +548,11 @@ That is 28 variables, all read in `config.ts`.
 The marketing site, FAQ and setup guide describe the launched product. Do not
 launch publicly until each of these is built or the copy is changed to match:
 
-- **(a) Held messages while a phone is disconnected.** The site promises that
-  messages are held and retried when a number is offline (reliability plan).
+- **(a) Held messages while a phone is disconnected.** Built — `src/lib/ghl-held.ts`.
+  Messages to a previously linked, offline number are held and released oldest
+  first when it reconnects (reconnect poke and the hourly drain). A message held
+  longer than `OUTBOUND_HOLD_MAX_HOURS` (default 24) is reported to GoHighLevel
+  as failed, never sent late.
 - **(b) STOP opt-outs.** Built — `src/lib/opt-out.ts` + `src/lib/ghl-inbound.ts`. Whole-message, case-insensitive keywords. Opt-out: STOP, STOPALL, STOP ALL, UNSUBSCRIBE, END, QUIT, OPT OUT, OPTOUT (CANCEL is deliberately excluded: it cancels appointments). Opt-in: START, UNSTOP, SUBSCRIBE, OPT IN, OPTIN. The reply is still delivered to GoHighLevel.
 - **(e) Real legal text.** Replace the draft notice and the "(drafts)" label
   on the privacy, terms and related pages with reviewed legal text.
