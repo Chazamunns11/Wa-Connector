@@ -196,7 +196,8 @@ export interface GhlRepository {
   /**
    * Advance a ledger row's `send_state`/`send_attempts` — Phase 2's
    * handler/drain only. IMPLEMENTATIONS MUST CLEAR `pending_text` to `null`
-   * whenever `patch.sendState !== 'pending_send'` (0070_ghl_outbound_pending_text.sql's
+   * whenever `patch.sendState` is neither `'pending_send'` nor `'held'` (a held
+   * row keeps its text so the release pass can still send it) (0070_ghl_outbound_pending_text.sql's
    * whole contract: that column exists only for the duration a row is
    * eligible for a bridge-send retry).
    *
@@ -220,10 +221,22 @@ export interface GhlRepository {
    * a false `failed` for. Every OTHER `sendState` transition this method
    * writes stays unconditional — see `src/lib/data/supabase.ts`'s
    * implementation for the exact guard.
+   *
+   * `onlyIfSendState` (Review Focus 4): when set, the write also requires the
+   * row's CURRENT `send_state` to equal it (0 rows affected, no error, if it
+   * has moved on). The held-release pass uses `held` → `pending_send`/`refused`
+   * under this guard so it never overwrites a row another pass already moved.
+   * Attachment rows have no `held` state and stay `pending_send` while their
+   * parent message is held.
    */
   updateGhlOutboundSendState(
     id: string,
-    patch: { sendState: GhlOutboundSendState; sendAttempts?: number; refusalReason?: string }
+    patch: {
+      sendState: GhlOutboundSendState;
+      sendAttempts?: number;
+      refusalReason?: string;
+      onlyIfSendState?: GhlOutboundSendState;
+    }
   ): Promise<void>;
 
   /**
@@ -243,6 +256,33 @@ export interface GhlRepository {
    * eligible again with no separate re-activation step.
    */
   listUnreportedGhlOutboundMessages(limit?: number): Promise<GhlOutboundMessage[]>;
+
+  /**
+   * Distinct tenant ids with at least one `send_state = 'held'` row (capped at
+   * 1000 rows read) — the release pass's work list.
+   */
+  listHeldTenantIds(): Promise<string[]>;
+
+  /**
+   * One tenant's `held` rows, oldest first (default 50). Held rows are NEVER
+   * returned by `listUnreportedGhlOutboundMessages` (Review Focus 5): the main
+   * drain must not report them failed while they wait for a reconnect.
+   * `pending_text` is kept on held rows.
+   */
+  listHeldGhlOutboundMessages(tenantId: string, limit?: number): Promise<GhlOutboundMessage[]>;
+
+  /**
+   * `held` rows with `created_at < cutoffIso`, oldest first (default 50) — the
+   * expiry sweep (see `isHeldExpired` in src/lib/ghl-held-rules.ts).
+   */
+  listExpiredHeldGhlOutboundMessages(cutoffIso: string, limit?: number): Promise<GhlOutboundMessage[]>;
+
+  /**
+   * Per-tenant count of rows `send_state in ('pending_send','held')` — the
+   * "waiting" definition, same as `getLocationStats.pendingSend`. Tenants with
+   * none are absent from the map (callers default to 0).
+   */
+  countHeldByTenant(tenantIds: string[]): Promise<Map<string, number>>;
 
   /**
    * Stamp a ledger row's reported outcome — Phase 2's drain only. No atomic

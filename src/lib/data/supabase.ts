@@ -442,6 +442,27 @@ function mapGhlOutboundAttachment(row: GhlOutboundAttachmentRow): GhlOutboundAtt
  * Fixed by paginating with `.range()` until a page comes back short of
  * `PAGE_SIZE`, so this counts EVERY matching row regardless of volume.
  */
+/** Rows still waiting to leave (`pending_send` or `held`) per tenant; absent = 0. Paged so volume never truncates. */
+async function countWaitingByTenant(supabase: SupabaseClient, tenantIds: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (tenantIds.length === 0) return counts;
+  const PAGE_SIZE = 1000;
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .select("tenant_id, send_state")
+      .in("tenant_id", tenantIds)
+      .in("send_state", ["pending_send", "held"])
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as { tenant_id: string }[];
+    for (const r of page) counts.set(r.tenant_id, (counts.get(r.tenant_id) ?? 0) + 1);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return counts;
+}
+
 async function getWhatsappSentTodayByCoach(supabase: SupabaseClient, coachIds: string[]): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (coachIds.length === 0) return counts;
@@ -672,7 +693,10 @@ export class SupabaseGhlRepository implements GhlRepository {
     return { message: mapGhlOutboundMessage(existing as GhlOutboundMessageRow), isNew: false };
   }
 
-  async updateGhlOutboundSendState(id: string, patch: { sendState: GhlOutboundSendState; sendAttempts?: number; refusalReason?: string }) {
+  async updateGhlOutboundSendState(
+    id: string,
+    patch: { sendState: GhlOutboundSendState; sendAttempts?: number; refusalReason?: string; onlyIfSendState?: GhlOutboundSendState }
+  ) {
     const supabase = getServiceClient();
     const update: Record<string, unknown> = { send_state: patch.sendState };
     if (patch.sendAttempts !== undefined) update.send_attempts = patch.sendAttempts;
@@ -680,7 +704,8 @@ export class SupabaseGhlRepository implements GhlRepository {
     // exists for the duration a row is a bridge-send retry candidate — clear
     // it the instant the row leaves 'pending_send' (see that migration's
     // header and Repository.updateGhlOutboundSendState's JSDoc).
-    if (patch.sendState !== "pending_send") update.pending_text = null;
+    // A held row keeps its text: the release pass still has to send it.
+    if (patch.sendState !== "pending_send" && patch.sendState !== "held") update.pending_text = null;
     // 0071_ghl_outbound_refusal_reason.sql — stamped once, alongside (not
     // instead of) report_error, and never cleared again (adversarial-review
     // finding 3 — see Repository.updateGhlOutboundSendState's JSDoc).
@@ -706,7 +731,11 @@ export class SupabaseGhlRepository implements GhlRepository {
     // pending_send-to-pending_send retry-bookkeeping write needs this,
     // because it's the only one that can race a state transition already in
     // flight from elsewhere.
-    if (patch.sendState === "pending_send") query = query.eq("send_state", "pending_send");
+    // An explicit `onlyIfSendState` replaces the automatic guard: the held
+    // release pass writes held -> pending_send, where the automatic
+    // `.eq("send_state","pending_send")` would match nothing.
+    if (patch.onlyIfSendState !== undefined) query = query.eq("send_state", patch.onlyIfSendState);
+    else if (patch.sendState === "pending_send") query = query.eq("send_state", "pending_send");
     const { error } = await query;
     if (error) throw error;
   }
@@ -732,6 +761,7 @@ export class SupabaseGhlRepository implements GhlRepository {
       .from("ghl_outbound_messages")
       .select("*, ghl_accounts!inner(status)")
       .is("reported_status", null)
+      .neq("send_state", "held")
       .eq("ghl_accounts.status", "active")
       .order("created_at", { ascending: true })
       .limit(limit);
@@ -741,6 +771,43 @@ export class SupabaseGhlRepository implements GhlRepository {
     // and ignores it, same as every other mapper in this file that never
     // spreads a raw row.
     return ((data ?? []) as unknown as GhlOutboundMessageRow[]).map(mapGhlOutboundMessage);
+  }
+
+  async listHeldTenantIds() {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_outbound_messages").select("tenant_id").eq("send_state", "held").limit(1000);
+    if (error) throw error;
+    return [...new Set(((data ?? []) as { tenant_id: string }[]).map((r) => r.tenant_id))];
+  }
+
+  async listHeldGhlOutboundMessages(tenantId: string, limit = 50) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .eq("send_state", "held")
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    if (error) throw error;
+    return ((data ?? []) as unknown as GhlOutboundMessageRow[]).map(mapGhlOutboundMessage);
+  }
+
+  async listExpiredHeldGhlOutboundMessages(cutoffIso: string, limit = 50) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .select("*")
+      .eq("send_state", "held")
+      .lt("created_at", cutoffIso)
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    if (error) throw error;
+    return ((data ?? []) as unknown as GhlOutboundMessageRow[]).map(mapGhlOutboundMessage);
+  }
+
+  async countHeldByTenant(tenantIds: string[]) {
+    return countWaitingByTenant(getServiceClient(), tenantIds);
   }
 
   async markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundReportedStatus | null; reportError: string | null }) {
@@ -1034,7 +1101,8 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (error) throw error;
     if (!data) return null;
     const sentTodayByCoach = await getWhatsappSentTodayByCoach(supabase, [coachId]);
-    return mapWhatsappSessionSummary(data as unknown as WhatsappSessionSummaryRow, sentTodayByCoach.get(coachId) ?? 0);
+    const held = await countWaitingByTenant(supabase, [coachId]);
+    return mapWhatsappSessionSummary(data as unknown as WhatsappSessionSummaryRow, sentTodayByCoach.get(coachId) ?? 0, held.get(coachId) ?? 0);
   }
 
   async getWhatsappSessionSummaries(scope: Scope) {
@@ -1053,7 +1121,11 @@ export class SupabaseGhlRepository implements GhlRepository {
       supabase,
       rows.map((r) => r.coach_id)
     );
-    return rows.map((row) => mapWhatsappSessionSummary(row, sentTodayByCoach.get(row.coach_id) ?? 0));
+    const held = await countWaitingByTenant(
+      supabase,
+      rows.map((r) => r.coach_id)
+    );
+    return rows.map((row) => mapWhatsappSessionSummary(row, sentTodayByCoach.get(row.coach_id) ?? 0, held.get(row.coach_id) ?? 0));
   }
 
   // -------------------------------------------------------------------------
@@ -1251,7 +1323,11 @@ export class SupabaseGhlRepository implements GhlRepository {
       supabase,
       rows.map((r) => r.coach_id)
     );
-    return rows.map((row) => mapWhatsappSessionSummary(row, sentTodayByCoach.get(row.coach_id) ?? 0));
+    const held = await countWaitingByTenant(
+      supabase,
+      rows.map((r) => r.coach_id)
+    );
+    return rows.map((row) => mapWhatsappSessionSummary(row, sentTodayByCoach.get(row.coach_id) ?? 0, held.get(row.coach_id) ?? 0));
   }
 
   async getLocationStats(locationIds: string[], sinceIso: string) {
@@ -1285,7 +1361,7 @@ export class SupabaseGhlRepository implements GhlRepository {
         const stats = result[r.location_id];
         if (!stats) continue;
         seenInRecent.add(r.location_id);
-        if (r.send_state === "pending_send") stats.pendingSend += 1;
+        if (r.send_state === "pending_send" || r.send_state === "held") stats.pendingSend += 1;
         if (r.send_state === "refused" || r.reported_status === "failed") {
           stats.failedLast7Days.count += 1;
           const reasons = stats.failedLast7Days.reasons;
