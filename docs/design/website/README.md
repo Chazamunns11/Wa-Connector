@@ -32,7 +32,16 @@ Two variants per page. A keeps the app's dark ground; B uses the light surface (
 
 New (site-only, not in `ui/`): header/footer, FAQ accordion, schematic figure, tab group, number calculator, status bar for sends against cap.
 
+## Fix round 1 decisions
+
+- **Mobile nav:** below 768px the header shows a no-JS `<details>` "Menu" disclosure (links plus Log in). From 480px the Log in button returns to the header. The build can keep this pattern or swap it for an island.
+- **Dashboard below 768px:** variant A's table is a draft-only horizontal scroll inside its wrapper; the build should render variant B's card list at that width and A's table from 768px up.
+- **`.light`** sets `color: var(--ink)`, as `.surface-light` does in `globals.css`. Figure captions and small SVG labels use `ink-dim`.
+- Setup-guide steps each have their own schematic with its own aria-label (install, left menu, Telephony Provider path, QR scan, Connected row, test send, reply in Conversations).
+
 ## Concerns
 
 - `--color-ink-faint` on `.surface-light` (`#6E757A`) is about 4.6:1 on white but nearer 4.3:1 on `#F6F7F8`. Avoid it for small text on the raised light surface in the build, or use `ink-dim`.
 - The calculator in the drafts is static; the build needs the server-rendered fallback table (kept in the drafts) plus a small island.
+- Light `--win` (`#12805A`) on `--win-soft` (`#E8F8EF`) is about 4.48:1, just under AA for 12px chip text; consider `ink-dim` text with a win dot in the build.
+- Schematic SVG text scales with the figure, so labels fall below about 9px under 480px wide. Treat figures as illustration, with the step text carrying the meaning.
