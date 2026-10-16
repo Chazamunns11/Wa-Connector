@@ -313,14 +313,14 @@ h2 {
 }
 
 /* ---- home hero: one load sequence, about 1.2s ----
-   1 the bubble slides out from behind the workflow step (full opacity, hidden by the card) (150-700ms)
-   2 a Coral dot pings on its tail corner (700-1200ms)
-   3 "Delivered" and the reply arrive (850-1200ms)
+   1 the WhatsApp bubble slides up 16px into place at full opacity (150-600ms)
+   2 a Coral dot pings on its tail corner (650-1150ms)
+   3 "Delivered", the reply and "Back in Conversations" arrive (950-1300ms)
    Final state is the default style, so reduced motion simply drops the
    animations and shows the finished frame. */
 @keyframes hero-land {
   from {
-    transform: translateY(-88px) scale(0.86);
+    transform: translateY(16px);
   }
   to {
     transform: none;
@@ -350,7 +350,7 @@ h2 {
 }
 
 .hero-bubble {
-  animation: hero-land 550ms var(--ease-out) 150ms both;
+  animation: hero-land 450ms var(--ease-out) 150ms both;
 }
 
 .hero-ping::after {
@@ -359,7 +359,7 @@ h2 {
   inset: 0;
   border-radius: 999px;
   background: var(--color-accent);
-  animation: hero-ping-ring 500ms ease-out 700ms both;
+  animation: hero-ping-ring 500ms ease-out 650ms both;
 }
 
 .hero-ping {
@@ -367,7 +367,7 @@ h2 {
 }
 
 .hero-late {
-  animation: hero-fade-up 320ms var(--ease-out) 880ms both;
+  animation: hero-fade-up 350ms var(--ease-out) 950ms both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -381,4 +381,83 @@ h2 {
   .hero-ping::after {
     display: none;
   }
+}
+
+/* ---- Task 13: Paper ground ----
+   A second :root block, appended so the earlier one stays untouched. Paper
+   (white) is the page ground; Cream becomes the one note band per page; Wren
+   (--color-rule) draws the 2px section rules. */
+:root {
+  --color-bg: #FFFFFF;
+  --color-raised: #F6F1EA;
+  --color-well: #F6F1EA;
+  --color-rule: #7A4E2D;
+  --color-sms: #E9E9EB;
+}
+
+.surface-dark {
+  --color-rule: #D9A47A;
+}
+
+@theme inline {
+  --color-rule: var(--color-rule);
+  --color-sms: var(--color-sms);
+}
+
+/* Marketing body copy: 17px on the printed-feeling Paper ground. */
+.site-body {
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+/* The one section device: a 2px Wren rule the width of the column, 24px above
+   the heading. */
+.section-rule::before {
+  content: "";
+  display: block;
+  height: 2px;
+  width: 100%;
+  margin-bottom: 24px;
+  background: var(--color-rule);
+}
+
+/* Phone frame for the sample messages. */
+.phone {
+  width: 100%;
+  max-width: 300px;
+  padding: 16px 12px;
+  border-radius: 28px;
+  /* A phone is a light object even on an Ink section, so it restates the
+     light-scope text tokens it needs. */
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #454A57;
+  --color-ink-faint: #5F6270;
+  --color-border: rgba(27, 31, 42, 0.14);
+  --color-well: #F6F1EA;
+  background: var(--color-well);
+  color: var(--color-ink);
+  box-shadow: 0 24px 48px -24px rgba(27, 31, 42, 0.35);
+}
+
+.phone-title {
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.phone-sms .bubble-out {
+  background: var(--color-sms);
+  border-color: transparent;
+  color: var(--color-ink);
+}
+
+/* Browser-ish chrome around a sample app screen. */
+.sample-chrome {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-card);
+  color: var(--color-ink);
 }

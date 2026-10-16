@@ -5,7 +5,7 @@ import { brandCssVars, brandConfig } from "@/lib/brand-config";
 
 export default function SiteLayout({ children }: { children: ReactNode }) {
   return (
-    <div style={brandCssVars(brandConfig())} className="flex min-h-screen flex-col">
+    <div style={brandCssVars(brandConfig())} className="site-body flex min-h-screen flex-col">
       <a href="#main" className="skip-link">
         Skip to main content
       </a>

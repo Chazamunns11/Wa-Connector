@@ -1,0 +1,43 @@
+import { PhoneFrame } from "./PhoneFrame";
+
+/**
+ * The signature figure: the same reminder as a text message nobody answered,
+ * and on WhatsApp where Sam did. Pure markup and CSS (.hero-* in globals.css),
+ * no client JS. Nothing here claims a rate; both phones are made-up samples.
+ */
+const REMINDER = "Hi Sam, your appointment is at 2pm tomorrow. Reply YES to confirm.";
+const REPLY = "Yes, see you at 2";
+
+const LABEL = `Two phones showing the same appointment reminder, "${REMINDER}" On the left it is a text message sent yesterday at 14:02 with no reply. On the right it is a WhatsApp message marked Delivered, and Sam has replied "${REPLY}", which appears back in Conversations.`;
+
+export function SameReminderTwice() {
+  return (
+    <figure role="img" aria-label={LABEL} className="w-full">
+      <div className="flex flex-col items-center gap-6 lg:flex-row lg:items-start lg:justify-center lg:gap-0">
+        <PhoneFrame title="Messages" variant="sms" className="lg:mt-10">
+          <div className="flex flex-col items-end lg:pr-12">
+            <p className="bubble bubble-out text-[15px]">{REMINDER}</p>
+            <p className="mt-1.5 text-sm text-ink-faint">Yesterday 14:02</p>
+          </div>
+        </PhoneFrame>
+
+        <PhoneFrame title="Sam" variant="whatsapp" className="lg:-ml-12">
+          <div className="flex flex-col items-end">
+            <p className="hero-bubble bubble bubble-out text-[15px]">
+              {REMINDER}
+              <span className="hero-ping absolute -bottom-1 -right-1 block h-3 w-3 rounded-full border-2 border-well bg-accent" />
+            </p>
+            <p className="hero-late mt-1.5 text-sm text-ink-dim">Delivered</p>
+          </div>
+          <div className="hero-late mt-4 flex flex-col items-start">
+            <p className="bubble bubble-in text-[15px]">{REPLY}</p>
+            <p className="mt-1.5 text-sm text-ink-dim">Back in Conversations</p>
+          </div>
+        </PhoneFrame>
+      </div>
+      <figcaption className="mt-5 text-center text-[15px] text-ink-faint lg:text-left">
+        Sample messages. Sam is made up.
+      </figcaption>
+    </figure>
+  );
+}

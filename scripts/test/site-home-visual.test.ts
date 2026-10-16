@@ -8,7 +8,8 @@ import type { BrandConfig } from "@/lib/brand-config";
 const root = process.cwd();
 const read = (p: string) => readFileSync(join(root, p), "utf8");
 
-const FILES = ["src/components/site/HeroWorkflow.tsx", "src/components/site/SafetyThread.tsx"];
+// Task 13: the signature figure replaced HeroWorkflow as the hero visual.
+const FILES = ["src/components/site/samples/SameReminderTwice.tsx", "src/components/site/SafetyThread.tsx"];
 
 test("hero and safety components never use WhatsApp green or its tick marks", () => {
   for (const f of FILES) {
@@ -25,11 +26,11 @@ test("hero animation is CSS-only and switched off under prefers-reduced-motion",
   const reduced = css.split("@media (prefers-reduced-motion: reduce)").slice(1).join("\n");
   assert.match(reduced, /\.hero-bubble/);
   assert.match(reduced, /animation:\s*none/);
-  assert.ok(!/"use client"/.test(read("src/components/site/HeroWorkflow.tsx")), "hero must not ship client JS");
+  assert.ok(!/"use client"/.test(read("src/components/site/samples/SameReminderTwice.tsx")), "hero must not ship client JS");
 });
 
 test("hero visual is described to assistive tech", () => {
-  const text = read("src/components/site/HeroWorkflow.tsx");
+  const text = read("src/components/site/samples/SameReminderTwice.tsx");
   assert.match(text, /role="img"/);
   assert.match(text, /aria-label=/);
 });
