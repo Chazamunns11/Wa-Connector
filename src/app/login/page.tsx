@@ -25,6 +25,10 @@ const AUTH_ERROR_COPY: Record<string, { title: string; body: string }> = {
     title: "Billing isn't set up yet",
     body: "Your account exists but no card was added. Sign in to finish setting up billing.",
   },
+  exists: {
+    title: "That email already has an account",
+    body: "We've sent nothing — request a sign-in link below.",
+  },
   invalid_email: {
     title: "That email address doesn't look right",
     body: "Check it and try again.",

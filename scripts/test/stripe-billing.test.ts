@@ -53,7 +53,7 @@ test("createCheckoutSession: trial subscription params, no tax by default", asyn
       client_reference_id: "acc-1",
       line_items: [{ price: "price_9", quantity: 1 }],
       subscription_data: { trial_period_days: 7, metadata: { account_id: "acc-1" } },
-      metadata: { account_id: "acc-1" },
+      metadata: { account_id: "acc-1", owner_email: "a@b.co" },
       payment_method_collection: "always",
       success_url: "S",
       cancel_url: "C",

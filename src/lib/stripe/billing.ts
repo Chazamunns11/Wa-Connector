@@ -99,7 +99,7 @@ export async function createCheckoutSession(
     client_reference_id: input.accountId,
     line_items: [{ price: cfg.priceId, quantity: 1 }],
     subscription_data: { trial_period_days: TRIAL_DAYS, metadata: { account_id: input.accountId } },
-    metadata: { account_id: input.accountId },
+    metadata: { account_id: input.accountId, owner_email: input.customerEmail },
     payment_method_collection: "always",
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,

@@ -24,6 +24,7 @@ const PAGE_FILES: Record<string, string> = {
   [SITE_ROUTES.terms]: "src/app/(site)/legal/terms/page.tsx",
   [SITE_ROUTES.privacy]: "src/app/(site)/legal/privacy/page.tsx",
   [SITE_ROUTES.signup]: "src/app/(site)/signup/page.tsx",
+  [SITE_ROUTES.signupComplete]: "src/app/(site)/signup/complete/page.tsx",
   [SITE_ROUTES.dashboard]: "src/app/(app)/dashboard/page.tsx",
   [SITE_ROUTES.billing]: "src/app/(app)/dashboard/billing/page.tsx",
 };

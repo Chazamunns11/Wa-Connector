@@ -65,12 +65,6 @@ export function validateSignup(form: Record<string, FormDataEntryValue | null>):
   return { ok: false, errors, values };
 }
 
-export function checkoutQuery(input: SignupInput, claim?: string): string {
-  const q = new URLSearchParams({ name: input.accountName, kind: input.kind, email: input.email });
-  if (claim) q.set("claim", claim.slice(0, 200));
-  return `?${q.toString()}`;
-}
-
 /** Query string for the redirect back to /signup: error.<field> and v.<field>. */
 export function signupRedirectQuery(result: Extract<SignupResult, { ok: false }>): string {
   const q = new URLSearchParams();

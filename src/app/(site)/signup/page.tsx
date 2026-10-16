@@ -4,7 +4,12 @@ import { SignupForm } from "@/components/auth/SignupForm";
 import { brandConfig } from "@/lib/brand-config";
 import { TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
 import { signupStateFromParams } from "@/lib/site/signup";
-import { previewSignupAction } from "./actions";
+import { startSignupAction } from "./actions";
+
+const PAGE_ERRORS: Record<string, string> = {
+  unavailable: "Signups aren't open yet.",
+  failed: "Something went wrong creating your account. Try again, or contact support.",
+};
 
 export function generateMetadata(): Metadata {
   return {
@@ -20,10 +25,10 @@ export default async function SignupPage({
 }) {
   const params = await searchParams;
   const { errors, values } = signupStateFromParams(params);
+  const pageError = typeof params.error === "string" ? PAGE_ERRORS[params.error] : undefined;
   const claim = typeof params.claim === "string" && params.claim ? params.claim.slice(0, 200) : undefined;
   return (
     <AuthShell
-      preview
       title={`Start your ${TRIAL_DAYS}-day free trial`}
       intro={
         <>
@@ -37,7 +42,12 @@ export default async function SignupPage({
         </>
       }
     >
-      <SignupForm action={previewSignupAction} errors={errors} values={values} claim={claim} />
+      {pageError ? (
+        <p role="alert" className="mb-5 rounded-[12px] border-2 border-loss bg-loss-soft p-3 text-sm font-semibold text-ink">
+          {pageError}
+        </p>
+      ) : null}
+      <SignupForm action={startSignupAction} errors={errors} values={values} claim={claim} />
     </AuthShell>
   );
 }

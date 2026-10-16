@@ -51,9 +51,6 @@ test("auth forms use the site pills, not ui/Button", () => {
     assert.ok(!s.includes("@/components/ui/Button"), f);
     assert.ok(s.includes('siteButton("coral"'), f);
   }
-  const checkout = read("src/app/(site)/signup/checkout/page.tsx");
-  assert.ok(!checkout.includes("@/components/ui/Card"));
-  assert.ok(checkout.includes("slab"));
   assert.ok(read("src/components/auth/SignupForm.tsx").includes("border-2 border-border-strong"));
 });
 

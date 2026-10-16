@@ -9,6 +9,7 @@ export const SITE_ROUTES = {
   terms: "/legal/terms",
   privacy: "/legal/privacy",
   signup: "/signup",
+  signupComplete: "/signup/complete",
   login: "/login",
   dashboard: "/dashboard",
   billing: "/dashboard/billing",
@@ -30,6 +31,7 @@ export const PUBLIC_ROUTES: readonly string[] = [
 /** Account and auth screens: disallowed in robots.txt, never in the sitemap. */
 export const NOINDEX_ROUTES: readonly string[] = [
   SITE_ROUTES.signup,
+  SITE_ROUTES.signupComplete,
   SITE_ROUTES.login,
   SITE_ROUTES.dashboard,
   SITE_ROUTES.billing,

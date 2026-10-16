@@ -1,9 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  checkoutQuery,
   SIGNUP_ERROR_MESSAGES,
   signupRedirectQuery,
   signupStateFromParams,
@@ -38,17 +37,6 @@ test("validateSignup rejects missing fields, long names and malformed emails", (
   }
 });
 
-test("checkoutQuery carries claim only when present", () => {
-  const i = { accountName: "A1", kind: "agency", email: "a@b.co" } as const;
-  assert.doesNotMatch(checkoutQuery(i), /claim/);
-  assert.match(checkoutQuery(i, "tok 1"), /&claim=tok\+1$/);
-});
-
-test("checkoutQuery encodes the three fields", () => {
-  const q = checkoutQuery({ accountName: "Smith & Sons", kind: "agency", email: "a+b@x.co" });
-  assert.equal(q, "?name=Smith+%26+Sons&kind=agency&email=a%2Bb%40x.co");
-});
-
 test("signup errors round-trip through the redirect query", () => {
   const r = validateSignup({ accountName: "A", kind: "agency", email: "nobody" });
   assert.equal(r.ok, false);
@@ -75,18 +63,27 @@ test("signup error redirect ends at the focusable summary", () => {
   assert.match(read("src/components/auth/SignupForm.tsx"), /id="signup-errors"\s+tabIndex=\{-1\}/);
 });
 
-test("signup action never imports supabase or stripe", () => {
-  assert.doesNotMatch(read("src/app/(site)/signup/actions.ts"), /supabase|stripe/i);
+test("signup action calls startSignup and never inlines Stripe params", () => {
+  const src = read("src/app/(site)/signup/actions.ts");
+  assert.match(src, /startSignup\(/);
+  assert.doesNotMatch(src, /api\.stripe\.com/);
 });
 
-test("both preview pages render PreviewBadge and are noindex", () => {
-  const signup = read("src/app/(site)/signup/page.tsx");
-  assert.match(signup, /<AuthShell[^>]*\bpreview(?!=\{false)\b/);
-  assert.match(read("src/components/auth/AuthShell.tsx"), /\{preview \? <PreviewBadge \/> : null\}|preview && <PreviewBadge \/>/);
-  assert.match(read("src/app/(site)/signup/checkout/page.tsx"), /<PreviewBadge \/>/);
-  for (const src of [signup, read("src/app/(site)/signup/checkout/page.tsx")]) {
+test("signup action carries the claim through every redirect and never logs it", () => {
+  const src = read("src/app/(site)/signup/actions.ts");
+  assert.match(src, /signupUrl\(new URLSearchParams\(signupRedirectQuery\(result\)\), claim/);
+  assert.match(src, /error: "unavailable"[^\n]*claim/);
+  assert.match(src, /error: outcome\.kind[^\n]*claim/);
+  assert.doesNotMatch(src, /console\.\w+\([^)]*claim/i);
+});
+
+test("signup pages are noindex and no longer preview", () => {
+  for (const f of ["signup/page.tsx", "signup/complete/page.tsx"]) {
+    const src = read(`src/app/(site)/${f}`);
     assert.match(src, /robots:\s*\{\s*index:\s*false/);
+    assert.doesNotMatch(src, /preview/i);
   }
+  assert.equal(existsSync(join(root, "src/app/(site)/signup/checkout/page.tsx")), false);
 });
 
 test("the preview badge stacks on its own line below 640px", () => {
