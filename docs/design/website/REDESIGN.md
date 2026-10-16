@@ -368,3 +368,61 @@ I drafted the plan, then ran the frontend-design check ("would I arrive here for
 One thing I kept despite looking at it twice: the annotated safety thread from Task 9c. It is already specific to this product and was reviewed clean; rebuilding it would be change for its own sake.
 
 Chanel test, applied to the plan: the first draft had a small Wren wren-mark watermark behind the hero number. Removed; the logo is in the header and the mark would read as decoration.
+
+---
+
+## Direction B (chosen): the coral field
+
+16 Oct 2026. The owner compared three static drafts (`direction-a.html`, `direction-b.html`, `direction-c.html`; Superdesign's canvas was unavailable from the cloud session, W1) and chose B "by a country mile". Rulings W36 and W37 in `progress.md` bind; the build is split in `.superpowers/sdd/2026-10-16-website/task-14-plan.md`. Where this section and §1 to §9 above disagree, this section wins.
+
+### What B is
+
+Coral `#FF5A36` becomes a ground, not an accent. The header and hero, the safety band and the price strip sit on it, and every word on it is Ink `#1B1F2A` (5.3:1; nothing lighter passes, so there is no secondary grey, no Wren and never white text on coral). White sections carry "Why we made it", the dashboard board and the disclosure slab. Ink `#1B1F2A` sections carry the setup steps and the footer. The FAQ sits on Mist `#EEF0F4`. Cream `#F6F1EA` leaves every surface and every text token; it survives only inside the logo artwork, which stays untouched.
+
+The devices, top to bottom on the home page:
+
+1. Coral field: header (standard logo, Ink nav, Ink pill button) and hero in one colour. The h1 reads as one sentence; its last span is the number at `clamp(6.5rem, 24vw, 19rem)` in Bricolage 800 (104px at 375, 304px at 1280). Footnote link "Our own average¹" stays a sibling of the h1 (W34).
+2. The two sample phones, tilted (-4° and 3°), hanging `clamp(150px, 27vw, 350px)` past the coral edge into the white section below. Both full height at every width; side by side at 375 (158px each).
+3. "Why we made it" on white, two columns, the lead paragraph at 1.3rem; the research line and the hero footnote end the section under 2px Ink rules.
+4. "How you set it up" on Ink: three columns with 3px Coral top rules, Coral numerals at `clamp(4.5rem, 9vw, 8rem)`, and the GoHighLevel path as a Coral chip with Ink text. No sample screen here (it stays on the setup guide).
+5. "What you look at afterwards" on white: the dashboard sample as a board with a 3px Ink outline, 20px radius, an Ink top bar with a Coral "Sample" pill, Ink status dots (always with the word), Ink meters, Coral attention chips.
+6. "How it treats your number" on Coral: h2 left, three ruled rows (3px Ink rules, Bricolage 800 titles) right. No bubbles.
+7. "Read this before you sign up" on white: a 3px Ink slab, 24px radius, with a hard Coral offset shadow (12px, 6px below 640px). The three approved paragraphs; no invented sub-headings.
+8. "Questions we get" on Mist: sticky h2 at 1280, `<details>` with 2px Ink rules and CSS chevrons.
+9. Price strip on Coral: the price sentence as a large h2, the terms line, an Ink pill button.
+10. Footer on Ink.
+
+Type scale (B's): h1 `clamp(2.1rem, 4.6vw, 4.1rem)`; h2 `clamp(2.1rem, 5.2vw, 4rem)`; h3 1.35rem; all Bricolage 800, sentence case, no eyebrows, no accent word. Body stays Instrument Sans 17px/1.55.
+
+Shape: buttons are 52px pills with a 2px Ink border (Ink fill on coral, Coral fill with Ink text on white and Ink grounds, outline for the secondary); slabs 3px Ink at 20 to 24px radius; phones 34px/26px; chips 8px; the "Sample" pill 999px. Structural lines are 2 or 3px Ink (Coral on Ink). Wren and Tan retire to the logo.
+
+Motion: still one orchestrated moment in the hero, now opening with both phones rising (600ms, the second 120ms later) before the existing bubble, "Delivered", ping and reply sequence; done by 1.9s; `prefers-reduced-motion` renders the finished frame. Nothing else moves on its own.
+
+### Tokens
+
+| Token | White ground (`:root`) | Ink (`.surface-dark`) | Coral (`.surface-coral`) |
+|---|---|---|---|
+| `--color-bg` | `#FFFFFF` | `#1B1F2A` | `#FF5A36` |
+| `--color-raised` / `--color-well` | `#EEF0F4` Mist | `#2D3345` / `#151823` | `#FFFFFF` |
+| `--color-ink` | `#1B1F2A` | `#FFFFFF` | `#1B1F2A` |
+| `--color-ink-dim` / `-faint` | `#4A5162` | `#E4E7EE` / `#C3C7D1` | `#1B1F2A` |
+| `--color-accent` (fills) | `#FF5A36` | `#FF5A36` | `#1B1F2A` |
+| `--color-accent-ink` (text on the fill) | `#1B1F2A` | `#1B1F2A` | `#FFFFFF` |
+| `--color-accent-text` (links) | `#1B1F2A` | `#FFFFFF` | `#1B1F2A` |
+| `--color-rule` | `#1B1F2A` | `#FF5A36` | `#1B1F2A` |
+| `--color-border` | `#D5D9E1` | `rgba(255,255,255,.18)` | `rgba(27,31,42,.35)` |
+| `--color-border-strong` | `#1B1F2A` | `#FFFFFF` | `#1B1F2A` |
+
+Measured: Ink on Coral 5.3; Ink on Mist 14.4; `#4A5162` on white 8.3, on Mist 7.2; white on Ink 16.5; `#E4E7EE` on Ink 14.3; `#C3C7D1` on Ink 9.7; Coral on Ink 5.3 (numerals); Coral on white 3.1, so Coral is only ever a fill on white, never small text.
+
+### What carries to the other pages
+
+The same chrome (coral header, Ink footer) on every marketing page; the pricing page opens with the price on coral, then the calculator in an Ink slab, ruled comparison columns, and the billing questions on Mist; the setup guide and docs are white with Ink outlines on samples and diagrams, chevron disclosures for troubleshooting and the FAQ; signup, checkout and login use the slab and the pill buttons; the account dashboard keeps its Ink header and calmer app panels, with Cream gone through the tokens.
+
+### Copy
+
+Unchanged (W37). B's draft lines, including "Clients read WhatsApp" (a read claim, W25), are not used. The one structural edit: step 2's GoHighLevel path moves out of the sentence into the Coral chip, and the sentence says "open the path below". The safety intro line and the connect-sample caption are no longer rendered on the home page; the hero footnote moves to the end of "Why we made it". The full list is in the task plan, §7.
+
+### Anti-patterns, revised for B
+
+§8 above stands except item 1 (Cream is now banned outright, not reduced to a note band) and the Task 13 "Coral at most twice" rule, which W36 supersedes: Coral is a ground on three bands and a fill elsewhere. Still banned: white on Coral, Cream anywhere, WhatsApp green or logo, eyebrows, caps, accent words in headings, per-section fade-ins, invented proof, cards with soft grey shadows, "→" on links.
