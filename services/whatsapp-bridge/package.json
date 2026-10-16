@@ -1,0 +1,28 @@
+{
+  "name": "wa-connector-whatsapp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Always-on WhatsApp Web bridge for WA Connector (Railway). Holds each GoHighLevel location's Baileys session; the Next app on Vercel talks to it over an authenticated HTTP API. See README.md.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hapi/boom": "10.0.1",
+    "@supabase/supabase-js": "2.110.6",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pino": "9.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.24",
+    "tsx": "4.19.2",
+    "typescript": "5.6.3"
+  }
+}

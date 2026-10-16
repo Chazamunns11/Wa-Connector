@@ -45,8 +45,11 @@ import {
   type SignedStateKind,
 } from "@/lib/signed-state";
 import { verifyGhlEmbedToken } from "@/lib/ghl-embed";
+import { authorizeConnectRequest, guardFailureResponseBody, scrubTenantIdFromFailure, type ConnectGuardRepo } from "@/app/api/connect/guard";
 import { redactBridgeSessionResult } from "@/lib/bridge-panel-guard";
 import { checkConnectSessionThrottle } from "@/lib/connect-throttle";
+import { decideConnectSession, MAX_CONNECT_SESSION_BODY_BYTES, type ConnectSessionRepo } from "@/app/api/connect/session/logic";
+import type { GhlAccount, GhlAccountStatus } from "@/lib/types";
 import type { BridgeSessionResult } from "@/lib/whatsapp-bridge";
 
 // ---------------------------------------------------------------------------
@@ -355,12 +358,192 @@ test("verifyConnectLinkToken / verifyConnectSessionToken: both reject when ONBOA
 });
 
 // ---------------------------------------------------------------------------
+// authorizeConnectRequest (src/app/api/connect/guard.ts) — the guard matrix.
+// Dependency-injected fake repo, same pattern as `ghl-embed.test.ts`'s
+// `fakeGuardRepo`.
+// ---------------------------------------------------------------------------
+
+const TENANT_ID = "44444444-4444-4444-8444-444444444444";
+const LOCATION_ID = "loc-connect-guard-1";
+
+function makeConnectAccount(overrides: Partial<GhlAccount> = {}): GhlAccount {
+  return {
+    locationId: LOCATION_ID,
+    tenantId: TENANT_ID,
+    label: "Connect Guard Test Location",
+    companyId: null,
+    conversationProviderId: null,
+    accessToken: "access-token",
+    accessTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    refreshToken: "refresh-token",
+    status: "active",
+    lastError: null,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    connectLinkVersion: 0,
+    // W-CONNECT-BRAND (migration 0076) — not exercised by this file's own
+    // tests (see scripts/test/ghl-branding.test.ts for those), but required
+    // to satisfy `GhlAccount`'s shape.
+    brandLogoPath: null,
+    brandAccentColor: null,
+    ...overrides,
+  };
+}
+
+function fakeConnectGuardRepo(accounts: GhlAccount[]): ConnectGuardRepo & { calls: string[] } {
+  const byLocation = new Map(accounts.map((a) => [a.locationId, a]));
+  const calls: string[] = [];
+  return {
+    calls,
+    async getGhlAccountByLocationId(locationId: string) {
+      calls.push(locationId);
+      return byLocation.get(locationId) ?? null;
+    },
+  };
+}
+
+test("connect guard: ONBOARD_STATE_SECRET unset -> 503 connect_not_configured, before the token or repo are ever consulted", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount()]);
+  const token = mintConnectSessionToken(LOCATION_ID, 0); // minted while still configured
+
+  const previous = process.env.ONBOARD_STATE_SECRET;
+  delete process.env.ONBOARD_STATE_SECRET;
+  try {
+    const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+    assert.deepEqual(result, { ok: false, status: 503, error: "connect_not_configured" });
+    assert.equal(repo.calls.length, 0);
+  } finally {
+    if (previous === undefined) delete process.env.ONBOARD_STATE_SECRET;
+    else process.env.ONBOARD_STATE_SECRET = previous;
+  }
+});
+
+test("connect guard: bridge not configured -> 503 bridge_not_configured (the check the embed guard does not have)", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount()]);
+  const token = mintConnectSessionToken(LOCATION_ID, 0);
+
+  const previousUrl = process.env.WHATSAPP_BRIDGE_URL;
+  const previousSecret = process.env.WHATSAPP_BRIDGE_SECRET;
+  delete process.env.WHATSAPP_BRIDGE_URL;
+  delete process.env.WHATSAPP_BRIDGE_SECRET;
+  try {
+    const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+    assert.deepEqual(result, { ok: false, status: 503, error: "bridge_not_configured" });
+    assert.equal(repo.calls.length, 0);
+  } finally {
+    if (previousUrl === undefined) delete process.env.WHATSAPP_BRIDGE_URL;
+    else process.env.WHATSAPP_BRIDGE_URL = previousUrl;
+    if (previousSecret === undefined) delete process.env.WHATSAPP_BRIDGE_SECRET;
+    else process.env.WHATSAPP_BRIDGE_SECRET = previousSecret;
+  }
+});
+
+test("connect guard: no Authorization header -> 401 missing_token", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount()]);
+  const result = await authorizeConnectRequest(repo, null);
+  assert.deepEqual(result, { ok: false, status: 401, error: "missing_token" });
+  assert.equal(repo.calls.length, 0);
+});
+
+test("connect guard: a syntactically-present but garbage token -> 401 invalid_token", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount()]);
+  const result = await authorizeConnectRequest(repo, "Bearer not-a-real-token");
+  assert.deepEqual(result, { ok: false, status: 401, error: "invalid_token" });
+});
+
+test("connect guard: an expired session token -> 401 invalid_token", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount()]);
+  const expired = signKindedState("ghl-connect-session", { locationId: LOCATION_ID, v: 0 }, -1);
+  const result = await authorizeConnectRequest(repo, `Bearer ${expired}`);
+  assert.deepEqual(result, { ok: false, status: 401, error: "invalid_token" });
+});
+
+test("connect guard: a LINK token (wrong kind) presented as a bearer session token -> 401 invalid_token", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount()]);
+  const linkToken = mintConnectLinkToken(LOCATION_ID, 0);
+  const result = await authorizeConnectRequest(repo, `Bearer ${linkToken}`);
+  assert.deepEqual(result, { ok: false, status: 401, error: "invalid_token" });
+});
+
+test("connect guard: a valid session token for a location with NO installed ghl_accounts row -> 403 unknown_location", async () => {
+  const repo = fakeConnectGuardRepo([]);
+  const token = mintConnectSessionToken("loc-never-installed", 0);
+  const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+  assert.deepEqual(result, { ok: false, status: 403, error: "unknown_location" });
+});
+
+test("connect guard: a valid session token for a DISABLED account -> 403 account_disabled", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount({ status: "disabled" })]);
+  const token = mintConnectSessionToken(LOCATION_ID, 0);
+  const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+  assert.deepEqual(result, { ok: false, status: 403, error: "account_disabled" });
+});
+
+test("connect guard: VERSION MISMATCH -> 403 link_revoked (the check the embed guard does not have)", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount({ connectLinkVersion: 2 })]);
+  const token = mintConnectSessionToken(LOCATION_ID, 1); // minted under the OLD version
+  const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+  assert.deepEqual(result, { ok: false, status: 403, error: "link_revoked" });
+});
+
+test("connect guard: a NULL connectLinkVersion (migration 0075 not applied) -> 403 link_revoked, never treated as matching v=0", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount({ connectLinkVersion: null })]);
+  const token = mintConnectSessionToken(LOCATION_ID, 0);
+  const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+  assert.deepEqual(result, { ok: false, status: 403, error: "link_revoked" });
+});
+
+test("connect guard: a valid session token, active account, matching version -> ok, tenant resolved, repo re-read (not cached from the token)", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount({ connectLinkVersion: 4 })]);
+  const token = mintConnectSessionToken(LOCATION_ID, 4);
+  const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.account.tenantId, TENANT_ID);
+  assert.deepEqual(repo.calls, [LOCATION_ID]);
+});
+
+test("connect guard: RE-READ ON EVERY CALL — a version bump between two calls with the SAME session token revokes it mid-session", async () => {
+  const account = makeConnectAccount({ connectLinkVersion: 0 });
+  const repo = fakeConnectGuardRepo([account]);
+  const token = mintConnectSessionToken(LOCATION_ID, 0);
+
+  const before = await authorizeConnectRequest(repo, `Bearer ${token}`);
+  assert.equal(before.ok, true);
+
+  account.connectLinkVersion = 1; // "Revoke all links" fires between two polls
+  const after = await authorizeConnectRequest(repo, `Bearer ${token}`); // SAME token, never re-minted
+  assert.deepEqual(after, { ok: false, status: 403, error: "link_revoked" });
+});
+
+test("connect guard: needs_reauth is NOT refused here — only 'missing', 'disabled', and 'link_revoked' are", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount({ status: "needs_reauth", connectLinkVersion: 0 })]);
+  const token = mintConnectSessionToken(LOCATION_ID, 0);
+  const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.account.status, "needs_reauth");
+});
+
+test("connect guard: the ok result never carries accessToken/refreshToken/coachId — only tenantId/label/status", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount({ connectLinkVersion: 0 })]);
+  const token = mintConnectSessionToken(LOCATION_ID, 0);
+  const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepEqual(Object.keys(result.account).sort(), ["label", "status", "tenantId"]);
+  }
+});
+
+test("guardFailureResponseBody: every error code maps to a body, and link_revoked gets its own honest message", () => {
+  const revoked = guardFailureResponseBody({ ok: false, status: 403, error: "link_revoked" });
+  assert.equal(revoked.code, "link_revoked");
+  assert.match(revoked.message, /revoked/i);
+});
+
+// ---------------------------------------------------------------------------
 // redactBridgeSessionResult (src/lib/bridge-panel-guard.ts) — shared with the
 // embed guard now. Confirms `coachId` never survives into a connect route's
 // response either.
 // ---------------------------------------------------------------------------
-
-const TENANT_ID = "44444444-4444-4444-8444-444444444444";
 
 test("redactBridgeSessionResult: strips coachId off an ok session, passes a failure through untouched", () => {
   const ok: BridgeSessionResult = {
@@ -376,6 +559,28 @@ test("redactBridgeSessionResult: strips coachId off an ok session, passes a fail
 
   const failure: BridgeSessionResult = { ok: false, code: "unreachable", message: "down" };
   assert.deepEqual(redactBridgeSessionResult(failure), failure);
+});
+
+// ---------------------------------------------------------------------------
+// scrubTenantIdFromFailure (src/app/api/connect/guard.ts) — adversarial
+// review lens 5, finding 8 (MINOR, fixed). `redactBridgeSessionResult` above
+// only ever redacts a SUCCESS result's `session.coachId`; this is the
+// connect-feature-specific belt-and-braces fix for the FAILURE branch's own
+// free-form `message`, applied by the three `/api/connect/whatsapp/*` routes
+// — see that function's own JSDoc for why this exists rather than modifying
+// the shared `redactBridgeSessionResult` (which the GHL embed feature also
+// depends on, out of scope here).
+// ---------------------------------------------------------------------------
+
+test("scrubTenantIdFromFailure: redacts a literal occurrence of the tenant id inside a failure message", () => {
+  const failure = { ok: false as const, code: "internal", message: `session for ${TENANT_ID} could not be created` };
+  const scrubbed = scrubTenantIdFromFailure(failure, TENANT_ID);
+  assert.equal(scrubbed.message, "session for [redacted] could not be created");
+});
+
+test("scrubTenantIdFromFailure: a message with no tenant id in it is returned unchanged", () => {
+  const failure = { ok: false as const, code: "unreachable", message: "WhatsApp bridge unreachable or timed out." };
+  assert.deepEqual(scrubTenantIdFromFailure(failure, TENANT_ID), failure);
 });
 
 // ---------------------------------------------------------------------------
@@ -434,3 +639,205 @@ test("connect throttle: never throws", () => {
   assert.doesNotThrow(() => checkConnectSessionThrottle("not-really-an-ip-but-a-string", "not-really-a-token"));
 });
 
+// ---------------------------------------------------------------------------
+// decideConnectSession (src/app/api/connect/session/logic.ts) — adversarial
+// review lens 5, finding 3 (MAJOR, fixed). `POST /api/connect/session` held
+// the most bespoke security logic in this feature and had ZERO test
+// coverage before this extraction — see that module's own header for what
+// moved out of `route.ts` and why. Dependency-injected fake repo + fake
+// deps, same pattern as `fakeConnectGuardRepo`/`authorizeConnectRequest`
+// just above.
+// ---------------------------------------------------------------------------
+
+const SESSION_LOCATION_ID = "loc-session-logic-1";
+const SESSION_TENANT_ID = "55555555-5555-4555-8555-555555555555";
+
+function makeSessionAccount(overrides: Partial<{ status: GhlAccountStatus; connectLinkVersion: number | null }> = {}) {
+  return {
+    locationId: SESSION_LOCATION_ID,
+    tenantId: SESSION_TENANT_ID,
+    label: "Session Logic Test Location",
+    status: "active" as GhlAccountStatus,
+    connectLinkVersion: 0,
+    ...overrides,
+  };
+}
+
+function fakeSessionRepo(
+  accounts: ReturnType<typeof makeSessionAccount>[]
+): ConnectSessionRepo & { accountCalls: string[]; summaryCalls: string[] } {
+  const byLocation = new Map(accounts.map((a) => [a.locationId, a]));
+  const accountCalls: string[] = [];
+  const summaryCalls: string[] = [];
+  return {
+    accountCalls,
+    summaryCalls,
+    async getGhlAccountByLocationId(locationId: string) {
+      accountCalls.push(locationId);
+      return byLocation.get(locationId) ?? null;
+    },
+    async getWhatsappSessionSummary(tenantId: string) {
+      summaryCalls.push(tenantId);
+      return null;
+    },
+  };
+}
+
+/** Real `verifyConnectLinkToken`/`mintConnectSessionToken` by default (so a genuinely minted token round-trips), with every OTHER dependency overridable per test and a call counter on `verifyConnectLinkToken` specifically — used to pin "throttle runs before any HMAC work" (see the test below named for it). */
+function fakeSessionDeps(overrides: Partial<import("@/app/api/connect/session/logic").ConnectSessionDeps> = {}) {
+  const state = { verifyCalls: 0 };
+  const deps: import("@/app/api/connect/session/logic").ConnectSessionDeps = {
+    isConnectLinkConfigured: () => true,
+    isWhatsappBridgeConfigured: () => true,
+    checkThrottle: () => ({ allowed: true, retryAfterSeconds: 0 }),
+    verifyConnectLinkToken: (token: string) => {
+      state.verifyCalls += 1;
+      return verifyConnectLinkToken(token);
+    },
+    mintConnectSessionToken: (locationId: string, v: number) => mintConnectSessionToken(locationId, v),
+    getBridgeHealth: async () => ({ ok: true }),
+    ...overrides,
+  };
+  return { deps, state };
+}
+
+test("decideConnectSession: config gates checked in order, before the repo or the token are ever touched", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount()]);
+  const token = mintConnectLinkToken(SESSION_LOCATION_ID, 0);
+  const body = JSON.stringify({ token });
+
+  const { deps: notConfigured } = fakeSessionDeps({ isConnectLinkConfigured: () => false });
+  assert.deepEqual(await decideConnectSession(repo, notConfigured, { ip: null, rawBody: body }), {
+    kind: "config_error",
+    code: "connect_not_configured",
+  });
+
+  const { deps: noBridge } = fakeSessionDeps({ isWhatsappBridgeConfigured: () => false });
+  assert.deepEqual(await decideConnectSession(repo, noBridge, { ip: null, rawBody: body }), {
+    kind: "config_error",
+    code: "bridge_not_configured",
+  });
+
+  assert.equal(repo.accountCalls.length, 0);
+});
+
+test("decideConnectSession: the 8KB body cap — empty body and an oversized body both decide invalid_body", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount()]);
+  const { deps } = fakeSessionDeps();
+
+  assert.deepEqual(await decideConnectSession(repo, deps, { ip: null, rawBody: "" }), { kind: "invalid_body" });
+
+  const oversized = JSON.stringify({ token: "x".repeat(MAX_CONNECT_SESSION_BODY_BYTES) });
+  assert.ok(Buffer.byteLength(oversized, "utf8") > MAX_CONNECT_SESSION_BODY_BYTES);
+  assert.deepEqual(await decideConnectSession(repo, deps, { ip: null, rawBody: oversized }), { kind: "invalid_body" });
+});
+
+test("decideConnectSession: malformed JSON and a missing/non-string 'token' field both decide invalid_body", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount()]);
+  const { deps } = fakeSessionDeps();
+
+  assert.deepEqual(await decideConnectSession(repo, deps, { ip: null, rawBody: "{not json" }), { kind: "invalid_body" });
+  assert.deepEqual(await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({}) }), { kind: "invalid_body" });
+  assert.deepEqual(await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token: 12345 }) }), { kind: "invalid_body" });
+  assert.deepEqual(await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token: "" }) }), { kind: "invalid_body" });
+});
+
+test("decideConnectSession: THROTTLE RUNS BEFORE ANY HMAC WORK — a rate-limited decision never calls verifyConnectLinkToken", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount()]);
+  const { deps, state } = fakeSessionDeps({ checkThrottle: () => ({ allowed: false, retryAfterSeconds: 42 }) });
+  const token = mintConnectLinkToken(SESSION_LOCATION_ID, 0);
+
+  const decision = await decideConnectSession(repo, deps, { ip: "203.0.113.5", rawBody: JSON.stringify({ token }) });
+  assert.deepEqual(decision, { kind: "rate_limited", retryAfterSeconds: 42 });
+  assert.equal(state.verifyCalls, 0, "verifyConnectLinkToken must never be called once the throttle has already refused");
+  assert.equal(repo.accountCalls.length, 0);
+});
+
+test("decideConnectSession: an expired token decides 'expired', SAFE TO SAY SPECIFICALLY", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount()]);
+  const { deps } = fakeSessionDeps();
+  const expired = signKindedState("ghl-connect-link", { locationId: SESSION_LOCATION_ID, v: 0 }, -1);
+
+  const decision = await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token: expired }) });
+  assert.deepEqual(decision, { kind: "expired" });
+});
+
+test("decideConnectSession: EVERY OTHER verify failure (garbage, tampered, wrong kind) decides the SAME generic 'invalid_link'", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount()]);
+  const { deps } = fakeSessionDeps();
+
+  const garbage = await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token: "not-a-real-token" }) });
+  assert.deepEqual(garbage, { kind: "invalid_link" });
+
+  const wrongKind = mintConnectSessionToken(SESSION_LOCATION_ID, 0); // a SESSION token, not a link token
+  const wrongKindDecision = await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token: wrongKind }) });
+  assert.deepEqual(wrongKindDecision, { kind: "invalid_link" });
+});
+
+/**
+ * THE NON-ORACLE PROPERTY — the single most load-bearing test in this
+ * section, named accordingly. A forged/garbage token and a genuinely-signed
+ * token for a location that no longer has an installed `ghl_accounts` row
+ * MUST decide to the exact same `{ kind: "invalid_link" }` — this is what
+ * stops the endpoint from ever confirming "this locationId exists" to
+ * someone holding nothing but a guess. THIS IS THE PROPERTY MOST LIKELY TO
+ * BE BROKEN LATER BY A WELL-MEANING "BETTER ERROR MESSAGE" EDIT — someone
+ * adding a `{ kind: "unknown_location" }` variant "to help debugging" would
+ * silently turn this endpoint into an installed-location oracle. If this
+ * test ever needs to change, that is the regression to look for first.
+ */
+test("decideConnectSession: A MISSING ACCOUNT ROW DECIDES THE EXACT SAME 'invalid_link' AS A FORGED TOKEN — the non-oracle property", async () => {
+  const repo = fakeSessionRepo([]); // no accounts installed at all
+  const { deps } = fakeSessionDeps();
+
+  const forged = await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token: "definitely-forged" }) });
+
+  const neverInstalledToken = mintConnectLinkToken("loc-never-installed-anywhere", 0);
+  const missingAccount = await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token: neverInstalledToken }) });
+
+  assert.deepEqual(forged, { kind: "invalid_link" });
+  assert.deepEqual(missingAccount, { kind: "invalid_link" });
+  assert.deepEqual(forged, missingAccount, "a forged token and a well-formed token for an uninstalled location must be INDISTINGUISHABLE");
+});
+
+test("decideConnectSession: version mismatch (including a null column — migration 0075 not applied) decides 'revoked'", async () => {
+  const repoMismatch = fakeSessionRepo([makeSessionAccount({ connectLinkVersion: 2 })]);
+  const { deps } = fakeSessionDeps();
+  const staleToken = mintConnectLinkToken(SESSION_LOCATION_ID, 1); // minted under the OLD version
+  assert.deepEqual(
+    await decideConnectSession(repoMismatch, deps, { ip: null, rawBody: JSON.stringify({ token: staleToken }) }),
+    { kind: "revoked" }
+  );
+
+  const repoNullVersion = fakeSessionRepo([makeSessionAccount({ connectLinkVersion: null })]);
+  const tokenV0 = mintConnectLinkToken(SESSION_LOCATION_ID, 0);
+  assert.deepEqual(
+    await decideConnectSession(repoNullVersion, deps, { ip: null, rawBody: JSON.stringify({ token: tokenV0 }) }),
+    { kind: "revoked" }
+  );
+});
+
+test("decideConnectSession: a disabled account decides its OWN 'disabled' state, not an error", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount({ status: "disabled" })]);
+  const { deps } = fakeSessionDeps();
+  const token = mintConnectLinkToken(SESSION_LOCATION_ID, 0);
+  const decision = await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token }) });
+  assert.deepEqual(decision, { kind: "disabled" });
+});
+
+test("decideConnectSession: a genuinely valid token for an active, version-matched account decides 'ok', with a freshly minted session token", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount({ connectLinkVersion: 3 })]);
+  const { deps } = fakeSessionDeps();
+  const token = mintConnectLinkToken(SESSION_LOCATION_ID, 3);
+
+  const decision = await decideConnectSession(repo, deps, { ip: "203.0.113.6", rawBody: JSON.stringify({ token }) });
+  assert.equal(decision.kind, "ok");
+  if (decision.kind === "ok") {
+    const verifiedSession = verifyConnectSessionToken(decision.token);
+    assert.deepEqual(verifiedSession, { ok: true, locationId: SESSION_LOCATION_ID, v: 3 });
+    assert.equal(decision.label, "Session Logic Test Location");
+    assert.equal(decision.bridgeReachable, true);
+  }
+  assert.deepEqual(repo.accountCalls, [SESSION_LOCATION_ID]);
+  assert.deepEqual(repo.summaryCalls, [SESSION_TENANT_ID]);
+});
