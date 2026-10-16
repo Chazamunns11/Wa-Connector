@@ -1,7 +1,7 @@
 -- WA Connector — squashed initial schema for the standalone GHL WhatsApp
 -- provider + bridge tables.
 --
--- SOURCE: PortalHub supabase/migrations 0046, 0048, 0069, 0070, 0071, 0072,
+-- SOURCE: PortalHub supabase/migrations 0046, 0048, 0066 (client-logos bucket only), 0069, 0070, 0071, 0072,
 -- 0073, 0074, 0075, 0076 — only the parts that touch whatsapp_* / ghl_*
 -- tables, folded into plain CREATE TABLE statements (later ALTERs merged in),
 -- keeping their indexes, comments, constraints, RLS-enabled-with-NO-policies
@@ -23,9 +23,10 @@
 --   5. Added: public.set_updated_at() (defined in PortalHub 0001, needed by the
 --      updated_at triggers) and public.profiles (owner/account roles), RLS on,
 --      no policies.
---   6. 0076 branding columns are kept on ghl_accounts. The shared
---      "client-logos" bucket (PortalHub 0066) is NOT created here; it is out
---      of this task's scope.
+--   6. 0076 branding columns are kept on ghl_accounts, and the public
+--      "client-logos" bucket from 0066 is created (only the bucket insert; the
+--      coaches.logo_url/brand_color columns are Hub-only). 0066 defines no
+--      storage policies: writes are service-role only.
 --
 -- Deploy order: apply BEFORE the bridge or portal ever runs against the DB.
 
@@ -51,7 +52,7 @@ create table public.profiles (
   id         uuid primary key references auth.users on delete cascade,
   role       text not null check (role in ('owner', 'account')),
   email      text not null,
-  created_at timestamptz default now()
+  created_at timestamptz not null default now()
 );
 
 alter table public.profiles enable row level security;
@@ -351,7 +352,7 @@ comment on column public.ghl_accounts.connect_link_version is
   'Per-client connect links. Bumped by "Revoke all links" — every previously-minted /connect/[token] link for this location carries the OLD value and fails the version check (410 link_revoked) the instant this changes. Read as a nullable number app-side so an unmigrated deployment fails closed instead of treating a missing column as generation 0.';
 
 comment on column public.ghl_accounts.brand_logo_path is
-  'Per-client connect-page branding — a PATH within the shared "client-logos" bucket, prefixed "ghl/<location_id>/", NOT a full URL. Resolved into a public URL on read by resolveLogoPath. Null = no logo uploaded yet (monogram-on-accent badge fallback).';
+  'Per-client connect-page branding — a PATH within the "client-logos" bucket (created at the end of this file), prefixed "ghl/<location_id>/", NOT a full URL. Resolved into a public URL on read by resolveLogoPath. Null = no logo uploaded yet (monogram-on-accent badge fallback).';
 
 comment on column public.ghl_accounts.brand_accent_color is
   'Per-client connect-page branding — this location''s accent colour as a #RRGGBB hex, normalised on write by normaliseHex. The matching text colour is never stored: it is computed per render. Null = the default accent.';
@@ -459,3 +460,23 @@ alter table public.ghl_outbound_attachments enable row level security;
 insert into storage.buckets (id, name, public)
 values ('wa-media', 'wa-media', false)
 on conflict (id) do nothing;
+
+-- ---------------------------------------------------------------------------
+-- 0066 — the public client-logos bucket (connect-page branding logos).
+-- Public read; NO policies on storage.objects, so writes are service-role only
+-- (the validated server action is the only door). 2 MiB cap and png/jpeg/webp
+-- only as a backstop (SVG excluded: a public bucket serving script-capable
+-- documents).
+-- ---------------------------------------------------------------------------
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'client-logos',
+  'client-logos',
+  true,
+  2097152, -- 2 MiB, matching MAX_LOGO_BYTES in src/lib/brand.ts
+  array['image/png', 'image/jpeg', 'image/webp']
+)
+on conflict (id) do update
+  set public = excluded.public,
+      file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
