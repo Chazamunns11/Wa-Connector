@@ -10,7 +10,13 @@
  * without a client-side hop, and which needs to survive being opened in a
  * new tab.
  *
- * OWNER-SESSION-ONLY, DELIBERATELY: there is no way to name a GHL location in
+ * OWNER OR ACCOUNT SESSION: an owner installs for the operator (state
+ * `{ accountId: null }`); a signed-in customer account installs for itself
+ * (`{ accountId }`), and the callback stamps that account on the location. An
+ * anonymous browser is refused (the sessionless Marketplace install does not
+ * go through here — GHL sends it straight to the callback).
+ *
+ * NO LOCATION IN THE URL, DELIBERATELY: there is no way to name a GHL location in
  * this URL — GHL's OWN "choose location" flow is what asks WHICH sub-account
  * (mirrors `googleAuthUrl`'s "whose calendar" boundary — see that route's
  * JSDoc), so this route's only job is proving the browser making the
@@ -32,19 +38,22 @@ function currentBase(): string {
 }
 
 /** Where a failure sends the owner back to, with a reason the setup-links page renders as a friendly line. */
-function back(reason: string): NextResponse {
-  return NextResponse.redirect(new URL(`/admin?ghl=${reason}`, currentBase()));
+function back(reason: string, path = "/admin"): NextResponse {
+  return NextResponse.redirect(new URL(`${path}?ghl=${reason}`, currentBase()));
 }
 
 export async function GET() {
   if (!isGhlConfigured()) return back("unavailable");
 
   const session = await getSession();
-  if (!session || session.role !== "owner") return back("forbidden");
+  const isAccount = !!session && session.role === "account" && !!session.accountId;
+  if (!session || (session.role !== "owner" && !isAccount)) return back("forbidden");
+  const dest = isAccount ? "/dashboard" : "/admin";
+  const accountId = isAccount ? session.accountId : null;
 
-  const state = signKindedState("ghl-install", {});
+  const state = signKindedState("ghl-install", { accountId });
   const url = ghlAuthUrl(state);
-  if (!url) return back("unavailable");
+  if (!url) return back("unavailable", dest);
 
   return NextResponse.redirect(url);
 }

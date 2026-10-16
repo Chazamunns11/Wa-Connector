@@ -53,6 +53,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { repo } from "@/lib/data";
 import { getSession } from "@/lib/auth";
 import { exchangeGhlCode, getGhlLocationTokenFromAgency, ghlAppId, isGhlConfigured, listGhlInstalledLocations } from "@/lib/ghl";
+import { claimSignupUrl, isClaimConfigured } from "@/lib/ghl-claim";
+import { notifyText } from "@/lib/slack";
 import { verifyKindedState } from "@/lib/signed-state";
 import { brandConfig } from "@/lib/brand-config";
 import { GHL_BULK_INSTALL_CAP, installGhlLocation, runGhlBulkInstall } from "./logic";
@@ -86,8 +88,8 @@ function currentBase(): string {
  * say something truthful like "installed 10, 2 failed" instead of a bare
  * pass/fail.
  */
-function back(reason: string, extra?: Record<string, string>): NextResponse {
-  const url = new URL(`/admin?ghl=${reason}`, currentBase());
+function back(reason: string, extra?: Record<string, string>, path = "/admin"): NextResponse {
+  const url = new URL(`${path}?ghl=${reason}`, currentBase());
   if (extra) for (const [key, value] of Object.entries(extra)) url.searchParams.set(key, value);
   return NextResponse.redirect(url);
 }
@@ -139,17 +141,61 @@ export async function GET(request: NextRequest) {
   // to a coach's personal tenant. Accepted deliberately: a stray row an owner
   // can see and delete beats being unable to onboard clients at all.
   const state = params.get("state");
-  if (state && !verifyKindedState("ghl-install", state)) {
+  const verified = state ? verifyKindedState("ghl-install", state) : null;
+  if (state && !verified) {
     return back("expired"); // tampered, wrong kind, or older than the state TTL.
   }
 
   // THE authorisation — see this file's header, and the block above for why
   // it now carries the full weight on GHL-initiated installs.
+  //
+  // THREE CASES (accounts stage):
+  //   - owner session: installs for the operator, accountId null, back to /admin;
+  //   - account session: installs for that account, back to /dashboard;
+  //   - no session AND no state: GHL's own Marketplace install. It installs an
+  //     UNCLAIMED row (accountId null) and sends the browser to /signup, with a
+  //     30-minute claim token when exactly one location was installed, so the
+  //     new account can take it over. The token travels only in that redirect
+  //     and is never logged.
+  // A state with no matching session (expired login, other browser) is refused:
+  // the state says a signed-in user started this, so that user must still be here.
   const session = await getSession();
-  if (!session || session.role !== "owner") return back("forbidden");
+  const sessionAccountId = session?.role === "account" ? session.accountId : null;
+  if (session && session.role === "account" && !sessionAccountId) return back("forbidden");
+  const marketplace = !session && !state;
+  if (!marketplace) {
+    if (!session) return back("forbidden");
+    if (session.role !== "owner" && session.role !== "account") return back("forbidden");
+    if (verified) {
+      const stateAccountId = typeof verified.accountId === "string" ? verified.accountId : null;
+      if (stateAccountId !== sessionAccountId) return back("forbidden");
+    }
+  }
+  const accountId = sessionAccountId;
+  const dest = marketplace ? "/signup" : accountId ? "/dashboard" : "/admin";
+  const brandName = brandConfig().name;
+  const fail = (reason: string): NextResponse => (marketplace ? finish(reason, {}) : back(reason, undefined, dest));
+  const conflictNote = (locationId: string) =>
+    void notifyText(`GHL location ${locationId} is already connected to another ${brandName} account; install by ${accountId} skipped.`);
+
+  /** Final redirect: the Marketplace path goes to /signup (with a claim link for a single location), the others to their dashboard. */
+  const finish = (reason: string, extra: Record<string, string>, claimLocationId?: string | null): NextResponse => {
+    if (!marketplace) return back(reason, extra, dest);
+    const url = new URL("/signup?from=ghl", currentBase());
+    if (claimLocationId && isClaimConfigured()) {
+      try {
+        const claim = new URL(claimSignupUrl(currentBase(), claimLocationId));
+        const token = claim.searchParams.get("claim");
+        if (token) url.searchParams.set("claim", token);
+      } catch {
+        // No claim link: the customer can still sign up and connect from the dashboard.
+      }
+    }
+    return NextResponse.redirect(url);
+  };
 
   const exchange = await exchangeGhlCode(code);
-  if (!exchange) return back("exchange_failed");
+  if (!exchange) return fail("exchange_failed");
 
   // ============ LOCATION-SCOPED — today's single-location path, unchanged ============
   if (exchange.kind === "location") {
@@ -158,15 +204,19 @@ export async function GET(request: NextRequest) {
     // result is only ever constructed when `tokens.locationId` is truthy —
     // see its own JSDoc) — kept as an explicit check anyway rather than a
     // type assertion, same "never 500s" defence-in-depth as `appId` below.
-    if (!tokens.locationId) return back("no_location");
+    if (!tokens.locationId) return fail("no_location");
     // GHL's own OAuth exchange always returns a refresh token (unlike
     // Google's consent-dependent behaviour) — refusing rather than storing a
     // row that could never actually refresh is the same "better no
     // connection than a half-dead one" call the Google callback makes for
     // the same reason.
-    if (!tokens.refreshToken) return back("no_refresh_token");
-    const ok = await installGhlLocation(repo, tokens);
-    return ok ? back("connected") : back("save_failed");
+    if (!tokens.refreshToken) return fail("no_refresh_token");
+    const outcome = await installGhlLocation(repo, tokens, null, accountId);
+    if (outcome === "conflict") {
+      conflictNote(tokens.locationId);
+      return finish("conflict", { conflicts: "1" });
+    }
+    return outcome === "installed" ? finish("connected", {}, tokens.locationId) : fail("save_failed");
   }
 
   // ============ COMPANY-SCOPED — bulk install, 4 Aug 2026 fix (see this file's own header) ============
@@ -175,24 +225,26 @@ export async function GET(request: NextRequest) {
   // route above, and `ghlAppId()` fails only under the identical
   // unconfigured condition — but checked explicitly rather than asserted,
   // matching this file's own "never 500s" contract over "this can't happen".
-  if (!appId) return back("unavailable");
+  if (!appId) return fail("unavailable");
 
   const locations = await listGhlInstalledLocations(exchange.accessToken, exchange.companyId, appId);
-  if (!locations) return back("bulk_locations_failed");
-  if (locations.length === 0) return back("bulk_no_locations");
+  if (!locations) return fail("bulk_locations_failed");
+  if (locations.length === 0) return fail("bulk_no_locations");
 
   const agencyAccessToken = exchange.accessToken;
   const result = await runGhlBulkInstall(
     repo,
-    { getLocationToken: (companyId, locationId) => getGhlLocationTokenFromAgency(agencyAccessToken, companyId, locationId) },
+    { getLocationToken: (companyId, locationId) => getGhlLocationTokenFromAgency(agencyAccessToken, companyId, locationId), onConflict: conflictNote },
     exchange.companyId,
     locations,
-    GHL_BULK_INSTALL_CAP
+    GHL_BULK_INSTALL_CAP,
+    accountId
   );
 
   const extra: Record<string, string> = { installed: String(result.installed) };
   if (result.failed > 0) extra.failed = String(result.failed);
   if (result.skippedOverCap > 0) extra.capped = String(result.skippedOverCap);
-  const reason = result.installed === 0 && result.failed > 0 ? "bulk_failed" : result.failed > 0 ? "bulk_partial" : "bulk_installed";
-  return back(reason, extra);
+  if (result.conflicts > 0) extra.conflicts = String(result.conflicts);
+  const reason = result.installed === 0 && result.failed === 0 && result.conflicts > 0 ? "conflict" : result.installed === 0 && result.failed > 0 ? "bulk_failed" : result.failed > 0 ? "bulk_partial" : "bulk_installed";
+  return finish(reason, extra);
 }

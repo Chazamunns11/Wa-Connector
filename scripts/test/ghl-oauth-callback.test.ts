@@ -34,6 +34,7 @@ interface FakeRow {
   locationId: string;
   tenantId: string;
   label: string;
+  accountId?: string | null;
 }
 
 interface UpsertCall {
@@ -50,10 +51,12 @@ function createFakeRepo(seed: FakeRow[] = []): {
   repo: GhlOauthCallbackRepo;
   byLocation: Map<string, FakeRow>;
   upsertCalls: UpsertCall[];
+  claimCalls: { locationId: string; accountId: string }[];
   createTenantCalls: number;
 } {
   const byLocation = new Map(seed.map((r) => [r.locationId, r]));
   const upsertCalls: UpsertCall[] = [];
+  const claimCalls: { locationId: string; accountId: string }[] = [];
   let createTenantCalls = 0;
   let nextTenantId = 1;
   const repo = {
@@ -61,18 +64,25 @@ function createFakeRepo(seed: FakeRow[] = []): {
       const row = byLocation.get(locationId);
       // Only the fields `installGhlLocation` reads — see this file's own
       // header on why a deliberately partial shape is fine here.
-      return row ? ({ locationId: row.locationId, tenantId: row.tenantId, label: row.label } as unknown as Awaited<ReturnType<GhlOauthCallbackRepo["getGhlAccountByLocationId"]>>) : null;
+      return row ? ({ locationId: row.locationId, tenantId: row.tenantId, label: row.label, accountId: row.accountId ?? null } as unknown as Awaited<ReturnType<GhlOauthCallbackRepo["getGhlAccountByLocationId"]>>) : null;
     },
     async upsertGhlAccount(draft: UpsertCall) {
       upsertCalls.push(draft);
       byLocation.set(draft.locationId, { locationId: draft.locationId, tenantId: draft.tenantId, label: draft.label });
+    },
+    async claimGhlAccount(locationId: string, accountId: string) {
+      claimCalls.push({ locationId, accountId });
+      const row = byLocation.get(locationId);
+      if (!row || row.accountId) return false;
+      row.accountId = accountId;
+      return true;
     },
     async createGhlTenant() {
       createTenantCalls++;
       return `tenant-${nextTenantId++}`;
     },
   } as unknown as GhlOauthCallbackRepo;
-  return { repo, byLocation, upsertCalls, createTenantCalls };
+  return { repo, byLocation, upsertCalls, claimCalls, createTenantCalls };
 }
 
 function makeTokens(overrides: Partial<GhlTokens> = {}): GhlTokens {
@@ -93,7 +103,7 @@ function makeTokens(overrides: Partial<GhlTokens> = {}): GhlTokens {
 test("installGhlLocation: a genuinely new location mints a tenant and upserts, returns true", async () => {
   const bundle = createFakeRepo([]);
   const ok = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-new" }));
-  assert.equal(ok, true);
+  assert.equal(ok, "installed");
   assert.equal(bundle.upsertCalls.length, 1);
   assert.equal(bundle.upsertCalls[0].locationId, "loc-new");
   assert.equal(bundle.upsertCalls[0].tenantId, "tenant-1", "a genuinely new location must mint a fresh tenant");
@@ -103,7 +113,7 @@ test("installGhlLocation: a genuinely new location mints a tenant and upserts, r
 test("installGhlLocation: a reinstall of a KNOWN location reuses the existing tenantId and label, never mints a second tenant", async () => {
   const bundle = createFakeRepo([{ locationId: "loc-1", tenantId: "tenant-existing", label: "Charlie's own label" }]);
   const ok = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-1" }));
-  assert.equal(ok, true);
+  assert.equal(ok, "installed");
   assert.equal(bundle.upsertCalls[0].tenantId, "tenant-existing");
   assert.equal(bundle.upsertCalls[0].label, "Charlie's own label", "a reinstall must never overwrite an existing label back to the placeholder");
 });
@@ -121,7 +131,7 @@ test("installGhlLocation: a reinstall of a KNOWN location reuses the existing te
 test("installGhlLocation: a new location uses GHL's business name when the caller supplies one", async () => {
   const bundle = createFakeRepo([]);
   const ok = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-new" }), "12X Coaching");
-  assert.equal(ok, true);
+  assert.equal(ok, "installed");
   assert.equal(bundle.upsertCalls[0].label, "12X Coaching", "GHL's own name must beat the id placeholder");
 });
 
@@ -156,14 +166,14 @@ test("installGhlLocation: a null name behaves exactly as an omitted one", async 
 test("installGhlLocation: tokens missing locationId return false without touching the repo", async () => {
   const bundle = createFakeRepo([]);
   const ok = await installGhlLocation(bundle.repo, makeTokens({ locationId: null }));
-  assert.equal(ok, false);
+  assert.equal(ok, "failed");
   assert.equal(bundle.upsertCalls.length, 0);
 });
 
 test("installGhlLocation: tokens missing refreshToken return false without touching the repo", async () => {
   const bundle = createFakeRepo([]);
   const ok = await installGhlLocation(bundle.repo, makeTokens({ refreshToken: null }));
-  assert.equal(ok, false);
+  assert.equal(ok, "failed");
   assert.equal(bundle.upsertCalls.length, 0);
 });
 
@@ -174,7 +184,7 @@ test("installGhlLocation: a repo write that throws is caught and returns false, 
   };
   await assert.doesNotReject(async () => {
     const ok = await installGhlLocation(bundle.repo, makeTokens());
-    assert.equal(ok, false);
+    assert.equal(ok, "failed");
   });
 });
 
@@ -195,7 +205,7 @@ test("runGhlBulkInstall: every location succeeds -> installed matches, failed is
     "company-1",
     locations
   );
-  assert.deepEqual(result, { totalFound: 3, installed: 3, failed: 0, skippedOverCap: 0 });
+  assert.deepEqual(result, { totalFound: 3, installed: 3, failed: 0, conflicts: 0, skippedOverCap: 0 });
   assert.equal(bundle.upsertCalls.length, 3);
 });
 
@@ -213,6 +223,7 @@ test("runGhlBulkInstall: some locations fail the token exchange (getLocationToke
   assert.equal(result.failed, 2);
   assert.equal(result.totalFound, 4);
   assert.equal(result.skippedOverCap, 0);
+  assert.equal(result.conflicts, 0);
   // Both non-failing locations were still attempted — the two failures never
   // stopped the loop.
   assert.deepEqual(
@@ -242,7 +253,7 @@ test("runGhlBulkInstall: some locations fail the SAVE (installGhlLocation itself
 test("runGhlBulkInstall: zero locations returned -> a completely empty, honest result, never an error", async () => {
   const bundle = createFakeRepo([]);
   const result = await runGhlBulkInstall(bundle.repo, { getLocationToken: async () => makeTokens() }, "company-1", []);
-  assert.deepEqual(result, { totalFound: 0, installed: 0, failed: 0, skippedOverCap: 0 });
+  assert.deepEqual(result, { totalFound: 0, installed: 0, failed: 0, conflicts: 0, skippedOverCap: 0 });
   assert.equal(bundle.upsertCalls.length, 0);
 });
 
@@ -297,4 +308,71 @@ test("runGhlBulkInstall: locations are exchanged SEQUENTIALLY, never overlapping
     locations
   );
   assert.deepEqual(events, ["start-loc-1", "end-loc-1", "start-loc-2", "end-loc-2", "start-loc-3", "end-loc-3"]);
+});
+
+// ---------------------------------------------------------------------------
+// Accounts: ownership stamp and the conflict rule
+// ---------------------------------------------------------------------------
+
+test("installGhlLocation: a location owned by another account is a conflict: no upsert, no tenant", async () => {
+  const bundle = createFakeRepo([{ locationId: "loc-1", tenantId: "t-x", label: "L", accountId: "other" }]);
+  const out = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-1" }), null, "acc-1");
+  assert.equal(out, "conflict");
+  assert.equal(bundle.upsertCalls.length, 0);
+  assert.equal(bundle.claimCalls.length, 0);
+  assert.equal(bundle.createTenantCalls, 0);
+});
+
+test("installGhlLocation: an unclaimed existing row is upserted then claimed", async () => {
+  const bundle = createFakeRepo([{ locationId: "loc-1", tenantId: "t-x", label: "L", accountId: null }]);
+  const out = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-1" }), null, "acc-1");
+  assert.equal(out, "installed");
+  assert.equal(bundle.upsertCalls.length, 1);
+  assert.deepEqual(bundle.claimCalls, [{ locationId: "loc-1", accountId: "acc-1" }]);
+});
+
+test("installGhlLocation: a new row for an account is upserted then claimed", async () => {
+  const bundle = createFakeRepo([]);
+  const out = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-n" }), null, "acc-1");
+  assert.equal(out, "installed");
+  assert.equal(bundle.upsertCalls[0].tenantId, "tenant-1");
+  assert.deepEqual(bundle.claimCalls, [{ locationId: "loc-n", accountId: "acc-1" }]);
+});
+
+test("installGhlLocation: the same account reinstalling its own location is installed and not re-claimed", async () => {
+  const bundle = createFakeRepo([{ locationId: "loc-1", tenantId: "t-x", label: "L", accountId: "acc-1" }]);
+  const out = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-1" }), null, "acc-1");
+  assert.equal(out, "installed");
+  assert.equal(bundle.claimCalls.length, 0);
+});
+
+test("installGhlLocation: an unclaimed (null account) install onto an owned row refreshes tokens and leaves ownership alone", async () => {
+  const bundle = createFakeRepo([{ locationId: "loc-1", tenantId: "t-x", label: "L", accountId: "other" }]);
+  const out = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-1" }), null, null);
+  assert.equal(out, "installed");
+  assert.equal(bundle.upsertCalls.length, 1);
+  assert.equal(bundle.claimCalls.length, 0);
+});
+
+test("installGhlLocation: losing the claim race is reported as a conflict", async () => {
+  const bundle = createFakeRepo([{ locationId: "loc-1", tenantId: "t-x", label: "L", accountId: null }]);
+  bundle.repo.claimGhlAccount = async () => false;
+  const out = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-1" }), null, "acc-1");
+  assert.equal(out, "conflict");
+});
+
+test("runGhlBulkInstall: one location owned elsewhere is skipped and counted, the rest install (Review Focus 4)", async () => {
+  const bundle = createFakeRepo([{ locationId: "loc-2", tenantId: "t-x", label: "L", accountId: "other" }]);
+  const seen: string[] = [];
+  const result = await runGhlBulkInstall(
+    bundle.repo,
+    { getLocationToken: async (_c, locationId) => makeTokens({ locationId }), onConflict: (id) => void seen.push(id) },
+    "company-1",
+    [loc("loc-1"), loc("loc-2"), loc("loc-3")],
+    GHL_BULK_INSTALL_CAP,
+    "acc-1"
+  );
+  assert.deepEqual(result, { totalFound: 3, installed: 2, failed: 0, conflicts: 1, skippedOverCap: 0 });
+  assert.deepEqual(seen, ["loc-2"]);
+  assert.deepEqual(bundle.claimCalls.map((c) => c.locationId), ["loc-1", "loc-3"]);
 });
