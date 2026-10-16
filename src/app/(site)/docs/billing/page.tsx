@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Container } from "@/components/site/Container";
+import { PageTop } from "@/components/site/PageTop";
 import { brandConfig } from "@/lib/brand-config";
 import { formatMoney, pricingConfig } from "@/lib/pricing";
 import { pricingCopy } from "@/lib/site/pricing-copy";
@@ -17,16 +18,15 @@ export function generateMetadata(): Metadata {
 export default function BillingHelpPage() {
   const pricing = pricingConfig();
   const copy = pricingCopy();
-  const h2 = "mt-10 font-display text-[clamp(20px,3vw,24px)] font-extrabold";
+  const h2 = "mt-12 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em] first:mt-0";
   return (
-    <section className="pb-12 pt-12 md:pb-20">
+    <>
+    <PageTop title="Billing">
+      <p>One price: {formatMoney(pricing.pricePerNumber, pricing.currency)} per active number, per month.</p>
+    </PageTop>
+    <section className="pb-12 pt-4 md:pb-20">
       <Container>
         <div className="max-w-[760px]">
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">Billing</h1>
-          <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
-            One price: {formatMoney(pricing.pricePerNumber, pricing.currency)} per active number, per month.
-          </p>
-
           <h2 className={h2}>The free trial</h2>
           {copy.trialTerms.map((t) => (
             <p key={t} className="mt-3 max-w-[62ch] text-ink-dim">{t}</p>
@@ -52,5 +52,6 @@ export default function BillingHelpPage() {
         </div>
       </Container>
     </section>
+    </>
   );
 }

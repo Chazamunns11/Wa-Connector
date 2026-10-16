@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { AudienceTabs } from "@/components/site/AudienceTabs";
 import { Container } from "@/components/site/Container";
+import { PageTop } from "@/components/site/PageTop";
 import { ConnectPanelSample } from "@/components/site/samples/ConnectPanelSample";
 import { SetupStep } from "@/components/site/SetupStep";
 import { brandConfig } from "@/lib/brand-config";
@@ -51,7 +52,7 @@ export default async function SetupPage({
     AUDIENCES.map((a) => [
       a,
       <div key={a}>
-        <h2 className="font-display text-[clamp(24px,4vw,32px)] font-extrabold leading-tight">{AUDIENCE_LABELS[a]}</h2>
+        <h2 className="font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">{AUDIENCE_LABELS[a]}</h2>
         <ol role="list" className="mt-4 list-none p-0">
           {steps.map((s, i) => (
             <SetupStep key={s.id} index={i} step={s} audience={a} brandName={brand.name} />
@@ -63,19 +64,18 @@ export default async function SetupPage({
 
   return (
     <>
+      <PageTop title={<>Setting up {brand.name} in GoHighLevel</>}>
+        <p>
+          About ten minutes, start to finish. Pick the guide that matches your account, and by the end the workflows
+          you already have will be sending on WhatsApp.
+        </p>
+      </PageTop>
       <section className="pb-12 pt-12 md:pb-20">
         <Container>
           <div className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-16">
             <div>
-              <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.1] tracking-[-0.03em]">
-                Setting up {brand.name} in GoHighLevel
-              </h1>
-              <p className="mt-5 max-w-[52ch] text-xl leading-snug text-ink-dim">
-                About ten minutes, start to finish. Pick the guide that matches your account, and by the end the workflows
-                you already have will be sending on WhatsApp.
-              </p>
-              <div className="section-rule mt-10 max-w-[52ch]">
-                <h2 className="font-display text-[1.5625rem] font-medium leading-tight tracking-[-0.015em]">Before you start</h2>
+              <div className="section-rule max-w-[52ch]">
+                <h2 className="font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">Before you start</h2>
                 <ul className="mt-3 grid list-disc gap-2 pl-5 marker:text-ink-faint">
                   <li>A GoHighLevel account with at least one sub-account.</li>
                   <li>A {brand.name} account. The free trial is fine.</li>
@@ -86,7 +86,7 @@ export default async function SetupPage({
             </div>
             <figure>
               <ConnectPanelSample connectedStrip />
-              <figcaption className="mt-3 text-[0.9375rem] text-ink-faint">
+              <figcaption className="mt-3 text-[0.95rem] text-ink-dim">
                 Sample screen: the connect page you&apos;ll see in step 4, before and after the scan.
               </figcaption>
             </figure>
@@ -96,22 +96,16 @@ export default async function SetupPage({
               <AudienceTabs key={initial} panels={panels} initial={initial} />
             </div>
 
-            <h2 id="troubleshooting" className="mt-16 scroll-mt-4 font-display text-[clamp(24px,4vw,32px)] font-extrabold">
+            <h2 id="troubleshooting" className="mt-16 scroll-mt-4 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">
               Troubleshooting
             </h2>
             <div className="mt-4">
               {trouble.map((t) => (
-                <details key={t.id} id={t.id} className="group scroll-mt-4 border-b border-divider">
-                  <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 py-3 font-semibold [&::-webkit-details-marker]:hidden">
+                <details key={t.id} id={t.id} className="disclosure scroll-mt-4">
+                  <summary>
                     <span>{t.title}</span>
-                    <span aria-hidden="true" className="text-accent-text group-open:hidden">
-                      +
-                    </span>
-                    <span aria-hidden="true" className="hidden text-accent-text group-open:inline">
-                      &minus;
-                    </span>
                   </summary>
-                  <div className="grid max-w-[62ch] gap-3 pb-4 text-ink-dim">
+                  <div className="grid max-w-[62ch] gap-3 pb-5 text-ink-dim">
                     {t.body.map((p) => (
                       <p key={p}>{withSupportLink(p, brand.supportEmail)}</p>
                     ))}
@@ -120,7 +114,7 @@ export default async function SetupPage({
               ))}
             </div>
 
-            <h2 className="mt-16 font-display text-[clamp(24px,4vw,32px)] font-extrabold">Once you are sending</h2>
+            <h2 className="mt-16 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">Once you are sending</h2>
             <ul className="mt-4 grid max-w-[62ch] list-disc gap-2 pl-5 text-ink-dim marker:text-ink-faint">
               <li>Each number has a daily cap, and messages go out at a steady pace rather than all at once.</li>
               <li>If someone replies STOP, that number stops messaging them. Other numbers are not affected.</li>

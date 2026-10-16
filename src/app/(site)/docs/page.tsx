@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Container } from "@/components/site/Container";
+import { PageTop } from "@/components/site/PageTop";
 import { brandConfig } from "@/lib/brand-config";
 import { SITE_ROUTES } from "@/lib/site/routes";
 
@@ -22,14 +23,14 @@ const DOCS = [
 export default function DocsIndexPage() {
   const { name } = brandConfig();
   return (
+    <>
+    <PageTop title={<>{name} docs</>}>
+      <p>Start with the setup guide. The rest is here when you need it.</p>
+    </PageTop>
     <section className="pb-12 pt-12 md:pb-20">
       <Container>
         <div className="max-w-[760px]">
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">{name} docs</h1>
-          <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
-            Start with the setup guide. The rest is here when you need it.
-          </p>
-          <ul role="list" className="mt-8 grid list-none gap-4 p-0 sm:grid-cols-2">
+          <ul role="list" className="grid list-none gap-4 p-0 sm:grid-cols-2">
             {DOCS.map((d) => (
               <li key={d.href}>
                 <Link
@@ -58,5 +59,6 @@ export default function DocsIndexPage() {
         </div>
       </Container>
     </section>
+    </>
   );
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Container } from "@/components/site/Container";
+import { PageTop } from "@/components/site/PageTop";
 import { DraftNotice } from "@/components/site/DraftNotice";
 import { brandConfig } from "@/lib/brand-config";
 import { LEGAL_OUTLINE } from "@/lib/site/legal-outline";
@@ -12,18 +13,20 @@ export function generateMetadata(): Metadata {
 
 export default function PrivacyPage() {
   return (
-    <section className="pb-12 pt-12 md:pb-20">
+    <>
+    <PageTop title={outline.title} />
+    <section className="pb-12 pt-2 md:pb-20">
       <Container>
         <div className="max-w-[760px]">
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">{outline.title}</h1>
           <DraftNotice />
           {outline.headings.map((h) => (
-            <h2 key={h} className="mt-10 font-display text-[clamp(20px,3vw,24px)] font-extrabold">
+            <h2 key={h} className="mt-12 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">
               {h}
             </h2>
           ))}
         </div>
       </Container>
     </section>
+    </>
   );
 }

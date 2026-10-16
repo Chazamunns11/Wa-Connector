@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Container } from "@/components/site/Container";
+import { PageTop } from "@/components/site/PageTop";
 import { FaqList } from "@/components/site/FaqList";
 import { brandConfig } from "@/lib/brand-config";
 import { faqEntries } from "@/lib/site/faq";
@@ -17,11 +18,16 @@ export function generateMetadata(): Metadata {
 export default function FaqPage() {
   const brand = brandConfig();
   return (
-    <section className="pb-12 pt-12 md:pb-20">
+    <>
+    <PageTop title="Frequently asked questions" />
+    <section className="band bg-raised !pb-[clamp(40px,5vw,64px)]">
       <Container>
-        <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">Frequently asked questions</h1>
         <FaqList entries={faqEntries(brand)} />
-        <p className="mt-8 max-w-[62ch] text-ink-dim">
+      </Container>
+    </section>
+    <section className="py-10 md:py-14">
+      <Container>
+        <p className="max-w-[62ch] text-ink-dim">
           Not here? The{" "}
           <Link href={SITE_ROUTES.setup} className="underline underline-offset-2">
             setup guide
@@ -30,5 +36,6 @@ export default function FaqPage() {
         </p>
       </Container>
     </section>
+    </>
   );
 }

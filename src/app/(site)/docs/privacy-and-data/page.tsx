@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Container } from "@/components/site/Container";
+import { PageTop } from "@/components/site/PageTop";
 import { brandConfig } from "@/lib/brand-config";
 import { SITE_ROUTES } from "@/lib/site/routes";
 
@@ -14,21 +15,22 @@ export function generateMetadata(): Metadata {
 
 export default function PrivacyAndDataPage() {
   const { name } = brandConfig();
-  const h2 = "mt-10 font-display text-[clamp(20px,3vw,24px)] font-extrabold";
+  const h2 = "mt-12 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em] first:mt-0";
   const ul = "mt-3 grid max-w-[62ch] list-disc gap-2 pl-5 text-ink-dim marker:text-ink-faint";
   return (
-    <section className="pb-12 pt-12 md:pb-20">
+    <>
+    <PageTop title="Privacy and data">
+      <p>
+        A plain summary of what {name} keeps. It is not the privacy policy, which is still a{" "}
+        <Link href={SITE_ROUTES.privacy} className="underline underline-offset-2">
+          draft
+        </Link>
+        .
+      </p>
+    </PageTop>
+    <section className="pb-12 pt-4 md:pb-20">
       <Container>
         <div className="max-w-[760px]">
-          <h1 className="font-display text-[clamp(32px,6vw,48px)] font-extrabold leading-[1.15]">Privacy and data</h1>
-          <p className="mt-4 max-w-[60ch] text-lg text-ink-dim">
-            A plain summary of what {name} keeps. It is not the privacy policy, which is still a{" "}
-            <Link href={SITE_ROUTES.privacy} className="underline underline-offset-2">
-              draft
-            </Link>
-            .
-          </p>
-
           <h2 className={h2}>What we store</h2>
           <ul className={ul}>
             <li>
@@ -74,5 +76,6 @@ export default function PrivacyAndDataPage() {
         </div>
       </Container>
     </section>
+    </>
   );
 }

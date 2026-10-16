@@ -47,7 +47,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         {authError ? (
           <div
             role="alert"
-            className="mb-5 rounded border border-border bg-well p-4"
+            className="mb-5 rounded-[12px] border-2 border-border-strong bg-well p-4"
           >
             <p className="text-sm font-semibold text-ink">{authError.title}</p>
             <p className="mt-1 text-sm text-ink-dim">{authError.body}</p>
@@ -70,7 +70,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           New here?{" "}
           <Link
             href="/signup"
-            className="inline-flex min-h-11 items-center font-medium text-accent-text underline underline-offset-2"
+            className="inline-flex min-h-11 items-center font-semibold text-ink underline underline-offset-2"
           >
             Start your {TRIAL_DAYS}-day free trial
           </Link>

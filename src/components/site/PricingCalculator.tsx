@@ -20,7 +20,7 @@ export function PricingCalculator({ pricePerNumber, currency }: { pricePerNumber
   const messageId = `${id}-message`;
   return (
     <div>
-      <p className="font-display text-[clamp(25px,3.6vw,39px)] font-medium leading-[1.3] tracking-[-0.015em]">
+      <p className="font-display text-[clamp(1.6rem,3.6vw,2.6rem)] font-extrabold leading-[1.25] tracking-[-0.02em]">
         <label htmlFor={id}>If I connect</label>{" "}
         <input
           id={id}
@@ -33,7 +33,7 @@ export function PricingCalculator({ pricePerNumber, currency }: { pricePerNumber
           onChange={(e) => setRaw(e.target.value)}
           aria-describedby={messageId}
           aria-invalid={invalid}
-          className="mx-1 min-h-11 w-[5.5ch] rounded border border-border-strong bg-card px-2 text-center font-display font-extrabold [font-variant-numeric:tabular-nums] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          className="mx-1 min-h-11 w-[5.5ch] rounded-lg border-2 border-border-strong bg-well px-2 text-center font-display font-extrabold [font-variant-numeric:tabular-nums] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />{" "}
         numbers,{" "}
         <span aria-live="polite" className="whitespace-nowrap">
@@ -47,7 +47,7 @@ export function PricingCalculator({ pricePerNumber, currency }: { pricePerNumber
       <p
         id={messageId}
         role="status"
-        className={`mt-3 min-h-[1.45em] text-[15px] ${note ? "font-medium text-warn" : "text-ink-faint"}`}
+        className={`mt-3 min-h-[1.45em] text-[15px] ${note ? "font-semibold text-ink" : "text-ink-dim"}`}
       >
         {note ?? `Whole numbers from ${CALC_MIN} to ${CALC_MAX}.`}
       </p>

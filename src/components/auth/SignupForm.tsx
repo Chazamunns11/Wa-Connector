@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/Button";
+import { siteButton } from "@/components/site/button";
 import { INPUT_CLASSES } from "@/components/auth/field";
 import type { SignupErrors, SignupInput } from "@/lib/site/signup";
 
@@ -35,7 +35,7 @@ export function SignupForm({
           id="signup-errors"
           tabIndex={-1}
           role="alert"
-          className="rounded border border-loss/40 bg-loss-soft p-3 text-sm text-ink"
+          className="rounded-[12px] border-2 border-loss bg-loss-soft p-3 text-sm text-ink"
         >
           <p className="font-semibold">Some details need another look. Nothing has been saved.</p>
           <ul className="mt-2 grid gap-1">
@@ -54,7 +54,7 @@ export function SignupForm({
       {claim ? <input type="hidden" name="claim" value={claim} /> : null}
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="accountName" className="text-sm text-ink-dim">
+        <label htmlFor="accountName" className="text-sm font-semibold text-ink">
           Account name
         </label>
         <input
@@ -70,7 +70,7 @@ export function SignupForm({
           aria-describedby={errors.accountName ? "accountName-error" : "accountName-hint"}
           className={INPUT_CLASSES}
         />
-        <p id="accountName-hint" className="text-sm text-ink-faint">
+        <p id="accountName-hint" className="text-sm text-ink-dim">
           Your business or agency name. You can change it later.
         </p>
         <FieldError id="accountName-error" message={errors.accountName} />
@@ -80,11 +80,11 @@ export function SignupForm({
         className="flex flex-col gap-2"
         aria-describedby={errors.kind ? "kind-error" : undefined}
       >
-        <legend className="mb-1 text-sm text-ink-dim">Are you an agency or a single business?</legend>
+        <legend className="mb-1 text-sm font-semibold text-ink">Are you an agency or a single business?</legend>
         {KIND_OPTIONS.map((o) => (
           <label
             key={o.value}
-            className="flex min-h-11 cursor-pointer items-start gap-3 rounded border border-border-strong bg-well p-3 has-[:checked]:border-accent"
+            className="flex min-h-11 cursor-pointer items-start gap-3 rounded-[12px] border-2 border-border-strong bg-well p-3 has-[:checked]:border-accent has-[:checked]:bg-card"
           >
             <input
               id={`kind-${o.value}`}
@@ -105,7 +105,7 @@ export function SignupForm({
       </fieldset>
 
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="email" className="text-sm text-ink-dim">
+        <label htmlFor="email" className="text-sm font-semibold text-ink">
           Email
         </label>
         <input
@@ -120,15 +120,15 @@ export function SignupForm({
           aria-describedby={errors.email ? "email-error" : "email-hint"}
           className={INPUT_CLASSES}
         />
-        <p id="email-hint" className="text-sm text-ink-faint">
+        <p id="email-hint" className="text-sm text-ink-dim">
           We sign you in with a link sent here. There is no password.
         </p>
         <FieldError id="email-error" message={errors.email} />
       </div>
 
-      <Button type="submit" className="min-h-11 text-base">
+      <button type="submit" className={siteButton("coral", "w-full")}>
         Continue to checkout
-      </Button>
+      </button>
     </form>
   );
 }

@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui/Button";
+import { siteButton } from "@/components/site/button";
 import { INPUT_CLASSES } from "@/components/auth/field";
 
 /** One labelled email input and a submit button, posted to a server action. */
@@ -11,7 +11,7 @@ export function EmailLinkForm({
 }) {
   return (
     <form action={action} className="flex flex-col gap-4">
-      <label className="flex flex-col gap-1.5 text-sm text-ink-dim">
+      <label className="flex flex-col gap-1.5 text-sm font-semibold text-ink">
         Email
         <input
           type="email"
@@ -22,9 +22,9 @@ export function EmailLinkForm({
           className={INPUT_CLASSES}
         />
       </label>
-      <Button type="submit" className="mt-2 min-h-11 text-base">
+      <button type="submit" className={siteButton("coral", "mt-2 w-full")}>
         {buttonLabel}
-      </Button>
+      </button>
     </form>
   );
 }

@@ -41,10 +41,10 @@ export function SetupStep({
 }) {
   const headingId = `${audience}-${step.id}`;
   return (
-    <li className="grid gap-4 border-t py-6">
+    <li className="grid gap-4 border-t-2 border-rule py-6">
       <div>
-        <h3 id={headingId} className="font-display text-lg font-medium">
-          <span className="mr-2 text-accent-text">{index + 1}.</span>
+        <h3 id={headingId} className="font-display text-[1.35rem] font-extrabold leading-[1.1]">
+          <span className="mr-2 text-ink">{index + 1}.</span>
           {step.title}
         </h3>
         <p className="mt-2 text-ink-dim">{step.summary}</p>
@@ -54,9 +54,9 @@ export function SetupStep({
           ))}
         </ul>
       </div>
-      <figure className="m-0 rounded-lg border bg-well p-4">
+      <figure className="m-0 rounded-[20px] border-2 border-rule bg-well p-4">
         {diagramFor(step.diagram, brandName)}
-        <figcaption className="mt-2 text-xs text-ink-dim">Schematic, not a screenshot.</figcaption>
+        <figcaption className="mt-2 text-sm text-ink-dim">Schematic, not a screenshot.</figcaption>
       </figure>
     </li>
   );
