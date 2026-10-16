@@ -16,8 +16,11 @@
  *   - exactly one <h1>
  *   - a full-page screenshot goes to docs/website-screenshots/<slug>-<width>.png
  *   - axe-core runs with the wcag2a, wcag2aa and wcag21aa tags
- * Plus: /admin must fail closed (HTTP 500) without Supabase env, and no page
- * may paint WhatsApp green (#25D366) or load a WhatsApp logo.
+ * Plus: the session-gated routes (/admin, /dashboard, /dashboard/billing) must
+ * either fail closed (HTTP 500, no Supabase env) or redirect to /login (Supabase
+ * env set, no session); they are never screenshotted, because they need a real
+ * signed-in account. No page may paint WhatsApp green (#25D366) or load a
+ * WhatsApp logo.
  *
  * Writes docs/website-screenshots/a11y-report.md and exits 1 on any
  * horizontal scroll, h1 miscount, unexpected HTTP status, brand-colour hit,
@@ -48,7 +51,10 @@ const WIDTHS = [
 ];
 const WHATSAPP_GREEN = "rgb(37, 211, 102)"; // #25D366
 
-/** Mirrors SITE_ROUTES in src/lib/site/routes.ts (kept literal: this script runs without TS). */
+/**
+ * Mirrors SITE_ROUTES in src/lib/site/routes.ts (kept literal: this script runs
+ * without TS), minus the session-gated dashboard routes, which are in SESSION_GATED.
+ */
 const SITE_ROUTES = [
   "/",
   "/pricing",
@@ -61,18 +67,18 @@ const SITE_ROUTES = [
   "/legal/terms",
   "/legal/privacy",
   "/signup",
+  "/signup/complete",
   "/login",
-  "/dashboard",
-  "/dashboard/billing",
 ];
 
 /** Extra states. `status` is the HTTP status the page must answer with (200 unless set); `h1` the expected count (1 unless set). */
 const EXTRA_ROUTES = [
-  { url: "/dashboard?scenario=past_due" },
-  { url: "/dashboard?filter=attention" },
   { url: "/docs/setup?audience=business" },
-  { url: "/signup/checkout?name=Test&kind=agency&email=t%40example.com" },
+  // After Stripe Checkout: the "email me my sign-in link" form. The id is only
+  // echoed into a hidden field here; the action validates it before any call.
+  { url: "/signup/complete?session_id=cs_test_walkthrough", slug: "signup-complete--session" },
   { url: "/login?sent=1" },
+  { url: "/login?error=checkout" },
   {
     url: "/signup?error.accountName=name_length&error.kind=kind_required&error.email=email_invalid&v.accountName=A&v.email=not-an-email",
     slug: "signup--errors",
@@ -85,8 +91,25 @@ const EXTRA_ROUTES = [
   { url: "/connect/abc" },
 ];
 
-/** Routes asserted by status only; never screenshotted. */
-const STATUS_ONLY = [{ url: "/admin", status: 500, why: "fails closed without Supabase env" }];
+/**
+ * Routes asserted by status only; never screenshotted. Each needs a signed-in
+ * account (src/proxy.ts): without Supabase env the proxy throws (500, fails
+ * closed); with it, and no session, it redirects to /login.
+ */
+const SESSION_GATED = ["/admin", "/dashboard", "/dashboard/billing"];
+const GATED_WHY = "fails closed (500) without Supabase env, or redirects to /login";
+
+function gatedOk(status, location) {
+  if (status === 500) return true;
+  if (status >= 300 && status < 400 && location) {
+    try {
+      return new URL(location, BASE_URL).pathname === "/login";
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
 
 function slugFor(route) {
   if (route.slug) return route.slug;
@@ -226,16 +249,17 @@ async function main() {
     }
   }
 
-  // Status-only routes.
+  // Session-gated routes: status only, redirects not followed.
   const probe = await browser.newContext();
-  const probePage = await probe.newPage();
-  for (const r of STATUS_ONLY) {
-    const res = await probePage.goto(`${BASE_URL}${r.url}`, { waitUntil: "commit", timeout: 60000 }).catch(() => null);
+  for (const url of SESSION_GATED) {
+    const res = await probe.request.get(`${BASE_URL}${url}`, { maxRedirects: 0, timeout: 60000 }).catch(() => null);
     const status = res ? res.status() : 0;
-    const ok = status === r.status;
-    if (!ok) failures.push(`${r.url}: HTTP ${status}, expected ${r.status} (${r.why})`);
-    console.log(`${ok ? "ok " : "!! "}${r.url.padEnd(100)} http ${status} (expected ${r.status}: ${r.why})`);
-    summary.push({ route: r.url, width: "-", status, h1s: "-", scroll: "-", violations: "-", serious: "-", statusOnly: true });
+    const location = res ? res.headers()["location"] || "" : "";
+    const ok = gatedOk(status, location);
+    const seen = location ? `${status} -> ${location}` : String(status);
+    if (!ok) failures.push(`${url}: HTTP ${seen}, expected 500 or a redirect to /login (${GATED_WHY})`);
+    console.log(`${ok ? "ok " : "!! "}${url.padEnd(100)} http ${seen} (${GATED_WHY})`);
+    summary.push({ route: url, width: "-", status: seen, h1s: "-", scroll: "-", violations: "-", serious: "-", statusOnly: true });
   }
   await probe.close();
   await browser.close();
