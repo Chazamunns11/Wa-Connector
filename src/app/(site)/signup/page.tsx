@@ -8,7 +8,7 @@ import { startSignupAction } from "./actions";
 
 const PAGE_ERRORS: Record<string, string> = {
   unavailable: "Signups aren't open yet.",
-  failed: "Something went wrong creating your account. Try again, or contact support.",
+  failed: "We couldn't send your email. Check the address and try again, or contact support.",
 };
 
 export function generateMetadata(): Metadata {
@@ -33,8 +33,9 @@ export default async function SignupPage({
       intro={
         <>
           <p>
-            Tell us who the account is for. Next comes checkout: a card is needed to start, and nothing is charged
-            until the trial ends. The trial covers up to {TRIAL_MAX_NUMBERS} numbers.
+            Tell us who the account is for. We&apos;ll email you a link to confirm your address, then take you to
+            checkout: a card is needed to start, and nothing is charged until the trial ends. The trial covers up to{" "}
+            {TRIAL_MAX_NUMBERS} numbers.
           </p>
           {claim ? (
             <p className="mt-3">You arrived from GoHighLevel. Create your account here to carry on.</p>

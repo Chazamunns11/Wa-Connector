@@ -43,7 +43,7 @@ test("app layout logs out with the sign-out action, not a link", () => {
 test("auth callback routes owners to /admin and accounts to /dashboard", () => {
   assert.match(callback, /"\/admin"|\/admin/);
   assert.match(callback, /\/dashboard/);
-  assert.match(callback, /no_account/);
+  assert.match(callback, /origin\}\/signup`/);
 });
 
 test("sign-out action signs out then redirects to /login; login page explains the new errors", () => {

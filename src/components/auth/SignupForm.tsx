@@ -121,13 +121,13 @@ export function SignupForm({
           className={INPUT_CLASSES}
         />
         <p id="email-hint" className="text-sm text-ink-dim">
-          We sign you in with a link sent here. There is no password.
+          We send a link here to confirm it&apos;s you. There is no password.
         </p>
         <FieldError id="email-error" message={errors.email} />
       </div>
 
       <button type="submit" className={siteButton("coral", "w-full")}>
-        Continue to checkout
+        Email me a confirmation link
       </button>
     </form>
   );

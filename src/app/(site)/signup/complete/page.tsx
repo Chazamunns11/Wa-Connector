@@ -22,7 +22,7 @@ export default async function SignupCompletePage({
       title="You're nearly there"
       intro={
         sessionId ? (
-          <p>Your card is saved and your {TRIAL_DAYS}-day trial is ready. One more step: sign in.</p>
+          <p>Your card is saved and your {TRIAL_DAYS}-day trial is ready.</p>
         ) : (
           <p>One more step: sign in.</p>
         )
@@ -31,9 +31,9 @@ export default async function SignupCompletePage({
       {sessionId ? (
         <form action={sendCompleteLinkAction} className="flex flex-col gap-4">
           <input type="hidden" name="session_id" value={sessionId} />
-          <p className="text-ink-dim">We&apos;ll email you a sign-in link. Open it in this browser.</p>
+          <p className="text-ink-dim">You confirmed your email at the start, so you should already be signed in. If not, we&apos;ll email you a sign-in link: open it in this browser.</p>
           <button type="submit" className={siteButton("coral", "w-full")}>
-            Email me my sign-in link
+            Go to my dashboard
           </button>
         </form>
       ) : (

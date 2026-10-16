@@ -63,17 +63,42 @@ test("signup error redirect ends at the focusable summary", () => {
   assert.match(read("src/components/auth/SignupForm.tsx"), /id="signup-errors"\s+tabIndex=\{-1\}/);
 });
 
-test("signup action calls startSignup and never inlines Stripe params", () => {
+test("signup action only emails a link: no account, profile or admin user before the email is proven", () => {
   const src = read("src/app/(site)/signup/actions.ts");
-  assert.match(src, /startSignup\(/);
+  assert.match(src, /prepareSignup\(/);
+  assert.match(src, /shouldCreateUser: true/);
+  assert.match(src, /data: prepared\.data/);
+  assert.match(src, /redirect\("\/signup\/check-email"\)/);
+  assert.doesNotMatch(src, /createAccount|createProfile|admin\.createUser|createCheckoutSession|startSignup\(/);
   assert.doesNotMatch(src, /api\.stripe\.com/);
+});
+
+test("the login form still never creates users", () => {
+  assert.match(read("src/app/login/actions.ts"), /shouldCreateUser: false/);
+  assert.doesNotMatch(read("src/app/login/actions.ts"), /shouldCreateUser: true/);
+});
+
+test("auth callback completes a pending signup after the exchange, with fixed redirects and no logged claim", () => {
+  const src = read("src/app/auth/callback/route.ts");
+  assert.match(src, /exchangeCodeForSession\(code\)/);
+  assert.match(src, /decideCallback\(/);
+  assert.match(src, /completeSignup\(/);
+  assert.match(src, /verifyClaim: verifyClaimToken/);
+  assert.doesNotMatch(src, /searchParams\.get\("(next|redirect|returnTo)/);
+  assert.doesNotMatch(src, /console\.\w+\(/);
+});
+
+test("check-email page exists and is noindex", () => {
+  const src = read("src/app/(site)/signup/check-email/page.tsx");
+  assert.match(src, /Check your email to continue/);
+  assert.match(src, /robots:\s*\{\s*index:\s*false/);
 });
 
 test("signup action carries the claim through every redirect and never logs it", () => {
   const src = read("src/app/(site)/signup/actions.ts");
   assert.match(src, /signupUrl\(new URLSearchParams\(signupRedirectQuery\(result\)\), claim/);
   assert.match(src, /error: "unavailable"[^\n]*claim/);
-  assert.match(src, /error: outcome\.kind[^\n]*claim/);
+  assert.match(src, /error: "failed"[^\n]*claim/);
   assert.doesNotMatch(src, /console\.\w+\([^)]*claim/i);
 });
 

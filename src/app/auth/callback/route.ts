@@ -1,19 +1,30 @@
 /**
- * GET /auth/callback — the owner sign-in link lands here with `?code=`.
+ * GET /auth/callback — the emailed link lands here with `?code=`.
  * The shape of PortalHub `src/app/auth/callback/route.ts`: exchange the code
- * for a session (PKCE — the verifier cookie was set by
- * `sendLoginLinkAction`, src/app/login/actions.ts), then redirect.
+ * for a session (PKCE — the verifier cookie was set by `sendLoginLinkAction`
+ * or `startSignupAction`), then redirect.
  *
- * Role-aware: an owner goes to `/admin`, an account with an `account_id` to
- * `/dashboard`; anything else is signed out and sent to
- * `/login?error=no_account`. A missing code or a failed exchange goes to
- * `/login?error=auth_callback`, which the login page explains.
+ * `decideCallback` (src/lib/billing/onboard.ts) picks the route: an owner goes
+ * to `/admin`, an account with an `account_id` to `/dashboard`. A verified
+ * user with NO profile but a pending signup in their metadata is a new
+ * customer: the account and profile are created here, for the verified email
+ * only, and they go on to Stripe Checkout. Anything else is signed out and
+ * sent to `/signup`. A missing code or failed exchange goes to
+ * `/login?error=auth_callback`. Every redirect target is a fixed path on this
+ * origin or the Checkout URL Stripe returned: no `next=` parameter, so no
+ * open redirect.
  */
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { getProfile } from "@/lib/auth";
+import { brandConfig } from "@/lib/brand-config";
+import { completeSignup, decideCallback, parsePendingSignup } from "@/lib/billing/onboard";
+import { repo } from "@/lib/data";
+import { verifyClaimToken } from "@/lib/ghl-claim";
+import { isStripeConfigured } from "@/lib/stripe/client";
+import { createCheckoutSession } from "@/lib/stripe/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -43,11 +54,30 @@ export async function GET(request: NextRequest) {
         data: { user },
       } = await supabase.auth.getUser();
       const profile = user ? await getProfile(user.id) : null;
-      if (profile?.role === "owner") return NextResponse.redirect(`${origin}/admin`);
-      if (profile?.role === "account" && profile.accountId) return NextResponse.redirect(`${origin}/dashboard`);
+      const pending = user ? parsePendingSignup(user.user_metadata) : null;
+      const decision = decideCallback(profile, pending);
+
+      if (decision === "owner") return NextResponse.redirect(`${origin}/admin`);
+      if (decision === "dashboard") return NextResponse.redirect(`${origin}/dashboard`);
+
+      if (decision === "complete_signup" && user?.email && pending) {
+        if (!isStripeConfigured()) {
+          await supabase.auth.signOut();
+          return NextResponse.redirect(`${origin}/signup?error=unavailable`);
+        }
+        const outcome = await completeSignup(
+          repo,
+          { checkout: createCheckoutSession, appUrl: brandConfig().appUrl, verifyClaim: verifyClaimToken },
+          { userId: user.id, email: user.email, pending },
+        );
+        if (outcome.kind === "checkout") return NextResponse.redirect(outcome.url);
+        // The account exists but Checkout failed: the dashboard offers "Add a card".
+        return NextResponse.redirect(`${origin}/dashboard`);
+      }
+
       // Signed in but belongs to nothing: drop the session rather than leave a dangling login.
       await supabase.auth.signOut();
-      return NextResponse.redirect(`${origin}/login?error=no_account`);
+      return NextResponse.redirect(`${origin}/signup`);
     }
   }
 

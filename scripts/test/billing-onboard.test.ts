@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCheckoutSession, createCheckoutForAccount, startSignup, type OnboardRepo } from "@/lib/billing/onboard";
+import {
+  applyCheckoutSession,
+  completeSignup,
+  createCheckoutForAccount,
+  decideCallback,
+  parsePendingSignup,
+  prepareSignup,
+  type OnboardRepo,
+} from "@/lib/billing/onboard";
 import type { Account } from "@/lib/types";
 import type { StripeCheckoutSession, StripeSubscription } from "@/lib/stripe/billing";
 
@@ -52,15 +60,12 @@ function fakeRepo(opts: { profile?: boolean; accounts?: Account[] } = {}) {
   return { repo, log, store };
 }
 
-const input = { accountName: "Acme", kind: "business" as const, email: "A@B.co", claimLocationId: null };
+const verifyClaim = (t: string) => (t === "good-claim" ? { locationId: "loc" } : null);
 
-function deps(log: string[], over: { auth?: { id: string } | { error: "exists" | "failed" }; checkoutOk?: boolean } = {}) {
+function deps(log: string[], over: { checkoutOk?: boolean } = {}) {
   return {
     appUrl: "https://app.test",
-    async createAuthUser(email: string) {
-      log.push(`auth:${email}`);
-      return over.auth ?? { id: "u1" };
-    },
+    verifyClaim,
     async checkout(i: { accountId: string; customerEmail: string; successUrl: string; cancelUrl: string }) {
       log.push(`checkout:${i.accountId}:${i.customerEmail}:${i.successUrl}:${i.cancelUrl}`);
       return over.checkoutOk === false
@@ -70,44 +75,81 @@ function deps(log: string[], over: { auth?: { id: string } | { error: "exists" |
   };
 }
 
-test("startSignup happy path runs in order and returns the Checkout url", async () => {
+const pending = { accountName: "Acme", kind: "business" as const, claim: null as string | null };
+const who = { userId: "u1", email: "A@B.co", pending };
+
+test("prepareSignup creates nothing: it only checks the email and returns the link metadata", async () => {
   const { repo, log } = fakeRepo();
-  const out = await startSignup(repo, deps(log), input);
+  const out = await prepareSignup(repo, { accountName: "Acme", kind: "business", email: " A@B.co " });
+  assert.deepEqual(out, { kind: "send", email: "a@b.co", data: { accountName: "Acme", kind: "business" } });
+  assert.deepEqual(log, ["getProfileByEmail"]);
+});
+
+test("prepareSignup carries the claim token in the metadata when given", async () => {
+  const { repo } = fakeRepo();
+  const out = await prepareSignup(repo, { accountName: "Acme", kind: "agency", email: "a@b.co", claim: "tok" });
+  assert.deepEqual(out, { kind: "send", email: "a@b.co", data: { accountName: "Acme", kind: "agency", claim: "tok" } });
+});
+
+test("prepareSignup stops at an existing profile", async () => {
+  const { repo, log } = fakeRepo({ profile: true });
+  assert.deepEqual(await prepareSignup(repo, { accountName: "Acme", kind: "business", email: "a@b.co" }), { kind: "exists" });
+  assert.deepEqual(log, ["getProfileByEmail"]);
+});
+
+test("parsePendingSignup accepts only well-formed metadata", () => {
+  assert.deepEqual(parsePendingSignup({ accountName: " Acme ", kind: "agency", claim: "t" }), { accountName: "Acme", kind: "agency", claim: "t" });
+  assert.deepEqual(parsePendingSignup({ accountName: "Acme", kind: "business" }), { accountName: "Acme", kind: "business", claim: null });
+  assert.equal(parsePendingSignup(null), null);
+  assert.equal(parsePendingSignup("x"), null);
+  assert.equal(parsePendingSignup({}), null);
+  assert.equal(parsePendingSignup({ accountName: "A", kind: "business" }), null);
+  assert.equal(parsePendingSignup({ accountName: "x".repeat(81), kind: "business" }), null);
+  assert.equal(parsePendingSignup({ accountName: "Acme", kind: "owner" }), null);
+  assert.equal(parsePendingSignup({ accountName: "Acme", kind: "business", claim: 5 })?.claim, null);
+  assert.equal(parsePendingSignup({ accountName: "Acme", kind: "business", claim: "y".repeat(201) })?.claim, null);
+});
+
+test("decideCallback routes by profile first, then by a pending signup, else rejects", () => {
+  assert.equal(decideCallback({ role: "owner", accountId: null }, null), "owner");
+  assert.equal(decideCallback({ role: "account", accountId: "a" }, null), "dashboard");
+  // An existing profile always wins over metadata.
+  assert.equal(decideCallback({ role: "account", accountId: "a" }, pending), "dashboard");
+  assert.equal(decideCallback(null, pending), "complete_signup");
+  assert.equal(decideCallback(null, null), "reject");
+  assert.equal(decideCallback({ role: "account", accountId: null }, null), "reject");
+  assert.equal(decideCallback({ role: "account", accountId: null }, pending), "reject");
+});
+
+test("completeSignup runs account, profile, Checkout in order, bound to the verified email", async () => {
+  const { repo, log } = fakeRepo();
+  const out = await completeSignup(repo, deps(log), who);
   assert.deepEqual(out, { kind: "checkout", url: "https://stripe.test/pay" });
   assert.deepEqual(log, [
-    "getProfileByEmail",
-    "auth:a@b.co",
     "createAccount:Acme:business:a@b.co",
     "createProfile:u1:account:a@b.co:acc-1",
     "checkout:acc-1:a@b.co:https://app.test/signup/complete?session_id={CHECKOUT_SESSION_ID}:https://app.test/login?error=checkout",
   ]);
 });
 
-test("startSignup with an existing profile stops at once", async () => {
-  const { repo, log } = fakeRepo({ profile: true });
-  assert.deepEqual(await startSignup(repo, deps(log), input), { kind: "exists" });
-  assert.deepEqual(log, ["getProfileByEmail"]);
-});
-
-test("startSignup maps auth-user errors", async () => {
-  const a = fakeRepo();
-  assert.deepEqual(await startSignup(a.repo, deps(a.log, { auth: { error: "exists" } }), input), { kind: "exists" });
-  const b = fakeRepo();
-  assert.deepEqual(await startSignup(b.repo, deps(b.log, { auth: { error: "failed" } }), input), { kind: "failed" });
-  assert.ok(!b.log.some((l) => l.startsWith("createAccount")));
-});
-
-test("startSignup claims the location after the profile and ignores the result", async () => {
+test("completeSignup claims the verified location after the profile", async () => {
   const { repo, log } = fakeRepo();
-  const out = await startSignup(repo, deps(log), { ...input, claimLocationId: "loc" });
+  const out = await completeSignup(repo, deps(log), { ...who, pending: { ...pending, claim: "good-claim" } });
   assert.equal(out.kind, "checkout");
   const i = log.indexOf("claim:loc:acc-1");
   assert.ok(i > log.findIndex((l) => l.startsWith("createProfile")) && i >= 0);
 });
 
-test("startSignup leaves the account behind when Checkout fails", async () => {
+test("completeSignup ignores a forged or expired claim token", async () => {
+  const { repo, log } = fakeRepo();
+  const out = await completeSignup(repo, deps(log), { ...who, pending: { ...pending, claim: "forged" } });
+  assert.equal(out.kind, "checkout");
+  assert.ok(!log.some((l) => l.startsWith("claim:")));
+});
+
+test("completeSignup leaves the account behind when Checkout fails", async () => {
   const { repo, log, store } = fakeRepo();
-  assert.deepEqual(await startSignup(repo, deps(log, { checkoutOk: false }), input), { kind: "failed" });
+  assert.deepEqual(await completeSignup(repo, deps(log, { checkoutOk: false }), who), { kind: "failed" });
   assert.ok(store.has("acc-1"));
   assert.ok(log.some((l) => l.startsWith("createProfile")));
 });

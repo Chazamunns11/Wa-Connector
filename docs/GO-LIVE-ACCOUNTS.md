@@ -55,8 +55,14 @@ same organisation**.
    - Redirect URLs: `<app>/auth/callback`
    - Add `http://localhost:3000/auth/callback` only if you run it locally.
 5. **Authentication → Providers → Email.** Keep email on. Sign-in is an
-   emailed link (magic link). People are never created by the login form, only
-   by sign-up and checkout (`shouldCreateUser: false`).
+   emailed link (magic link). The login form never creates people
+   (`shouldCreateUser: false`). The sign-up form does (`shouldCreateUser:
+   true`), but the account and profile are only made after the emailed link is
+   opened, so nobody can sign up with an address they cannot read. Keep
+   **Confirm email** on. In **Authentication → Email Templates**, the
+   "Magic Link" template is used for both sign-in and sign-up links, so keep
+   its wording neutral, for example "Follow this link to continue:", rather
+   than "Sign in".
 6. **Custom SMTP, before any real sign-up.** Supabase's built-in sender is
    rate-limited to a handful of emails an hour and is not for production. Set
    up Resend on the brand domain, then **Project Settings → Authentication →
@@ -214,10 +220,15 @@ accounts.
 
 Use a spare GHL sub-account and your own number. Use Stripe test cards.
 
-1. Go to `<app>/signup`. Sign up with a real inbox you can read. Pay with
-   `4242 4242 4242 4242`, any future date, any CVC.
-2. You should land on a "check your email" page. Open the sign-in link
-   (it comes from the SMTP you set up). You should land on the dashboard.
+1. Go to `<app>/signup`. Fill in the form with a real inbox you can read.
+   You should see "Check your email to continue". Nothing exists yet: no
+   account in `/admin`, no row in `profiles`.
+2. Open the emailed link in the same browser (it comes from the SMTP you set
+   up). It confirms the address, creates the account and sends you straight to
+   Stripe Checkout. Pay with `4242 4242 4242 4242`, any future date, any CVC.
+   You then land on "You're nearly there"; the button takes you to the
+   dashboard. Try the form again with the same address: it should say you
+   already have an account and point you to log in.
 3. In Stripe (test mode) the customer should show a subscription that is
    **trialing**. The dashboard should say you are on a trial.
 4. **Connect GoHighLevel** and approve the spare sub-account. The location
@@ -255,7 +266,7 @@ better found now than with a paying customer.
 Then walk this journey:
 
 1. **Stripe → Billing → Test clocks → New simulation.** Create a customer on
-   a clock. Easiest route: start a new sign-up (Part 6) with a fresh email,
+   a clock. Easiest route: start a new sign-up (Part 6: form, emailed link, Checkout) with a fresh email,
    then in the Stripe dashboard attach that customer to a test clock. If the
    dashboard will not let you attach an existing customer, create the
    customer and subscription from the dashboard on a clock, and use the
@@ -399,17 +410,10 @@ line for that one run. Do not add them to Vercel.
 ## Known limitations. Read before launch.
 
 - **Held messages and STOP have limits.** A message already in the bridge's
-  paced queue when a STOP lands still sends. Picture and file messages are not
-  held while a phone is offline. The GoHighLevel do-not-disturb endpoint is not
+  paced queue when a STOP lands still sends. The GoHighLevel do-not-disturb endpoint is not
   live-verified (it is off unless `GHL_SYNC_DND` is `true`). Held messages
   older than `OUTBOUND_HOLD_MAX_HOURS` (default 24) are reported to
   GoHighLevel as not sent.
-- **Sign-up with an unverified email can squat an address.** Someone can sign
-  up with an email they do not own. That address is then taken, and the real
-  owner is told it already exists. Tighten this before launch, for example by
-  requiring the emailed link before the account is created, or by letting the
-  real owner take over an unverified account. Until then, watch the accounts
-  list in `/admin` for strange sign-ups.
 - **`BRAND_MAX_ACTIVE_NUMBERS` has no tested figure.** Leave it unset until you
   have load-tested one bridge on Railway with many numbers connected at once.
   Then set it a little below what held up. At the cap, new activations are
