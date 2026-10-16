@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { BrandMark } from "@/components/site/BrandMark";
+import { SiteFooter } from "@/components/site/SiteFooter";
 import { Container } from "@/components/site/Container";
 import { brandCssVars, brandConfig } from "@/lib/brand-config";
 import { SITE_ROUTES } from "@/lib/site/routes";
@@ -16,7 +17,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       </a>
       <header className="border-b">
         <Container className="flex min-h-16 items-center justify-between gap-2">
-          <Link href={SITE_ROUTES.dashboard} className="inline-flex min-h-11 items-center" aria-label="Dashboard">
+          <Link href={SITE_ROUTES.dashboard} className="inline-flex min-h-11 items-center" aria-label={`${brandConfig().name} dashboard`}>
             <BrandMark />
           </Link>
           <nav aria-label="Account" className="flex items-center gap-1">
@@ -35,6 +36,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <main id="main" className="flex-1">
         {children}
       </main>
+      <SiteFooter />
     </div>
   );
 }

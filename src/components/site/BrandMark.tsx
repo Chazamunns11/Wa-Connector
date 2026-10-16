@@ -11,7 +11,7 @@ export function BrandMark({ size = 24 }: { size?: number }) {
   }
   return (
     <span
-      className="font-display font-bold leading-none text-ink"
+      className="whitespace-nowrap font-display font-bold leading-none text-ink"
       style={{ fontSize: Math.max(16, Math.round(size * 0.75)) }}
     >
       {name}
