@@ -1,0 +1,89 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  activeCount,
+  headline,
+  needsAttention,
+  planStatus,
+  rowActionsFor,
+  trialDaysLeft,
+} from "@/lib/account-data/derive";
+import type { AccountSummary, BillingStatus, LocationRow } from "@/lib/account-data/types";
+
+const NOW = new Date("2026-10-16T12:00:00Z");
+const day = 86_400_000;
+
+function acct(billingStatus: BillingStatus, trialEndsAt: string | null = null): AccountSummary {
+  return { id: "a", name: "Sample Co", kind: "business", email: "o@example.com", billingStatus, trialEndsAt };
+}
+function row(over: Partial<LocationRow> = {}): LocationRow {
+  return {
+    id: "l", name: "Sample Studio", activated: true, state: { kind: "connected", number: "+447700900000" },
+    sentToday: 10, dailyCap: 150, heldMessages: 0, failedLast7Days: { count: 0, reasons: [] },
+    optOuts: 0, providerNudge: false, ...over,
+  };
+}
+
+test("trialDaysLeft: 4 days ahead → 4; past → 0; null → 0", () => {
+  assert.equal(trialDaysLeft(new Date(NOW.getTime() + 4 * day).toISOString(), NOW), 4);
+  assert.equal(trialDaysLeft(new Date(NOW.getTime() + 3.2 * day).toISOString(), NOW), 4);
+  assert.equal(trialDaysLeft(new Date(NOW.getTime() - day).toISOString(), NOW), 0);
+  assert.equal(trialDaysLeft(null, NOW), 0);
+  assert.equal(trialDaysLeft("not a date", NOW), 0);
+});
+
+test("planStatus per billing status", () => {
+  const end = new Date(NOW.getTime() + 4 * day).toISOString();
+  assert.deepEqual(planStatus(acct("trialing", end), NOW), { label: "Trial: 4 days left", tone: "warn", banner: null });
+  assert.equal(planStatus(acct("trialing", new Date(NOW.getTime() + day).toISOString()), NOW).label, "Trial: 1 day left");
+  assert.equal(planStatus(acct("trialing", new Date(NOW.getTime() - day).toISOString()), NOW).label, "Trial: 0 days left");
+  assert.deepEqual(planStatus(acct("active"), NOW), { label: "Active", tone: "win", banner: null });
+  assert.deepEqual(planStatus(acct("comped"), NOW), { label: "Active", tone: "win", banner: null });
+  assert.deepEqual(planStatus(acct("past_due"), NOW), {
+    label: "Payment failed", tone: "loss",
+    banner: "Payment failed — update your card. Sending continues while we retry.",
+  });
+  const paused = planStatus(acct("paused"), NOW);
+  assert.equal(paused.banner, "Sending is paused — update billing to resume");
+  assert.equal(paused.tone, "loss");
+  assert.deepEqual(planStatus(acct("cancelled"), NOW), { label: "Cancelled", tone: "muted", banner: null });
+});
+
+test("needsAttention reasons in priority order: disconnected, waiting_qr, providerNudge, cap, null", () => {
+  const all = { providerNudge: true, sentToday: 150, dailyCap: 150 };
+  assert.equal(needsAttention(row({ ...all, state: { kind: "disconnected", waiting: 4 } })), "Disconnected — 4 messages waiting");
+  assert.equal(needsAttention(row({ state: { kind: "disconnected", waiting: 1 } })), "Disconnected — 1 message waiting");
+  assert.equal(needsAttention(row({ ...all, state: { kind: "waiting_qr" } })), "Waiting for QR scan");
+  assert.equal(needsAttention(row(all)), "No messages from GHL yet. Is the Telephony Provider set?");
+  assert.equal(needsAttention(row({ sentToday: 150, dailyCap: 150 })), "Daily cap reached");
+  assert.equal(needsAttention(row()), null);
+  assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
+});
+
+test("headline reads '2 numbers active · £58/month' for 2 activated at 29 GBP", () => {
+  const pricing = { pricePerNumber: 29, currency: "GBP" };
+  const rows = [row(), row(), row({ activated: false, state: { kind: "not_active" } })];
+  assert.equal(headline(rows, pricing), "2 numbers active · £58/month");
+  assert.equal(headline([row()], pricing), "1 number active · £29/month");
+  assert.equal(headline([], pricing), "0 numbers active · £0/month");
+});
+
+test("activeCount counts activated rows only", () => {
+  assert.equal(activeCount([row(), row({ activated: false }), row()]), 2);
+  assert.equal(activeCount([]), 0);
+});
+
+test("rowActionsFor for not_active, waiting_qr, connected and disconnected rows", () => {
+  assert.deepEqual(rowActionsFor(row({ activated: false, state: { kind: "not_active" } })), {
+    activate: true, showQr: false, sendLink: false, disconnect: false, deactivate: false,
+  });
+  assert.deepEqual(rowActionsFor(row({ state: { kind: "waiting_qr" } })), {
+    activate: false, showQr: true, sendLink: true, disconnect: false, deactivate: true,
+  });
+  assert.deepEqual(rowActionsFor(row()), {
+    activate: false, showQr: false, sendLink: false, disconnect: true, deactivate: true,
+  });
+  assert.deepEqual(rowActionsFor(row({ state: { kind: "disconnected", waiting: 4 } })), {
+    activate: false, showQr: false, sendLink: true, disconnect: false, deactivate: true,
+  });
+});
