@@ -66,10 +66,11 @@ const API_BASE = "https://services.leadconnectorhq.com";
 const API_VERSION = "2021-04-15";
 
 /**
- * ASSUMED, not confirmed by a docs fetch (Phase 3 plan §Q2) — GHL's contacts
- * endpoints (`POST /contacts/upsert`, used by `upsertGhlContact` below)
- * document a DIFFERENT `Version` header value than the conversations
- * endpoints `API_VERSION` above serves. Kept as its own constant rather than
+ * Confirmed 16 Oct 2026 against GoHighLevel's official OpenAPI spec
+ * (GoHighLevel/highlevel-api-docs, apps/contacts.json): the contacts
+ * endpoints (`POST /contacts/upsert`, `PUT /contacts/{id}` with
+ * `dndSettings`) take `Version: 2021-07-28`, a DIFFERENT value than the
+ * conversations endpoints `API_VERSION` above serves. Kept as its own constant rather than
  * reusing `API_VERSION` so the two can diverge without a misleading shared
  * name — flagged verify-at-first-go-live exactly like `API_VERSION` itself
  * (see `docs/GHL-PROVIDER-GO-LIVE.md`'s Part 7).
