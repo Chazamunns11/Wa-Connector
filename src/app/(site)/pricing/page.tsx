@@ -24,7 +24,8 @@ export default function PricingPage() {
   const brand = brandConfig();
   const pricing = pricingConfig();
   const copy = pricingCopy(brand);
-  const faq = faqEntries(brand).filter((e) => BILLING_FAQ.includes(e.id));
+  const all = faqEntries(brand);
+  const faq = BILLING_FAQ.flatMap((id) => all.filter((e) => e.id === id));
   return (
     <>
       <section className="pb-6 pt-14 md:pb-8">

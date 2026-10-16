@@ -123,3 +123,24 @@ test("marketing code has no client JS beyond the two islands", () => {
     .map((f) => basename(f));
   for (const c of clients) assert.ok(allowed.has(c), `${c} is an unexpected client island`);
 });
+
+import { calculatorDisplay, CALC_MIN, CALC_MAX } from "@/lib/site/calculator";
+
+test("calculatorDisplay: valid, out of range, fractional and empty input", () => {
+  assert.equal(CALC_MIN, 1);
+  assert.equal(CALC_MAX, 500);
+  assert.deepEqual(calculatorDisplay("5", brand), { line: "5 numbers = £145/month", note: null, empty: false });
+  const hi = calculatorDisplay("600", brand);
+  assert.equal(hi.line, "500 numbers = £14,500/month");
+  assert.match(hi.note ?? "", /whole number from 1 to 500/);
+  const lo = calculatorDisplay("0", brand);
+  assert.equal(lo.line, "1 number = £29/month");
+  assert.ok(lo.note);
+  assert.equal(calculatorDisplay("2.7", brand).line, "2 numbers = £58/month");
+  assert.ok(calculatorDisplay("2.7", brand).note);
+  assert.equal(calculatorDisplay("-3", brand).line, "1 number = £29/month");
+  const empty = calculatorDisplay("", brand);
+  assert.equal(empty.empty, true);
+  assert.equal(empty.line, "");
+  assert.ok(empty.note);
+});

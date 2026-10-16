@@ -14,7 +14,7 @@ export function pricingCopy(brand: BrandConfig): PricingCopy {
     trialTerms: [
       `${TRIAL_DAYS}-day free trial with up to ${TRIAL_MAX_NUMBERS} numbers`,
       "Card taken up front; nothing is charged until the trial ends",
-      `After the trial, ${name} bills one price per connected number, every month`,
+      `After the trial, ${name} bills one price per active number, every month`,
     ],
     failedPayment: [
       "If a payment fails, Stripe retries it for about 7 days. Sending continues while that happens, and a banner on your dashboard tells you to update the card.",
