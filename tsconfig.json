@@ -1,0 +1,47 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": [
+    "node_modules",
+    // services/* are standalone deployables with their OWN tsconfig/deps
+    // (services/whatsapp-bridge runs off-Vercel) — the root include of
+    // "**/*.ts" would otherwise pull them into the root typecheck against
+    // dependencies that aren't installed here.
+    "services/**",
+    // scripts/test/* is the `node --test` suite — standalone node-run test
+    // code, not app code. Its fixtures build deliberately partial domain
+    // objects that a strict typecheck would reject. The suite imports the
+    // REAL modules through scripts/test/alias-hook.mjs, so a renamed export
+    // or behaviour change still fails the run.
+    "scripts"
+  ]
+}

@@ -1,0 +1,222 @@
+@import "tailwindcss";
+
+:root {
+  /* PORTAL PALETTE — Uberstyle dashboard redesign (design handoff, Aug 2026;
+     tokens sourced from the design system ramp — do not invent new
+     hexes). Token NAMES are unchanged from the previous palette on purpose:
+     every existing `bg-card` / `text-ink` / `border-border` call site
+     repaints to the new skin with no per-screen edits.
+
+     Surfaces are the "ink" ramp: ink-900 page ground, ink-800 panels,
+     ink-700 raised chips/tracks/nav states. */
+  --color-bg: #0B0C0D;
+  --color-card: #121417;
+  --color-raised: #1A1D21;
+  /* Inset wells (form fields, QR panels, previews) — ink-850. */
+  --color-well: #0F1113;
+
+  /* Borders on dark are translucent white hairlines, not solid greys:
+     panels at .07, row rules inside a panel at .05 (also read by the global
+     reset below). Hover state for a panel border is rgba(255,255,255,.16) —
+     applied per component, no token. */
+  --color-border: rgba(255, 255, 255, 0.07);
+  --color-divider: rgba(255, 255, 255, 0.05);
+
+  /* Text on dark: white primary/numerals, grey-300 body, grey-500 secondary
+     (eyebrows, timestamps, captions). grey-500 (#8C9296) is ~5.5:1 on
+     --color-card — clear of WCAG AA for the small meta text it carries. */
+  --color-ink: #FFFFFF;
+  --color-ink-dim: #C9CED1;
+  --color-ink-faint: #8C9296;
+
+  /* Accent — brand Teal (teal-500), used SPARINGLY: active nav,
+     one data series, positive money, the primary CTA. Status colours below
+     are never teal. `--color-accent-ink` is the brand's own Ink swatch, the
+     text that sits ON a teal fill (8.45:1). `--color-accent-text` is the
+     teal-as-TEXT tier: teal-400 on dark, flipped to teal-700 by the
+     `.surface-light` scope below. */
+  --color-accent: #17BEB4;
+  --color-accent-ink: #0B0C0D;
+  --color-accent-text: #3ED2C7;
+
+  /* Semantic status — never teal. Soft tiers are the tag/pill backgrounds
+     (translucent tints on dark; the `.surface-light` scope swaps them for
+     the design system's solid 50-level tints). */
+  --color-win: #2FBF71;
+  --color-loss: #E5484D;
+  --color-warn: #F2B23E;
+  --color-info: #3E9BEE;
+  --color-win-soft: rgba(47, 191, 113, 0.12);
+  --color-loss-soft: rgba(229, 72, 77, 0.12);
+  --color-warn-soft: rgba(242, 178, 62, 0.12);
+  --color-info-soft: rgba(62, 155, 238, 0.12);
+  --color-accent-soft: rgba(23, 190, 180, 0.12);
+
+  /* Motion — the one easing the whole portal uses. Hovers 120ms, state
+     changes 180ms, drawers 260ms. */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --font-display: var(--font-chakra-petch);
+  --font-body: var(--font-barlow);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+/**
+ * Light-surface scope — the redesign floats its data tables (and only its
+ * data tables) on a WHITE panel sitting on the dark ground. Cell renderers,
+ * StatusPill and money formatting all speak in tokens (`text-ink`,
+ * `bg-win-soft`, …), so rather than fork light variants of every one of
+ * them, this class flips the tokens inside the panel — the same
+ * scoped-custom-property mechanism. Values are the design system's
+ * light pairs: grey-200 panel borders, grey-100 row rules, grey-50 row
+ * hover, grey-600 tertiary text, dark status text over 50-level tint
+ * backgrounds, and Deep Teal for teal-as-text.
+ */
+.surface-light {
+  --color-bg: #FFFFFF;
+  --color-card: #FFFFFF;
+  --color-raised: #F6F7F8;
+  --color-well: #F6F7F8;
+  --color-border: #E1E4E6;
+  --color-divider: #EDEFF0;
+  --color-ink: #0B0C0D;
+  --color-ink-dim: #1A1D21;
+  --color-ink-faint: #6E757A;
+  --color-accent-text: #0C7C76;
+  --color-win: #12805A;
+  --color-loss: #C0272C;
+  --color-warn: #8A5B08;
+  --color-info: #1F5FC4;
+  --color-win-soft: #E8F8EF;
+  --color-loss-soft: #FDECEC;
+  --color-warn-soft: #FDF4E3;
+  --color-info-soft: #EAF3FD;
+  --color-accent-soft: #E6FAF8;
+  color: var(--color-ink);
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-card: var(--color-card);
+  --color-raised: var(--color-raised);
+  --color-well: var(--color-well);
+  --color-border: var(--color-border);
+  --color-divider: var(--color-divider);
+
+  --color-ink: var(--color-ink);
+  --color-ink-dim: var(--color-ink-dim);
+  --color-ink-faint: var(--color-ink-faint);
+
+  --color-accent: var(--color-accent);
+  --color-accent-ink: var(--color-accent-ink);
+  --color-accent-text: var(--color-accent-text);
+
+  --color-win: var(--color-win);
+  --color-loss: var(--color-loss);
+  --color-warn: var(--color-warn);
+  --color-info: var(--color-info);
+  --color-win-soft: var(--color-win-soft);
+  --color-loss-soft: var(--color-loss-soft);
+  --color-warn-soft: var(--color-warn-soft);
+  --color-info-soft: var(--color-info-soft);
+  --color-accent-soft: var(--color-accent-soft);
+
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+}
+
+.font-mono-nums {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Thin scrollbars for dark UI — thumb is the ramp's ink-600, a solid a shade
+   above the raised surface (the hairline border tokens are now translucent
+   whites, far too faint to serve as a scrollbar). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #23272c transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #23272c;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Focus is always visible: 2px teal outline at 2px offset, everywhere —
+   never outline:none. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The redesign drops the old teal inner glow: dark panels carry no shadow at
+   all, and a hovered panel simply sharpens its hairline. The class stays
+   because call sites outside the shared primitives still reference it. */
+.card-glow {
+  transition: border-color 120ms var(--ease-out);
+}
+
+.card-glow:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+/* Page entrance: sections fade in and rise 12px, staggered ~60ms at the call
+   site via animation-delay. No spring, no loops. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise-in {
+  animation: rise 620ms var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise-in {
+    animation: none;
+  }
+}
