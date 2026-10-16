@@ -574,7 +574,7 @@ export interface GhlRepository {
   listAccountsCancelledBefore(iso: string): Promise<Account[]>;
   /** Inserts a portal profile row for an existing auth user. */
   createProfile(draft: { id: string; role: Role; email: string; accountId: string | null }): Promise<void>;
-  /** Case-insensitive (lower(email)) profile lookup, or null. */
+  /** Profile lookup by lower-cased, trimmed email (all writes store it normalised), or null. */
   getProfileByEmail(email: string): Promise<{ id: string; role: Role; accountId: string | null } | null>;
   /** The redacted summaries of an account's locations, ordered by label. */
   listGhlAccountsForAccount(accountId: string): Promise<GhlAccountSummary[]>;

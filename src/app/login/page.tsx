@@ -17,6 +17,14 @@ const AUTH_ERROR_COPY: Record<string, { title: string; body: string }> = {
     title: "That sign-in link didn't work",
     body: "It may have already been used, or it expired — links are single-use and last an hour. Request a fresh one below, and open it in this same browser.",
   },
+  no_account: {
+    title: "No account for that sign-in",
+    body: "This sign-in doesn't belong to an account yet. Contact support.",
+  },
+  checkout: {
+    title: "Billing isn't set up yet",
+    body: "Your account exists but no card was added. Sign in to finish setting up billing.",
+  },
   invalid_email: {
     title: "That email address doesn't look right",
     body: "Check it and try again.",

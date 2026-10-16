@@ -53,6 +53,10 @@ import type { GhlRepository } from "./repository";
  * path to them. Created lazily so merely importing this module never throws
  * when the env is absent (build, tests); the first query does.
  */
+function normaliseEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 function getServiceClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -1146,20 +1150,19 @@ export class SupabaseGhlRepository implements GhlRepository {
     const supabase = getServiceClient();
     const { error } = await supabase
       .from("profiles")
-      .insert({ id: draft.id, role: draft.role, email: draft.email, account_id: draft.accountId });
+      .insert({ id: draft.id, role: draft.role, email: normaliseEmail(draft.email), account_id: draft.accountId });
     if (error) throw error;
   }
 
   async getProfileByEmail(email: string) {
     const supabase = getServiceClient();
-    // lower(email) is uniquely indexed (profiles_email_lower_idx); the stored
-    // value may be mixed case, so match with ilike and no wildcards. Escape
-    // the LIKE metacharacters so an address containing % or _ matches literally.
-    const escaped = email.trim().replace(/[\\%_]/g, (c) => "\\" + c);
+    // Every write path stores profiles.email lower-cased (normaliseEmail), so
+    // an exact match on the lower-cased input is correct and uses the
+    // profiles_email_lower_idx unique index; no LIKE metacharacters to escape.
     const { data, error } = await supabase
       .from("profiles")
       .select("id, role, account_id")
-      .ilike("email", escaped)
+      .eq("email", normaliseEmail(email))
       .maybeSingle();
     if (error) throw error;
     if (!data) return null;
@@ -1244,6 +1247,7 @@ export class SupabaseGhlRepository implements GhlRepository {
 
     // (a) Recent rows, paginated so volume never silently truncates the counts.
     const PAGE_SIZE = 1000;
+    const seenInRecent = new Set<string>();
     for (let from = 0; ; from += PAGE_SIZE) {
       const { data, error } = await supabase
         .from("ghl_outbound_messages")
@@ -1263,6 +1267,7 @@ export class SupabaseGhlRepository implements GhlRepository {
       for (const r of page) {
         const stats = result[r.location_id];
         if (!stats) continue;
+        seenInRecent.add(r.location_id);
         if (r.send_state === "pending_send") stats.pendingSend += 1;
         if (r.send_state === "refused" || r.reported_status === "failed") {
           stats.failedLast7Days.count += 1;
@@ -1273,14 +1278,20 @@ export class SupabaseGhlRepository implements GhlRepository {
       if (page.length < PAGE_SIZE) break;
     }
 
-    // (b) Has this location ever had a row at all? One limit-1 probe each.
-    await Promise.all(
-      locationIds.map(async (id) => {
-        const { data, error } = await supabase.from("ghl_outbound_messages").select("location_id").eq("location_id", id).limit(1);
-        if (error) throw error;
-        result[id].everReceived = (data ?? []).length > 0;
-      })
-    );
+    // (b) Has this location ever had a row at all? Ids already seen in pass
+    // (a) have; probe only the rest (one limit-1 query each), 10 at a time.
+    const PROBE_CHUNK = 10;
+    for (const id of seenInRecent) result[id].everReceived = true;
+    const toProbe = locationIds.filter((id) => !seenInRecent.has(id));
+    for (let i = 0; i < toProbe.length; i += PROBE_CHUNK) {
+      await Promise.all(
+        toProbe.slice(i, i + PROBE_CHUNK).map(async (id) => {
+          const { data, error } = await supabase.from("ghl_outbound_messages").select("location_id").eq("location_id", id).limit(1);
+          if (error) throw error;
+          result[id].everReceived = (data ?? []).length > 0;
+        })
+      );
+    }
     return result;
   }
 

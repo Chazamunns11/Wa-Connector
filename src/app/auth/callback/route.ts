@@ -4,15 +4,16 @@
  * for a session (PKCE — the verifier cookie was set by
  * `sendLoginLinkAction`, src/app/login/actions.ts), then redirect.
  *
- * Success goes to `/admin`; the proxy and the page re-check that the session
- * really is an owner, so a signed-in `account` user simply bounces on to
- * `/login`. A missing code or a failed exchange goes to
+ * Role-aware: an owner goes to `/admin`, an account with an `account_id` to
+ * `/dashboard`; anything else is signed out and sent to
+ * `/login?error=no_account`. A missing code or a failed exchange goes to
  * `/login?error=auth_callback`, which the login page explains.
  */
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getProfile } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,15 @@ export async function GET(request: NextRequest) {
 
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      return NextResponse.redirect(`${origin}/admin`);
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const profile = user ? await getProfile(user.id) : null;
+      if (profile?.role === "owner") return NextResponse.redirect(`${origin}/admin`);
+      if (profile?.role === "account" && profile.accountId) return NextResponse.redirect(`${origin}/dashboard`);
+      // Signed in but belongs to nothing: drop the session rather than leave a dangling login.
+      await supabase.auth.signOut();
+      return NextResponse.redirect(`${origin}/login?error=no_account`);
     }
   }
 

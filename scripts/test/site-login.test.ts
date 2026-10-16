@@ -24,3 +24,31 @@ test("proxy lets non-admin paths through without Supabase env", () => {
   assert.ok(guard > -1 && thrown > guard, "throw must sit inside an isOwnerPath check");
   assert.match(block, /NextResponse\.next\(\{ request \}\)/);
 });
+
+const layout = readFileSync("src/app/(app)/layout.tsx", "utf8");
+const callback = readFileSync("src/app/auth/callback/route.ts", "utf8");
+const actions = readFileSync("src/app/login/actions.ts", "utf8");
+
+test("proxy gates /dashboard on a signed-in user and still excludes api", () => {
+  assert.match(proxy, /"\/dashboard"/);
+  assert.match(proxy, /\(\?!api\|/);
+});
+
+test("app layout logs out with the sign-out action, not a link", () => {
+  assert.match(layout, /import \{ signOutAction \}/);
+  assert.match(layout, /<form action=\{signOutAction\}>/);
+  assert.doesNotMatch(layout, /SITE_ROUTES\.login/);
+});
+
+test("auth callback routes owners to /admin and accounts to /dashboard", () => {
+  assert.match(callback, /"\/admin"|\/admin/);
+  assert.match(callback, /\/dashboard/);
+  assert.match(callback, /no_account/);
+});
+
+test("sign-out action signs out then redirects to /login; login page explains the new errors", () => {
+  assert.match(actions, /export async function signOutAction/);
+  assert.match(actions, /auth\.signOut\(\)/);
+  assert.match(login, /no_account/);
+  assert.match(login, /checkout/);
+});

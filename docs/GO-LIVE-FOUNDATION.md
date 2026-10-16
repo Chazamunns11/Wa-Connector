@@ -86,8 +86,8 @@ that has no auth user simply never gets a link. Create the user first:
 
    ```sql
    insert into profiles (id, role, email)
-   select id, 'owner', email from auth.users
-   where email = 'you@example.com';
+   select id, 'owner', lower(email) from auth.users
+   where lower(email) = 'you@example.com';
    ```
 
    Check it inserted exactly one row. `/admin` and every admin action require

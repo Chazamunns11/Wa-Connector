@@ -5,6 +5,7 @@ import { SiteFooter } from "@/components/site/SiteFooter";
 import { Container } from "@/components/site/Container";
 import { brandCssVars, brandConfig } from "@/lib/brand-config";
 import { SITE_ROUTES } from "@/lib/site/routes";
+import { signOutAction } from "@/app/login/actions";
 
 const LINK = "inline-flex min-h-11 items-center whitespace-nowrap px-1.5 text-sm sm:px-2 text-ink-dim hover:text-ink";
 
@@ -27,9 +28,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             <Link href={SITE_ROUTES.billing} className={LINK}>
               Billing
             </Link>
-            <Link href={SITE_ROUTES.login} className={LINK}>
-              Log out
-            </Link>
+            <form action={signOutAction}>
+              <button type="submit" className={LINK}>
+                Log out
+              </button>
+            </form>
           </nav>
         </Container>
       </header>
