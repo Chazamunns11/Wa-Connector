@@ -1210,3 +1210,62 @@ h3 {
     font-size: 11px;
   }
 }
+
+/* ---- print: the how-to-connect help sheet (A4, black on white, logo kept) ---- */
+@page {
+  size: A4;
+  margin: 12mm;
+}
+
+@media print {
+  .no-print,
+  .skip-link,
+  footer.surface-dark,
+  .site-body > header > div > *:not(:first-child) {
+    display: none !important;
+  }
+
+  .site-body > header,
+  .connect-sheet,
+  .connect-sheet * {
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+  }
+
+  .connect-sheet .sheet-top {
+    grid-template-columns: minmax(0, 1fr) 15rem !important;
+    gap: 20pt !important;
+  }
+
+  .connect-sheet .sheet-figure {
+    zoom: 0.62;
+  }
+
+  .connect-sheet .mt-12 {
+    margin-top: 14pt !important;
+  }
+
+  .connect-sheet .sheet-top .grid {
+    gap: 12pt !important;
+  }
+
+  .connect-sheet h1 {
+    font-size: 26pt;
+  }
+
+  .connect-sheet section {
+    padding-top: 8pt !important;
+    padding-bottom: 0 !important;
+  }
+
+  .connect-sheet .sheet-block,
+  .connect-sheet .sheet-step {
+    break-inside: avoid;
+  }
+
+  .connect-sheet {
+    font-size: 10.5pt;
+    line-height: 1.4;
+  }
+}
