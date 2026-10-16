@@ -285,9 +285,10 @@ Then walk this journey:
    database instead (`update accounts set cancelled_at = now() - interval
    '15 days' where ...`) and run the cron by hand.
 8. **Resubscribe.** Sign in to the cancelled account and open **Billing**.
-   Click **Restart your subscription** and complete Checkout with a test
-   card. The account gets the new subscription, returns to trialing or
-   active, and its cancelled and cleanup markers clear. (Signing up again
+   Click **Restart your subscription — billing starts today** and complete
+   Checkout with a test card. There is no second trial: Checkout shows no
+   trial and charges straight away, on the same Stripe customer. The account
+   gets the new subscription, returns to active, and its cancelled and cleanup markers clear. (Signing up again
    with the same email does not work; it says the email already exists.)
 
 Tick each step off. A failure at any step is a launch blocker.

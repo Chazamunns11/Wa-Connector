@@ -93,7 +93,7 @@ export default async function BillingPage({
           {account.billingStatus === "cancelled" ? (
             <form action={startCheckoutAction}>
               <button type="submit" className={buttonClasses("primary", "md", "min-h-11 px-5")}>
-                Restart your subscription
+                Restart your subscription — billing starts today
               </button>
             </form>
           ) : null}

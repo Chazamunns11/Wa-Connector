@@ -30,7 +30,11 @@ export async function createCheckoutForAccount(
   deps: Pick<OnboardDeps, "checkout" | "appUrl">,
   account: Account,
 ): Promise<SignupOutcome> {
+  // Anyone who has had a Stripe subscription before restarts without a trial.
+  const restart = account.billingStatus === "cancelled" || !!account.stripeSubscriptionId || !!account.stripeCustomerId;
   const r = await deps.checkout({
+    trial: !restart,
+    ...(account.stripeCustomerId ? { customerId: account.stripeCustomerId } : {}),
     accountId: account.id,
     customerEmail: account.ownerEmail,
     successUrl: `${deps.appUrl}/signup/complete?session_id={CHECKOUT_SESSION_ID}`,

@@ -70,6 +70,18 @@ test("createCheckoutSession: automatic tax when enabled", async () => {
   });
 });
 
+test("createCheckoutSession: no trial and existing customer for a restart", async () => {
+  await withEnv({ ...base, STRIPE_AUTOMATIC_TAX: undefined }, async () => {
+    const { calls, deps } = fake({ id: "cs_1", url: "U" });
+    await createCheckoutSession({ ...input, trial: false, customerId: "cus_9" }, deps);
+    const p = calls[0].params as Record<string, unknown>;
+    assert.deepEqual(p.subscription_data, { metadata: { account_id: "acc-1" } });
+    assert.equal(p.customer, "cus_9");
+    assert.equal("customer_email" in p, false);
+    assert.equal(p.payment_method_collection, "always");
+  });
+});
+
 test("parseSubscription: typed shape, object customer, missing items", () => {
   const raw = {
     id: "sub_1",

@@ -91,16 +91,25 @@ function mapData<A, B>(r: StripeResult<A>, fn: (a: A) => B | null): StripeResult
 }
 
 export async function createCheckoutSession(
-  input: { accountId: string; customerEmail: string; successUrl: string; cancelUrl: string },
+  input: {
+    accountId: string;
+    customerEmail: string;
+    successUrl: string;
+    cancelUrl: string;
+    /** Default true. False bills straight away (restarts never get a second trial). */
+    trial?: boolean;
+    /** Re-use this Stripe customer instead of creating one from the email. */
+    customerId?: string;
+  },
   deps?: BillingDeps,
 ): Promise<StripeResult<{ id: string; url: string }>> {
   const cfg = stripeConfig();
   const params: Record<string, unknown> = {
     mode: "subscription",
-    customer_email: input.customerEmail,
+    ...(input.customerId ? { customer: input.customerId } : { customer_email: input.customerEmail }),
     client_reference_id: input.accountId,
     line_items: [{ price: cfg.priceId, quantity: 1 }],
-    subscription_data: { trial_period_days: TRIAL_DAYS, metadata: { account_id: input.accountId } },
+    subscription_data: { ...(input.trial === false ? {} : { trial_period_days: TRIAL_DAYS }), metadata: { account_id: input.accountId } },
     metadata: { account_id: input.accountId, owner_email: input.customerEmail },
     payment_method_collection: "always",
     success_url: input.successUrl,

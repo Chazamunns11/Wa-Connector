@@ -63,6 +63,31 @@ test("startCheckoutFlow for pending and cancelled accounts only", async () => {
   assert.equal(n, 2);
 });
 
+test("startCheckoutFlow: only brand-new pending accounts get a trial; restarts bill straight away on the old customer", async () => {
+  const seen: Record<string, unknown>[] = [];
+  const checkout = (async (i: Record<string, unknown>) => (seen.push(i), { ok: true as const, data: { id: "cs", url: "u" } })) as never;
+  const fresh = { stripeCustomerId: null, stripeSubscriptionId: null };
+  await startCheckoutFlow(acct({ billingStatus: "pending", ...fresh }), { appUrl: "u", checkout });
+  await startCheckoutFlow(acct({ billingStatus: "cancelled" }), { appUrl: "u", checkout });
+  await startCheckoutFlow(acct({ billingStatus: "cancelled", ...fresh }), { appUrl: "u", checkout });
+  await startCheckoutFlow(acct({ billingStatus: "pending", stripeCustomerId: null, stripeSubscriptionId: "sub_old" }), { appUrl: "u", checkout });
+  await startCheckoutFlow(acct({ billingStatus: "pending", stripeCustomerId: "cus_old", stripeSubscriptionId: null }), { appUrl: "u", checkout });
+  assert.equal(seen[0].trial, true);
+  assert.equal(seen[0].customerId, undefined);
+  assert.equal(seen[1].trial, false);
+  assert.equal(seen[1].customerId, "cus_1");
+  assert.equal(seen[2].trial, false);
+  assert.equal(seen[2].customerId, undefined);
+  assert.equal(seen[3].trial, false);
+  assert.equal(seen[4].trial, false);
+  assert.equal(seen[4].customerId, "cus_old");
+});
+
+test("billing page restart button says billing starts today", () => {
+  const src = read("src/app/(app)/dashboard/billing/page.tsx");
+  assert.ok(src.includes("Restart your subscription — billing starts today"));
+});
+
 test("billingHref carries a fixed notice", () => {
   assert.equal(billingHref(), "/dashboard/billing");
   assert.equal(billingHref({ result: "trial_ended" }), "/dashboard/billing?result=trial_ended");
