@@ -9,7 +9,16 @@ Changes to Modules ship as a new app version and go through GHL review. Do all s
 - [ ] Migrations 0001 to 0013 are applied (they apply cleanly on Postgres 16).
 - [ ] `GHL_WORKFLOW_WEBHOOK_SECRET` is set on Vercel to a long random value. Without it the subscription route answers 503. Keep a copy: you paste the same value into the portal below.
 - [ ] `GHL_WORKFLOW_TRIGGERS_ENABLED` stays unset (off) until the sandbox check passes. With it off, subscriptions are stored but nothing is ever sent to GHL.
-- [ ] Scopes (Advanced Settings → Auth): add `workflows.readonly` to the six already ticked. Do this **before** setting `GHL_WORKFLOW_TRIGGERS_ENABLED=true`: the app only asks for the scope once that flag is on, and asking for a scope the portal hasn't enabled breaks the install. Existing installs must re-authorise to pick it up.
+
+## Turning it on, in this order
+
+The scope and the firing flag are two separate settings. The scope has to be granted first, because firing needs it, and the app must not ask for a scope the portal hasn't enabled (that breaks the install).
+
+1. [ ] In the portal (Advanced Settings → Auth), add `workflows.readonly` to the six scopes already ticked.
+2. [ ] On Vercel, set `GHL_REQUEST_WORKFLOWS_SCOPE=true`. From then on the install asks for `workflows.readonly`. It does not turn firing on.
+3. [ ] Re-authorise each existing install (new installs get the scope at once).
+4. [ ] Run the sandbox check, section A (subscriptions, firing flag still off): `docs/superpowers/specs/2026-10-17-workflow-triggers-sandbox-check.md`.
+5. [ ] Only then set `GHL_WORKFLOW_TRIGGERS_ENABLED=true` and run section B.
 
 ## What it costs the customer
 
@@ -31,7 +40,7 @@ Keys are immutable once the version is published. Type them exactly. The sample 
 ### 1. `whatsapp_disconnected`
 
 - Name: WhatsApp disconnected
-- Description: `Fires when a WhatsApp number has been offline for 5 minutes, or at once if it is logged out or banned. Includes a link to reconnect it. For internal alerts only. Never send this link to a contact.`
+- Description: `Fires when PingWren's connection to a WhatsApp number has been down for 5 minutes, or at once if it is logged out or banned. Includes a link to reconnect it. For internal alerts only. Never send this link to a contact.`
 
 ```json
 {
@@ -44,6 +53,8 @@ Keys are immutable once the version is published. Type them exactly. The sample 
 ```
 
 `reason` is `logged_out`, `banned` or `connection_lost`. `numberLabel` can be null.
+
+"Down" means PingWren's own connection to the number (the linked device) has been down for 5 minutes. A phone that is switched off or offline does not drop a linked device, so it does not fire this. To test it, stop the number's bridge session.
 
 ### 2. `whatsapp_reconnected`
 
@@ -104,6 +115,8 @@ Keys are immutable once the version is published. Type them exactly. The sample 
 
 `messageId` is GHL's message id.
 
+It only fires when read receipts are on: `GHL_READ_RECEIPTS_ENABLED=true` (Vercel) and `WA_READ_RECEIPTS_ENABLED=true` (bridge). It fires from the hourly cron, so it can arrive up to an hour after the contact read the message.
+
 ### 6. `whatsapp_not_on_whatsapp`
 
 - Name: Contact not on WhatsApp
@@ -118,9 +131,17 @@ Keys are immutable once the version is published. Type them exactly. The sample 
 }
 ```
 
-`message` is the unsent text, cut to 500 characters. It can be empty for messages sent before migration 0013.
+`message` is the unsent text, cut to 500 characters. It can be empty: for an attachment-only send (no text), for a message whose kept text was cleared because it was not reported within 7 days, for a message accepted while `GHL_WORKFLOW_TRIGGERS_ENABLED` was off (the text is only kept while firing is on), and for messages sent before migration 0013.
+
+### The 30-day "not on WhatsApp" memory
+
+When a send fails because the contact is not on WhatsApp, PingWren remembers that contact (per sub-account and phone number) for 30 days, and refuses further sends to them at once, without trying WhatsApp.
+
+- The memory is used even while `GHL_WORKFLOW_TRIGGERS_ENABLED` is off. The flag only controls whether the trigger fires.
+- A contact who joins WhatsApp later stays refused until they message the number (any one-to-one message clears the memory) or the 30 days pass.
+- A contact who sent STOP never gets the fallback trigger.
 
 ## After you submit
 
-- [ ] Install the new version on the sandbox sub-account, turn on LC Premium Triggers & Actions, then run `docs/superpowers/specs/2026-10-17-workflow-triggers-sandbox-check.md`.
-- [ ] Only after that check, set `GHL_WORKFLOW_TRIGGERS_ENABLED=true` on Vercel.
+- [ ] Install the new version on the sandbox sub-account and turn on LC Premium Triggers & Actions.
+- [ ] Follow "Turning it on, in this order" above: scope in the portal, `GHL_REQUEST_WORKFLOWS_SCOPE=true`, re-authorise, sandbox check section A, then `GHL_WORKFLOW_TRIGGERS_ENABLED=true` on Vercel and section B.

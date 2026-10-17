@@ -81,8 +81,9 @@
  * (resending different text under that key would be ACCEPTED as the real
  * content — the bridge's own ledger has no row yet for a send that never
  * reached it). `pending_text` (0070) closes that gap, and 0013 keeps it on an
- * accepted row until its status is reported, so a "not on WhatsApp" trigger can
- * carry the unsent text. It is cleared on refusal, when the status is reported,
+ * accepted row until its status is reported (only while workflow triggers are
+ * on), so a "not on WhatsApp" trigger can carry the unsent text. It is cleared
+ * on refusal, on accept when triggers are off, when the status is reported,
  * and by the cron for an accepted row never reported within 7 days.
  */
 import { after } from "next/server";
@@ -817,13 +818,13 @@ export async function reportGhlOutcome(
   row: GhlOutboundMessage,
   status: "delivered" | "failed",
   reason: string | null
-): Promise<"reported" | "unreported"> {
+): Promise<GhlReportOutcome> {
   if (isAppOriginatedMessageId(row.ghlMessageId)) {
     // Sent by this app (a group invite), not by GHL: GHL has no such message
     // to update. Mark the row reported locally so no pass retries it; any
     // GHL conversation post is a separate step by the caller.
-    await repo.markGhlOutboundReported(row.id, { reportedStatus: status, reportError: null });
-    return "reported";
+    const won = await repo.markGhlOutboundReported(row.id, { reportedStatus: status, reportError: null });
+    return won ? "reported" : "already_reported";
   }
   const accessToken = account ? await resolveGhlAccessToken(repo, deps, account) : null;
   if (!accessToken) {
@@ -836,11 +837,24 @@ export async function reportGhlOutcome(
   }
   const put = await deps.updateStatus(accessToken, row.ghlMessageId, status, reason ?? undefined);
   if (put.ok) {
-    await repo.markGhlOutboundReported(row.id, { reportedStatus: status, reportError: null });
-    return "reported";
+    const won = await repo.markGhlOutboundReported(row.id, { reportedStatus: status, reportError: null });
+    return won ? "reported" : "already_reported";
   }
   await repo.markGhlOutboundReported(row.id, { reportedStatus: null, reportError: put.error });
   return "unreported";
+}
+
+/**
+ * `reported` — this call stored the status (the only outcome that may remember
+ * or fire anything). `already_reported` — the PUT went through but an
+ * overlapping pass had already stored the row's status: count it like
+ * `reported`, but never fire. `unreported` — left for the next pass.
+ */
+export type GhlReportOutcome = "reported" | "already_reported" | "unreported";
+
+/** True when the row's status is stored, by this call or an overlapping one. */
+export function isReportedOutcome(outcome: GhlReportOutcome): boolean {
+  return outcome !== "unreported";
 }
 
 export type HandleProviderOutboundOutcome =
@@ -1117,8 +1131,10 @@ async function refuseIfNotOnWhatsapp(
   if (!row.toPhone || account.status === "needs_reauth" || account.status === "disabled") return null;
   if (!(await isRememberedNotOnWhatsappSafe(repo, row.locationId, row.toPhone))) return null;
   await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_NOT_ON_WHATSAPP });
-  await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
-  fireNotOnWhatsappFromSend(repo, deps, row, text);
+  const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
+  // An unreported PUT still fires (no later pass fires for a refused row); a
+  // status an overlapping pass already stored never fires twice.
+  if (outcome !== "already_reported") fireNotOnWhatsappFromSend(repo, deps, row, text);
   return { kind: "refused", reason: REASON_NOT_ON_WHATSAPP };
 }
 
@@ -1943,7 +1959,7 @@ async function drainGhlOutboundStatusesPass(
         }
         const account = await repo.getGhlAccountByLocationId(row.locationId);
         const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", row.refusalReason ?? REASON_GENERIC_REFUSED);
-        if (outcome === "reported") result.failed++;
+        if (isReportedOutcome(outcome)) result.failed++;
         else result.reportFailed++;
       }
     } catch (err) {
@@ -2005,11 +2021,12 @@ async function drainMultipartRow(
   const status = aggregate.status === "delivered" ? "delivered" : "failed";
   const unsentText = row.pendingText;
   const outcome = await reportGhlOutcome(repo, deps, account, row, status, aggregate.status === "failed" ? aggregate.reason : null);
-  if (outcome === "reported") {
+  if (isReportedOutcome(outcome)) {
     if (aggregate.status === "delivered") result.delivered++;
     else {
       result.failed++;
-      if (aggregate.reason === REASON_NOT_ON_WHATSAPP) {
+      // Only the pass that stored the status remembers and fires.
+      if (aggregate.reason === REASON_NOT_ON_WHATSAPP && outcome === "reported") {
         await rememberNotOnWhatsappBestEffort(repo, row);
         fireNotOnWhatsapp(repo, deps, result, row, unsentText);
       }
@@ -2290,7 +2307,7 @@ async function drainPendingSend(
     const account = await repo.getGhlAccountByLocationId(row.locationId);
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED });
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_BRIDGE_UNREACHABLE_EXHAUSTED);
-    if (outcome === "reported") result.failed++;
+    if (isReportedOutcome(outcome)) result.failed++;
     else result.reportFailed++;
     return;
   }
@@ -2323,7 +2340,7 @@ async function drainPendingSend(
     // unrecoverable row.
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_BRIDGE_UNREACHABLE_EXHAUSTED });
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_BRIDGE_UNREACHABLE_EXHAUSTED);
-    if (outcome === "reported") result.failed++;
+    if (isReportedOutcome(outcome)) result.failed++;
     else result.reportFailed++;
     return;
   }
@@ -2332,7 +2349,7 @@ async function drainPendingSend(
   if (gateReason) {
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
     const gated = await reportGhlOutcome(repo, deps, account, row, "failed", gateReason);
-    if (gated === "reported") result.failed++;
+    if (isReportedOutcome(gated)) result.failed++;
     else result.reportFailed++;
     return;
   }
@@ -2390,7 +2407,7 @@ async function drainPendingSend(
     }
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: decision.reason });
     const refused = await reportGhlOutcome(repo, deps, account, row, "failed", decision.reason);
-    if (refused === "reported") result.failed++;
+    if (isReportedOutcome(refused)) result.failed++;
     else result.reportFailed++;
     return;
   }
@@ -2398,7 +2415,7 @@ async function drainPendingSend(
   const reason = mapSendFailureReason(sendResult.code, isDefaultNumber);
   await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
   const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", reason);
-  if (outcome === "reported") result.failed++;
+  if (isReportedOutcome(outcome)) result.failed++;
   else result.reportFailed++;
 }
 
@@ -2420,7 +2437,7 @@ async function drainAcceptedRow(
 
   if (bridgeMessage.status === "sent") {
     const outcome = await reportGhlOutcome(repo, deps, account, row, "delivered", null);
-    if (outcome === "reported") result.delivered++;
+    if (isReportedOutcome(outcome)) result.delivered++;
     else result.reportFailed++;
     return;
   }
@@ -2431,6 +2448,9 @@ async function drainAcceptedRow(
       result.failed++;
       await rememberNotOnWhatsappBestEffort(repo, row);
       fireNotOnWhatsapp(repo, deps, result, row, unsentText);
+    } else if (outcome === "already_reported") {
+      // An overlapping pass stored it first; that pass remembers and fires.
+      result.failed++;
     } else result.reportFailed++;
     return;
   }
@@ -2438,7 +2458,7 @@ async function drainAcceptedRow(
   // fixed string by the bridge's own hard rule 1; never a raw upstream body).
   await noteGroupLeft(repo, row, [bridgeMessage.error]);
   const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", bridgeMessage.error ?? REASON_SENT_FAILED);
-  if (outcome === "reported") result.failed++;
+  if (isReportedOutcome(outcome)) result.failed++;
   else result.reportFailed++;
 }
 
@@ -2515,7 +2535,7 @@ export interface DrainGhlReadReceiptsResult {
  * on. The same wall-clock budget as `drainGhlOutboundStatuses` applies.
  * Never throws; logs fixed strings only.
  */
-/** Starts `whatsapp_message_read` after a successful read PUT. Never throws or awaits. */
+/** Starts `whatsapp_message_read` after a successful read PUT this pass stamped. Never throws or awaits. */
 function fireMessageRead(repo: GhlReadReceiptsRepo, deps: GhlProviderDeps, pass: TriggerPass, row: GhlOutboundMessage): void {
   startTrigger(pass, async () => {
     const target = await resolvePassTarget(repo, pass, row.locationId, row.tenantId);
@@ -2586,9 +2606,11 @@ export async function drainGhlReadReceipts(
       }
       const put = await deps.updateStatus(accessToken, row.ghlMessageId, "read");
       if (put.ok) {
-        await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
+        // Only the pass that stamps the row fires; an overlapping pass that
+        // lost the stamp still counts it (GHL has the read either way).
+        const won = await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
         result.reported++;
-        fireMessageRead(repo, deps, pass, row);
+        if (won) fireMessageRead(repo, deps, pass, row);
       } else if (put.status === 401 || (put.status !== undefined && put.status >= 500)) {
         // A token problem or a GHL outage: retry next pass, and spare the
         // rest of this location's rows a PUT that would fail the same way.

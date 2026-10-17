@@ -41,6 +41,7 @@ import {
   outboundRefusalReason,
   resolveDrainTarget,
   reportGhlOutcome,
+  isReportedOutcome,
   type GhlProviderDeps,
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
@@ -81,8 +82,8 @@ export async function releaseHeldOutboundMessages(
     if (won !== 1) return false; // another pass already moved the row; it owns the report
     const account = await repo.getGhlAccountByLocationId(row.locationId);
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", reason);
-    if (outcome !== "reported") result.reportFailed++;
-    return outcome === "reported";
+    if (!isReportedOutcome(outcome)) result.reportFailed++;
+    return isReportedOutcome(outcome);
   }
 
   /** The parts of a held picture/file message (empty for a plain text row), in seq order. */

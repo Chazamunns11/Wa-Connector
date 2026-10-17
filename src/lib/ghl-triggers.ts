@@ -57,7 +57,7 @@ export interface TriggerDeps extends GhlTokenRefreshDeps {
  * until the sandbox check in Task 7's checklist. This is the single place the
  * firing method lives, so a correction is made here only.
  *
- * Never throws; a timeout or network error is `{ ok: false, status: null }`.
+ * Never throws; a timeout, network error or redirect is `{ ok: false, status: null }`.
  */
 export async function postTriggerEvent(
   targetUrl: string,
@@ -81,6 +81,8 @@ export async function postTriggerEvent(
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
+        // Never follow a redirect off the checked host: a redirect is a failed fire.
+        redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
       }),
       timeout,

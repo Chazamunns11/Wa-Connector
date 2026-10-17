@@ -213,11 +213,22 @@ test("clearStaleOutboundPendingText clears only accepted, never-reported rows ol
 
 test("markGhlOutboundReported clears the kept text only when a status is stored", () => {
   const body = methodSource("markGhlOutboundReported");
-  assert.match(body, /if \(patch\.reportedStatus !== null\) \{[\s\S]*update\.pending_text = null;[\s\S]*\}\s*const \{ error \}/);
+  assert.match(body, /if \(patch\.reportedStatus !== null\) \{[\s\S]*update\.pending_text = null;[\s\S]*\}[\s\S]*const \{ data, error \}/);
+});
+
+test("markGhlOutboundReported only writes an unreported row and says whether it won", () => {
+  const body = methodSource("markGhlOutboundReported");
+  assert.match(body, /\.eq\("id", id\)\s*\.is\("reported_status", null\)\s*\.select\("id"\)/);
+  assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
 });
 
 test("getTenantPhone reads only the phone column of the tenant's session", () => {
   const body = methodSource("getTenantPhone");
   assert.match(body, /select\("phone_number"\)/);
   assert.match(body, /\.eq\("coach_id", tenantId\)/);
+});
+
+test("updateGhlOutboundSendState clears the text on accept unless workflow triggers are on", () => {
+  const body = methodSource("updateGhlOutboundSendState");
+  assert.match(body, /if \(patch\.sendState === "refused" \|\| \(patch\.sendState === "accepted" && !isWorkflowTriggersEnabled\(\)\)\) update\.pending_text = null;/);
 });

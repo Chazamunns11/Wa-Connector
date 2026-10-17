@@ -47,6 +47,9 @@ import { repo } from "@/lib/data";
 import { ghlWebhookPublicKeyPem, verifyGhlSignature } from "@/lib/ghl";
 import { handleProviderOutboundMessage, type GhlProviderOutboundPayload } from "@/lib/ghl-provider";
 
+/** The send can wait on the bridge and GHL, and the not-on-WhatsApp fire runs in `after()`; same ceiling as the cron route. */
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   const rawBody = await request.text();
   const publicKeyPem = ghlWebhookPublicKeyPem();

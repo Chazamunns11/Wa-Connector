@@ -264,7 +264,7 @@ export interface GhlOutboundMessage {
   /**
    * The exact text `src/lib/ghl.ts`'s `buildOutboundText` built for this row
    * (0070, extended by 0013). Kept while `sendState` is `pending_send`, `held`
-   * or `accepted`: a retry or a held release must resend this EXACT text under
+   * or (only with workflow triggers on) `accepted`: a retry or a held release must resend this EXACT text under
    * the SAME idempotency key, and a "not on WhatsApp" trigger carries it so a
    * workflow can fall back to SMS. Cleared to `null` when the row is refused,
    * when its status is reported to GHL (delivered or failed), and by the cron

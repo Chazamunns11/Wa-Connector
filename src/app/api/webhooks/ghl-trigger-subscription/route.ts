@@ -7,7 +7,12 @@
  */
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
-import { authorizeTriggerSubscription, decideTriggerSubscription } from "./logic";
+import {
+  authorizeTriggerSubscription,
+  checkTriggerSubscriptionBodySize,
+  decideTriggerSubscription,
+  refuseOversizeTriggerSubscription,
+} from "./logic";
 
 export async function POST(request: Request) {
   const env = { secret: process.env.GHL_WORKFLOW_WEBHOOK_SECRET };
@@ -16,9 +21,21 @@ export async function POST(request: Request) {
   const refusal = authorizeTriggerSubscription(secretHeader, env);
   if (refusal) return NextResponse.json(refusal.body, { status: refusal.status });
 
+  // Size before the body is read: a declared length over 16 KB is a 413.
+  const oversize = refuseOversizeTriggerSubscription(request.headers.get("content-length"));
+  if (oversize) return NextResponse.json(oversize.body, { status: oversize.status });
+
   let body: unknown = null;
+  let rawBody = "";
   try {
-    body = await request.json();
+    rawBody = await request.text();
+  } catch {
+    rawBody = "";
+  }
+  const tooBig = checkTriggerSubscriptionBodySize(rawBody);
+  if (tooBig) return NextResponse.json(tooBig.body, { status: tooBig.status });
+  try {
+    body = JSON.parse(rawBody);
   } catch {
     body = null;
   }

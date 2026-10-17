@@ -109,13 +109,16 @@ const SCOPES = [
 
 /**
  * `workflows.readonly` lets GHL show PingWren's workflow triggers. It is only
- * requested once `GHL_WORKFLOW_TRIGGERS_ENABLED` is on, because asking for a
+ * requested once `GHL_REQUEST_WORKFLOWS_SCOPE` is "true", because asking for a
  * scope the marketplace app hasn't enabled in the developer portal breaks the
- * install. Turn the scope on in the portal first, then the flag
- * (docs/GHL-WORKFLOW-TRIGGERS-SETUP.md). Existing installs re-authorise to get it.
+ * install. This is its own setting, independent of the firing flag
+ * (`GHL_WORKFLOW_TRIGGERS_ENABLED`): the scope has to be granted, and the
+ * sandbox check done, before firing is switched on. Order: portal scope, this
+ * setting, re-authorise, sandbox check, then the firing flag
+ * (docs/GHL-WORKFLOW-TRIGGERS-SETUP.md).
  */
 export function ghlOAuthScopes(): string[] {
-  return process.env.GHL_WORKFLOW_TRIGGERS_ENABLED === "true" ? [...SCOPES, "workflows.readonly"] : [...SCOPES];
+  return process.env.GHL_REQUEST_WORKFLOWS_SCOPE === "true" ? [...SCOPES, "workflows.readonly"] : [...SCOPES];
 }
 
 /** GHL is a hard dependency of nothing here — bound every call so a hung request can't hold an OAuth route or a status report open. Matches `whatsapp-bridge.ts`'s own `BRIDGE_TIMEOUT_MS`. */

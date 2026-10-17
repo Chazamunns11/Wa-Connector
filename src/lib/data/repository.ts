@@ -332,10 +332,12 @@ export interface GhlRepository {
    * handler/drain only. `pending_text` lifecycle (0070, extended by 0013):
    * IMPLEMENTATIONS MUST CLEAR it to `null` when `patch.sendState` is
    * `'refused'`, and MUST KEEP it for `'pending_send'`, `'held'` (the release
-   * pass still has to send it) and `'accepted'` (kept until the row's status is
-   * reported: `markGhlOutboundReported` clears it when it stores a status, and
+   * pass still has to send it) and, only while `GHL_WORKFLOW_TRIGGERS_ENABLED`
+   * is "true", `'accepted'` (kept until the row's status is reported:
+   * `markGhlOutboundReported` clears it when it stores a status, and
    * `clearStaleOutboundPendingText` clears one never reported within 7 days).
-   * The kept text lets a "not on WhatsApp" trigger carry the unsent text.
+   * The kept text lets a "not on WhatsApp" trigger carry the unsent text. With
+   * the flag off, the accept clears it, as before 0013.
    *
    * `refusalReason` (0071_ghl_outbound_refusal_reason.sql, adversarial-review
    * finding 3): pass this whenever `sendState: 'refused'` — the fixed reason
@@ -436,8 +438,13 @@ export interface GhlRepository {
    * row is picked up and retried on the next drain pass instead of being
    * silently marked done despite GHL never actually hearing the outcome.
    * When a status IS stored, the row's kept `pending_text` is cleared (0013).
+   *
+   * The write only applies while `reported_status IS NULL`, and resolves
+   * `true` only when this call changed the row. Two overlapping drains can
+   * both PUT the same status (idempotent), but only the winner gets `true`,
+   * so the "not on WhatsApp" memory and trigger happen once.
    */
-  markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundReportedStatus | null; reportError: string | null }): Promise<void>;
+  markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundReportedStatus | null; reportError: string | null }): Promise<boolean>;
 
   /**
    * Rows GHL already knows as `delivered`, not yet read-reported
@@ -447,8 +454,13 @@ export interface GhlRepository {
    */
   listGhlOutboundAwaitingRead(limit: number, sinceIso: string): Promise<{ message: GhlOutboundMessage; readAt: string }[]>;
 
-  /** Stamps `read_reported_at = now()` and `read_report_error`. The row is never listed by `listGhlOutboundAwaitingRead` again. */
-  markGhlOutboundReadReported(id: string, result: { readReportError: string | null }): Promise<void>;
+  /**
+   * Stamps `read_reported_at = now()` and `read_report_error`, only while
+   * `read_reported_at IS NULL`. Resolves `true` only when this call stamped
+   * the row (an overlapping pass gets `false` and fires nothing). The row is
+   * never listed by `listGhlOutboundAwaitingRead` again.
+   */
+  markGhlOutboundReadReported(id: string, result: { readReportError: string | null }): Promise<boolean>;
 
   // -------------------------------------------------------------------------
   // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — outbound

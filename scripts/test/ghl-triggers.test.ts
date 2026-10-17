@@ -238,6 +238,39 @@ test("postTriggerEvent: a 500 is not ok; a network error is status null", async 
   assert.deepEqual(await postTriggerEvent(OK_URL_A, "t", {}, { fetchImpl: boom }), { ok: false, status: null });
 });
 
+test("postTriggerEvent never follows a redirect: it counts as a failed fire", async () => {
+  let captured: RequestInit | null = null;
+  const spy = (async (_url: string, init: RequestInit) => {
+    captured = init;
+    return new Response("{}", { status: 200 });
+  }) as unknown as typeof fetch;
+  await postTriggerEvent(OK_URL_A, "t", {}, { fetchImpl: spy });
+  assert.equal((captured as unknown as RequestInit).redirect, "error");
+
+  // Real fetch against a local server that answers with a redirect.
+  const { createServer } = await import("node:http");
+  let hits = 0;
+  const server = createServer((req, res) => {
+    hits++;
+    if (req.url === "/start") {
+      res.writeHead(302, { Location: "/elsewhere" });
+      res.end();
+      return;
+    }
+    res.writeHead(200);
+    res.end("{}");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address() as { port: number };
+    const r = await postTriggerEvent(`http://127.0.0.1:${port}/start`, "t", {}, { timeoutMs: 2000 });
+    assert.deepEqual(r, { ok: false, status: null });
+    assert.equal(hits, 1, "the redirect target is never requested");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("toTriggerMessageType mapping", () => {
   assert.equal(toTriggerMessageType("conversation"), "text");
   assert.equal(toTriggerMessageType("extendedTextMessage"), "text");

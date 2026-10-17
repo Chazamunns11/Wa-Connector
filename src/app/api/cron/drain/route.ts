@@ -128,7 +128,9 @@ export async function GET(request: NextRequest) {
   let sessionTriggers = { fired: 0 };
   if (isWorkflowTriggersEnabled()) {
     try {
-      sessionTriggers = await drainSessionTriggers(repo, defaultSessionTriggerDeps(defaultTriggerDeps(defaultGhlProviderDeps)), now);
+      // The time now, not the cron's start: the drains above can take minutes,
+      // and the 5-minute "down" check must use the current clock.
+      sessionTriggers = await drainSessionTriggers(repo, defaultSessionTriggerDeps(defaultTriggerDeps(defaultGhlProviderDeps)), Date.now());
     } catch {
       console.error("[cron/drain] session trigger drain failed (non-fatal)");
     }

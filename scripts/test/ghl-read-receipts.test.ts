@@ -57,9 +57,12 @@ function setup(
         .map((message) => ({ message, readAt: "2026-10-17T09:00:00Z" }));
     },
     async markGhlOutboundReadReported(id, result) {
+      // Mirrors the real write: conditional on read_reported_at IS NULL.
       const r = byId.get(id)!;
+      if (r.readReportedAt !== null) return false;
       r.readReportedAt = new Date().toISOString();
       r.readReportError = result.readReportError;
+      return true;
     },
   };
   const deps = {
@@ -375,4 +378,25 @@ test("triggers: after the first failed fire the rest of the pass is skipped and 
   assert.equal(r.reported, 3);
   assert.equal(f.fired.length + r.triggersSkipped, 3);
   assert.ok(r.triggersSkipped >= 1);
+});
+
+test("triggers: two overlapping read drains fire whatsapp_message_read once", async () => {
+  const s = setup([row(1)], ["key-1"]);
+  const { repo } = withTriggerReads(s);
+  const f = fakeFire();
+  // A slow PUT, so both passes list the row before either stamps it.
+  const slowPut = async () => { await new Promise((resolve) => setTimeout(resolve, 5)); return { ok: true }; };
+  const deps = { ...s.deps, updateStatus: slowPut, fireTrigger: f.fireTrigger } as unknown as GhlProviderDeps;
+  const [a, b] = await Promise.all([drainGhlReadReceipts(repo, deps), drainGhlReadReceipts(repo, deps)]);
+  assert.equal(a.examined + b.examined, 2, "both passes saw the row");
+  assert.equal(a.reported + b.reported, 2, "both count it as reported");
+  assert.equal(f.fired.length, 1, "only the pass that stamped the row fires");
+});
+
+test("markGhlOutboundReadReported only stamps an unstamped row and says whether it won", () => {
+  const src = readFileSync(new URL("../../src/lib/data/supabase.ts", import.meta.url), "utf8");
+  const start = src.indexOf("async markGhlOutboundReadReported(");
+  const body = src.slice(start, src.indexOf("\n  }\n", start));
+  assert.match(body, /\.eq\("id", id\)\s*\.is\("read_reported_at", null\)\s*\.select\("id"\)/);
+  assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
 });

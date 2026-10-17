@@ -6,9 +6,9 @@
  *
  * Auth is a shared secret in `X-PingWren-Secret`, compared in constant time
  * against `GHL_WORKFLOW_WEBHOOK_SECRET`; an unset secret refuses everything
- * (503). Only `https` targets on `services.leadconnectorhq.com` or
- * `*.leadconnectorhq.com` are stored, because we later POST to that URL with
- * a location token. Hosts must be `services.leadconnectorhq.com` or below it.
+ * (503). Only `https` targets whose host is `services.leadconnectorhq.com`
+ * or one of its subdomains (`*.services.leadconnectorhq.com`) are stored,
+ * because we later POST to that URL with a location token.
  * Writes are scoped to the location. Nothing here logs the body, the target URL or any id.
  */
 import { createHash, timingSafeEqual } from "crypto";
@@ -47,6 +47,29 @@ export function authorizeTriggerSubscription(
     return { status: 401, body: { ok: false, error: "unauthorized" } };
   }
   return null;
+}
+
+/** The largest subscription body accepted. GHL's payloads are a few hundred bytes. */
+export const MAX_TRIGGER_SUBSCRIPTION_BODY_BYTES = 16 * 1024;
+
+const tooLarge: TriggerSubscriptionDecision = { status: 413, body: { ok: false, error: "payload_too_large" } };
+
+/**
+ * The size gate, run after auth and before the body is read: a declared
+ * `content-length` over 16 KB (or one that isn't a number) is refused with 413.
+ * A missing header is allowed here; `checkTriggerSubscriptionBodySize` re-checks
+ * the bytes actually read.
+ */
+export function refuseOversizeTriggerSubscription(contentLength: string | null): TriggerSubscriptionDecision | null {
+  if (contentLength === null) return null;
+  const declared = Number(contentLength);
+  if (!Number.isFinite(declared) || declared < 0 || declared > MAX_TRIGGER_SUBSCRIPTION_BODY_BYTES) return tooLarge;
+  return null;
+}
+
+/** The post-read re-check, for a body sent without (or with a wrong) `content-length`. */
+export function checkTriggerSubscriptionBodySize(rawBody: string): TriggerSubscriptionDecision | null {
+  return Buffer.byteLength(rawBody, "utf8") > MAX_TRIGGER_SUBSCRIPTION_BODY_BYTES ? tooLarge : null;
 }
 
 function isIdString(value: unknown): value is string {

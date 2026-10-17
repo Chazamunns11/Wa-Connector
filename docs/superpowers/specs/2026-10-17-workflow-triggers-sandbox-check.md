@@ -1,6 +1,8 @@
 # Workflow triggers and AI replies: sandbox check
 
-17 Oct 2026. Run on a sandbox sub-account with LC Premium Triggers & Actions on, after the new app version from `docs/GHL-WORKFLOW-TRIGGERS-SETUP.md` is installed. `GHL_WORKFLOW_TRIGGERS_ENABLED` starts off.
+17 Oct 2026. Run on a sandbox sub-account with LC Premium Triggers & Actions on, after the new app version from `docs/GHL-WORKFLOW-TRIGGERS-SETUP.md` is installed.
+
+Before you start: `workflows.readonly` is enabled in the portal, `GHL_REQUEST_WORKFLOWS_SCOPE=true` is set, and the sandbox install has been re-authorised (so its token carries the scope). `GHL_WORKFLOW_TRIGGERS_ENABLED` starts off, and is only set after section A passes.
 
 Nothing in the build has been run against real GHL. Three things are unverified: how `targetUrl` is called (method, auth, `Version` header), whether `services.leadconnectorhq.com` is the only host, and whether Conversation AI replies through a custom provider.
 
@@ -15,12 +17,12 @@ For each of the six keys:
 
 ## B. Firing (flag on)
 
-Set `GHL_WORKFLOW_TRIGGERS_ENABLED=true`. For each, confirm the workflow starts and the payload fields match the portal sample:
+Only after section A passes, set `GHL_WORKFLOW_TRIGGERS_ENABLED=true`. For each, confirm the workflow starts and the payload fields match the portal sample:
 - [ ] `whatsapp_message_received`: send a WhatsApp text to the number; then a voice note (`voice_note`), an image.
 - [ ] `whatsapp_missed_call`: ring the number and let it go unanswered, voice and video.
-- [ ] `whatsapp_message_read`: send from GHL, read on the phone.
-- [ ] `whatsapp_not_on_whatsapp`: send to a number not on WhatsApp. The trigger carries the text. A second send fails fast (30-day memory). Then message us from that number: the memory clears.
-- [ ] `whatsapp_disconnected`: take the phone offline 5+ minutes; one alert. Then log the linked device out: an alert at once with `logged_out`. `reconnectUrl` opens the connect page. Check the alert's description warns it is internal.
+- [ ] `whatsapp_message_read`: needs `GHL_READ_RECEIPTS_ENABLED=true` and the bridge's `WA_READ_RECEIPTS_ENABLED=true`. Send from GHL, read on the phone, then wait for (or run) the hourly cron: it fires from there.
+- [ ] `whatsapp_not_on_whatsapp`: send to a number not on WhatsApp. The trigger carries the text. A second send fails fast (30-day memory). Then message us from that number: the memory clears. An attachment-only send fires with an empty `message`.
+- [ ] `whatsapp_disconnected`: stop the number's bridge session for 5+ minutes; one alert. (Taking the phone offline does not drop a linked device, so it fires nothing.) Then log the linked device out: an alert at once with `logged_out`. `reconnectUrl` opens the connect page. Check the alert's description warns it is internal.
 - [ ] `whatsapp_reconnected`: bring it back; one alert with `downMinutes`.
 - [ ] A 2 minute blip fires nothing.
 

@@ -2,7 +2,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { authorizeTriggerSubscription, decideTriggerSubscription, type TriggerSubscriptionRepo } from "@/app/api/webhooks/ghl-trigger-subscription/logic";
+import {
+  authorizeTriggerSubscription,
+  checkTriggerSubscriptionBodySize,
+  decideTriggerSubscription,
+  MAX_TRIGGER_SUBSCRIPTION_BODY_BYTES,
+  refuseOversizeTriggerSubscription,
+  type TriggerSubscriptionRepo,
+} from "@/app/api/webhooks/ghl-trigger-subscription/logic";
 import { isAllowedTriggerTargetUrl } from "@/lib/ghl-trigger-keys";
 import type { GhlAccount } from "@/lib/types";
 
@@ -207,5 +214,60 @@ test("malformed bodies -> 400", async () => {
   const { repo } = fakeRepo();
   for (const b of [null, "x", [], {}, { triggerData: {}, extras: {} }, { triggerData: body().triggerData }, body({ eventType: "NOPE" }), body({ id: "" })]) {
     assert.equal((await decideTriggerSubscription(repo, SECRET, b, env)).status, 400);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Body size: a declared content-length over 16 KB is refused before reading.
+// ---------------------------------------------------------------------------
+
+test("size gate: a declared content-length over 16 KB is a 413; at the limit or missing is allowed", () => {
+  assert.equal(MAX_TRIGGER_SUBSCRIPTION_BODY_BYTES, 16 * 1024);
+  assert.deepEqual(refuseOversizeTriggerSubscription(String(16 * 1024 + 1)), { status: 413, body: { ok: false, error: "payload_too_large" } });
+  assert.equal(refuseOversizeTriggerSubscription("abc")?.status, 413);
+  assert.equal(refuseOversizeTriggerSubscription(String(16 * 1024)), null);
+  assert.equal(refuseOversizeTriggerSubscription("120"), null);
+  assert.equal(refuseOversizeTriggerSubscription(null), null);
+  assert.equal(checkTriggerSubscriptionBodySize("x".repeat(16 * 1024 + 1))?.status, 413);
+  assert.equal(checkTriggerSubscriptionBodySize("{}"), null);
+});
+
+test("route: an oversize body is refused with 413 without being read", async () => {
+  const before = process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+  process.env.GHL_WORKFLOW_WEBHOOK_SECRET = SECRET;
+  try {
+    const { POST } = await import("@/app/api/webhooks/ghl-trigger-subscription/route");
+    let read = false;
+    const request = {
+      headers: new Headers({ "x-pingwren-secret": SECRET, "content-length": String(20 * 1024) }),
+      async text() { read = true; return ""; },
+      async json() { read = true; return {}; },
+    } as unknown as Request;
+    const res = await POST(request);
+    assert.equal(res.status, 413);
+    assert.equal(read, false, "the body is never read");
+
+    // Without a secret, auth still answers first.
+    const unauth = { ...request, headers: new Headers({ "content-length": String(20 * 1024) }) } as unknown as Request;
+    assert.equal((await POST(unauth)).status, 401);
+  } finally {
+    if (before === undefined) delete process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+    else process.env.GHL_WORKFLOW_WEBHOOK_SECRET = before;
+  }
+});
+
+test("route: an undeclared body over 16 KB is refused with 413 after reading", async () => {
+  const before = process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+  process.env.GHL_WORKFLOW_WEBHOOK_SECRET = SECRET;
+  try {
+    const { POST } = await import("@/app/api/webhooks/ghl-trigger-subscription/route");
+    const request = {
+      headers: new Headers({ "x-pingwren-secret": SECRET }),
+      async text() { return "x".repeat(16 * 1024 + 1); },
+    } as unknown as Request;
+    assert.equal((await POST(request)).status, 413);
+  } finally {
+    if (before === undefined) delete process.env.GHL_WORKFLOW_WEBHOOK_SECRET;
+    else process.env.GHL_WORKFLOW_WEBHOOK_SECRET = before;
   }
 });

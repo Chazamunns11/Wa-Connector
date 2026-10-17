@@ -64,6 +64,9 @@ function constantTimeEqualStr(a: string, b: string): boolean {
   return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
 }
 
+/** The inbound drain then the session trigger drain run back to back, with fires in the background; same ceiling as the cron route. */
+export const maxDuration = 300;
+
 export async function POST(request: Request) {
   const secret = process.env.WHATSAPP_INBOUND_POKE_SECRET;
 

@@ -69,8 +69,11 @@ function setup(rowList: GhlOutboundMessage[]) {
     },
     async markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundMessage["reportedStatus"]; reportError: string | null }) {
       const row = rows.get(id)!;
+      // Mirrors the real write: conditional on reported_status IS NULL.
+      if (row.reportedStatus !== null) return false;
       if (patch.reportedStatus !== null) row.reportedStatus = patch.reportedStatus;
       row.reportError = patch.reportError;
+      return true;
     },
     async claimGhlTokenRefresh() { return true; },
     async saveGhlTokens() {},

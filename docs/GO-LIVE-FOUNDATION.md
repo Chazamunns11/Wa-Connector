@@ -581,10 +581,27 @@ Two app settings (Vercel):
 - `GHL_WORKFLOW_WEBHOOK_SECRET`: required for the subscription route. Unset
   means the route answers 503. The same value goes in the portal as the static
   header `X-PingWren-Secret`.
+- `GHL_REQUEST_WORKFLOWS_SCOPE`: off by default. Only `true` makes the install
+  ask for `workflows.readonly`. It does not turn firing on.
 - `GHL_WORKFLOW_TRIGGERS_ENABLED`: off by default. Only `true` turns firing on.
-  With it off, subscriptions are still stored and nothing is sent to GHL.
+  With it off, subscriptions are still stored and nothing is sent to GHL. With
+  it off, an accepted message's text is cleared at once (it is only kept for
+  the "not on WhatsApp" trigger).
 
-Add the `workflows.readonly` scope to the app in the developer portal first, then set `GHL_WORKFLOW_TRIGGERS_ENABLED=true` (the install only asks for the scope once the flag is on). Existing installs re-authorise.
+Turn it on in this order: enable the `workflows.readonly` scope in the
+developer portal, set `GHL_REQUEST_WORKFLOWS_SCOPE=true`, re-authorise existing
+installs, run the sandbox check's section A (subscriptions), then set
+`GHL_WORKFLOW_TRIGGERS_ENABLED=true`. Asking for a scope the portal hasn't
+enabled breaks the install, so never set the scope setting first.
+
+`whatsapp_message_read` also needs `GHL_READ_RECEIPTS_ENABLED=true` and the
+bridge's `WA_READ_RECEIPTS_ENABLED=true`, and fires from the hourly cron.
+`whatsapp_disconnected` means PingWren's connection to the number has been down
+5 minutes; a phone being offline does not drop a linked device.
+
+The 30-day "not on WhatsApp" memory applies even with the firing flag off: a
+contact who joins WhatsApp later stays refused until they message the number or
+30 days pass.
 Portal entries, the Subscription URL and the sample JSON are in
 `docs/GHL-WORKFLOW-TRIGGERS-SETUP.md`. Each trigger execution costs the
 customer $0.01 and needs LC Premium Triggers & Actions.
@@ -628,7 +645,8 @@ Firing `targetUrl` is undocumented by GHL, so the method is unverified.
 | `GHL_SYNC_DND` | No | `false` | Exactly `true` mirrors STOP/START onto the GHL contact's WhatsApp and SMS DND (`PUT /contacts/{id}` `dndSettings`; verify at first go-live). Failures are logged and never block the opt-out |
 | `GHL_READ_RECEIPTS_ENABLED` | No | `false` | Exactly `true` lets the cron report `read` to GHL for messages the bridge saw read. Turn on only after the real-device check |
 | `GHL_WORKFLOW_WEBHOOK_SECRET` | For triggers | none | Shared secret for `POST /api/webhooks/ghl-trigger-subscription`, sent by GHL as `X-PingWren-Secret`. Unset means the route answers 503 |
-| `GHL_WORKFLOW_TRIGGERS_ENABLED` | No | `false` | Exactly `true` fires WhatsApp events to GHL workflow triggers. Turn on only after the sandbox check |
+| `GHL_REQUEST_WORKFLOWS_SCOPE` | No | `false` | Exactly `true` adds `workflows.readonly` to the OAuth install. Set only after the scope is enabled in the developer portal, then re-authorise |
+| `GHL_WORKFLOW_TRIGGERS_ENABLED` | No | `false` | Exactly `true` fires WhatsApp events to GHL workflow triggers. Turn on only after the sandbox check, and after `GHL_REQUEST_WORKFLOWS_SCOPE` |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Supabase Storage bucket for inbound media; must match the bridge |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | Web-app side media switch; see the flip order below |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | Lifetime of signed media URLs |

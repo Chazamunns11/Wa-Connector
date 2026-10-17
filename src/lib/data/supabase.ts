@@ -40,6 +40,7 @@ import type {
 import { LOGO_BUCKET, LOGO_EXTENSION, normaliseHex, type SafeLogoType } from "@/lib/brand";
 import { ghlTenantKeyQueryFilters } from "@/lib/ghl";
 import { GROUP_SEND_CAP_UNITS } from "@/lib/ghl-provider";
+import { isWorkflowTriggersEnabled } from "@/lib/ghl-triggers";
 import { ActivationCapError } from "@/lib/billing/activation";
 import {
   buildGhlHealthSnapshot,
@@ -1265,11 +1266,13 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (patch.sendAttempts !== undefined) update.send_attempts = patch.sendAttempts;
     // pending_text lifecycle (0070, extended by 0013): the text is kept while a
     // row is 'pending_send' (a retry resends the SAME text), 'held' (the release
-    // pass still has to send it) and 'accepted' (until its status is reported,
-    // so a "not on WhatsApp" trigger can carry it; `markGhlOutboundReported`
-    // clears it, and the cron clears one never reported within 7 days). It is
-    // cleared here only when the row is refused.
-    if (patch.sendState === "refused") update.pending_text = null;
+    // pass still has to send it) and, only while workflow triggers are on,
+    // 'accepted' (until its status is reported, so a "not on WhatsApp" trigger
+    // can carry it; `markGhlOutboundReported` clears it, and the cron clears one
+    // never reported within 7 days). With triggers off nothing needs the text
+    // after the accept, so it is cleared then, as before 0013. Always cleared
+    // when the row is refused.
+    if (patch.sendState === "refused" || (patch.sendState === "accepted" && !isWorkflowTriggersEnabled())) update.pending_text = null;
     // 0071_ghl_outbound_refusal_reason.sql — stamped once, alongside (not
     // instead of) report_error, and never cleared again (adversarial-review
     // finding 3 — see Repository.updateGhlOutboundSendState's JSDoc).
@@ -1395,8 +1398,17 @@ export class SupabaseGhlRepository implements GhlRepository {
       // 0013: the kept text is dropped the moment the status is reported.
       update.pending_text = null;
     }
-    const { error } = await supabase.from("ghl_outbound_messages").update(update).eq("id", id);
+    // Conditional on the row still being unreported, so two overlapping
+    // drains cannot both "win" the same row: only the call that actually
+    // stamps it gets `true`, and only that caller remembers or fires.
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update(update)
+      .eq("id", id)
+      .is("reported_status", null)
+      .select("id");
     if (error) throw error;
+    return (data ?? []).length > 0;
   }
 
   async listGhlOutboundAwaitingRead(limit: number, sinceIso: string) {
@@ -1410,11 +1422,16 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async markGhlOutboundReadReported(id: string, result: { readReportError: string | null }) {
     const supabase = getServiceClient();
-    const { error } = await supabase
+    // Conditional, like markGhlOutboundReported: only the pass that stamps
+    // the row gets `true`, so an overlapping pass never fires message_read twice.
+    const { data, error } = await supabase
       .from("ghl_outbound_messages")
       .update({ read_reported_at: new Date().toISOString(), read_report_error: result.readReportError })
-      .eq("id", id);
+      .eq("id", id)
+      .is("read_reported_at", null)
+      .select("id");
     if (error) throw error;
+    return (data ?? []).length > 0;
   }
 
   /** Bulk insert — see `Repository.recordGhlOutboundAttachments`'s JSDoc for the "called exactly once, after every pre-dispatch refusal check" contract this relies on (no upsert/dedupe needed here — unlike `recordGhlOutboundMessage`'s GHL-redelivery dedupe, this is never called twice for the same message). */
