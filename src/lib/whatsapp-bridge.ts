@@ -170,15 +170,16 @@ export type SendWhatsappInput = {
 
 /**
  * Media plan (docs/MEDIA-PLAN.md §5.3) — the attachment counterpart to
- * `SendWhatsappInput`, mirroring the bridge's own `{ to, idempotencyKey,
- * attachment: { url, fileName? } }` body shape exactly (services/whatsapp-bridge/src/server.ts).
+ * `SendWhatsappInput`, mirroring the bridge's own `{ to | groupJid,
+ * idempotencyKey, attachment: { url, fileName? } }` body shape exactly
+ * (services/whatsapp-bridge/src/server.ts). Same EXACTLY-ONE-target rule as
+ * `SendWhatsappInput`.
  * Only ever sent when `WA_MEDIA_OUTBOUND_ENABLED` is on — see
  * `src/lib/ghl.ts`'s `isMediaOutboundEnabled`, the portal-side gate this
  * function's only caller (`src/lib/ghl-provider.ts`) checks first.
  */
-export interface SendWhatsappAttachmentInput {
+export type SendWhatsappAttachmentInput = {
   coachId: string;
-  to: string;
   attachment: {
     /** https:// only, ≤2048 chars — the bridge itself is the final validator (server.ts); this module passes the URL through untouched. */
     url: string;
@@ -186,7 +187,18 @@ export interface SendWhatsappAttachmentInput {
     fileName?: string;
   };
   idempotencyKey: string;
-}
+} & (
+  | {
+      /** Strict E.164, exactly as `SendWhatsappInput.to`. */
+      to: string;
+      groupJid?: never;
+    }
+  | {
+      /** Opt-in groups — an enabled group's JID, exactly as `SendWhatsappInput.groupJid`; the bridge's send route takes it with an attachment too. */
+      groupJid: string;
+      to?: never;
+    }
+);
 
 /**
  * Every operation a WhatsApp send/session transport must support — see this
@@ -391,7 +403,10 @@ const bridgeTransport: WhatsappTransport = {
   async sendAttachment(input: SendWhatsappAttachmentInput): Promise<BridgeSendResult> {
     const res = await bridgeFetch(`/sessions/${encodeURIComponent(input.coachId)}/send`, {
       method: "POST",
-      body: { to: input.to, attachment: input.attachment, idempotencyKey: input.idempotencyKey },
+      body:
+        input.groupJid !== undefined
+          ? { groupJid: input.groupJid, attachment: input.attachment, idempotencyKey: input.idempotencyKey }
+          : { to: input.to, attachment: input.attachment, idempotencyKey: input.idempotencyKey },
     });
     if ("ok" in res) return res;
     if (res.status === 200 || res.status === 202) {

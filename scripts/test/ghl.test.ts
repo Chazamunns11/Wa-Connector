@@ -27,7 +27,7 @@ import {
   upsertGhlGroupContact,
   verifyGhlSignature,
 } from "@/lib/ghl";
-import { listWhatsappGroups, refreshWhatsappGroups, sendWhatsappMessage } from "@/lib/whatsapp-bridge";
+import { listWhatsappGroups, refreshWhatsappGroups, sendWhatsappAttachment, sendWhatsappMessage } from "@/lib/whatsapp-bridge";
 import {
   drainGhlOutboundStatuses,
   handleProviderOutboundMessage,
@@ -377,8 +377,15 @@ interface FakeCall {
  */
 function createFakeRepo(
   accounts: GhlAccount[] = [],
-  opts: { numbers?: Record<string, LocationNumber[]>; sticky?: Record<string, string> } = {}
+  opts: {
+    numbers?: Record<string, LocationNumber[]>;
+    sticky?: Record<string, string>;
+    /** Opt-in groups (Task 9) — group contacts, keyed `${locationId}:${ghlContactId}`. */
+    groups?: Record<string, { tenantId: string; groupJid: string; enabled: boolean }>;
+  } = {}
 ) {
+  /** Every `markWhatsappGroupLeft` call, in order (Task 9). */
+  const groupsLeft: { tenantId: string; groupJid: string }[] = [];
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const rows = new Map<string, GhlOutboundMessage>();
   const bridgeLedger = new Map<string, { status: string; error: string | null }>();
@@ -405,6 +412,15 @@ function createFakeRepo(
     async getStickyTenant(locationId: string, ghlContactId: string) {
       calls.push({ method: "getStickyTenant", args: [locationId, ghlContactId] });
       return opts.sticky?.[`${locationId}:${ghlContactId}`] ?? null;
+    },
+    async getWhatsappGroupByContact(locationId: string, ghlContactId: string) {
+      calls.push({ method: "getWhatsappGroupByContact", args: [locationId, ghlContactId] });
+      const group = opts.groups?.[`${locationId}:${ghlContactId}`];
+      return group ? { ...group } : null;
+    },
+    async markWhatsappGroupLeft(tenantId: string, groupJid: string) {
+      calls.push({ method: "markWhatsappGroupLeft", args: [tenantId, groupJid] });
+      groupsLeft.push({ tenantId, groupJid });
     },
     async recordGhlOutboundMessage(draft: GhlOutboundMessageDraft) {
       calls.push({ method: "recordGhlOutboundMessage", args: [draft] });
@@ -548,7 +564,7 @@ function createFakeRepo(
     },
   };
 
-  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls };
+  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls, groupsLeft };
 }
 
 function makeSendResult(overrides: Partial<Extract<BridgeSendResult, { ok: true }>["message"]> = {}): BridgeSendResult {
@@ -2670,4 +2686,271 @@ test("sendWhatsappMessage: a groupJid input sends { groupJid } and no 'to'; a ph
     )
   );
   assert.deepEqual(phone.requests[0].body, { to: "+447700900123", text: "hi", idempotencyKey: "key-2" });
+});
+
+test("sendWhatsappAttachment: a groupJid input sends { groupJid, attachment } and no 'to'; a phone input is unchanged", async () => {
+  const message = {
+    id: "m1",
+    idempotencyKey: "att-1",
+    toPhone: null,
+    groupJid: "120363012345678901@g.us",
+    status: "accepted",
+    waMessageId: null,
+    error: null,
+    createdAt: "2026-10-17T00:00:00.000Z",
+    sentAt: null,
+  };
+  const group = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(202, { ok: true, replay: false, message }),
+      () =>
+        sendWhatsappAttachment({
+          coachId: BRIDGE_COACH,
+          groupJid: "120363012345678901@g.us",
+          attachment: { url: "https://x/a.pdf" },
+          idempotencyKey: "att-1",
+        })
+    )
+  );
+  assert.deepEqual(group.requests[0].body, { groupJid: "120363012345678901@g.us", attachment: { url: "https://x/a.pdf" }, idempotencyKey: "att-1" });
+  assert.deepEqual(group.result, { ok: true, replay: false, message });
+
+  const phone = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(202, { ok: true, replay: false, message: { ...message, toPhone: "+447700900123", groupJid: null } }),
+      () => sendWhatsappAttachment({ coachId: BRIDGE_COACH, to: "+447700900123", attachment: { url: "https://x/a.pdf" }, idempotencyKey: "att-2" })
+    )
+  );
+  assert.deepEqual(phone.requests[0].body, { to: "+447700900123", attachment: { url: "https://x/a.pdf" }, idempotencyKey: "att-2" });
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in groups (Task 9) — outbound to a group contact. The group check runs
+// FIRST: before sticky/default number routing and before phone
+// normalisation. A group contact is sent to its group (`groupJid`) from the
+// group's OWN number; a switched-off group is refused with a fixed string.
+// ---------------------------------------------------------------------------
+
+const GROUP_JID = "120363012345678901@g.us";
+const GROUP_CONTACT = "ghl-group-contact-1";
+const GROUP_OFF_REASON = "WhatsApp group sync is turned off for this group";
+const GROUP_LEFT_REASON = "This WhatsApp number is no longer in that group";
+
+/** The group lives on the SECOND (non-default) number, while the contact's sticky row points at the default — the group's number must win. */
+function groupRepo(enabled = true) {
+  return createFakeRepo([makeAccount()], {
+    numbers: TWO_NUMBERS,
+    sticky: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: TENANT_ID },
+    groups: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: { tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID, enabled } },
+  });
+}
+
+function groupPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  // A group contact has no phone — GHL sends whatever it has (often nothing).
+  return samplePayloadFor({ contactId: GROUP_CONTACT, phone: "", messageId: "msg-group", message: "hello group", ...overrides });
+}
+
+test("groups outbound: an enabled group contact sends to the groupJid from the GROUP's number — not the sticky or default number — and the row carries that tenant", async () => {
+  const bundle = groupRepo();
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.deepEqual(sendCalls[0], { coachId: SECOND_TENANT_ID, groupJid: GROUP_JID, text: "hello group", idempotencyKey: "msg-group" });
+  assert.equal("to" in sendCalls[0], false, "a group send never carries a phone");
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  assert.equal(row.toPhone, null);
+  assert.equal(row.sendState, "accepted");
+});
+
+test("groups outbound: the group lookup runs FIRST — sticky/default routing is never consulted for a group contact", async () => {
+  const bundle = groupRepo();
+  const { deps } = makeDeps();
+  await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  const methods = bundle.calls.map((c) => c.method);
+  assert.ok(methods.includes("getWhatsappGroupByContact"));
+  assert.ok(!methods.includes("getStickyTenant"), methods.join(", "));
+  assert.ok(!methods.includes("listLocationNumbers"), methods.join(", "));
+  assert.ok(methods.indexOf("getWhatsappGroupByContact") < methods.indexOf("recordGhlOutboundMessage"));
+});
+
+test("groups outbound: a switched-off group refuses with the fixed string — no send, failed reported inline", async () => {
+  const bundle = groupRepo(false);
+  const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+  assert.equal(GHL_PROVIDER_REASONS.groupSyncOff, GROUP_OFF_REASON);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(sendAttachmentCalls.length, 0);
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.sendState, "refused");
+  assert.equal(row.refusalReason, GROUP_OFF_REASON);
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  assert.equal(statusCalls.length, 1);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
+});
+
+test("groups outbound: a switched-off group refuses even with attachments and the media split on — nothing dispatched, no part rows", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo(false);
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+    assert.equal(bundle.attachments.size, 0);
+  });
+});
+
+test("groups outbound: the bridge refusing with group_not_enabled (switched off mid-flight) is terminal, reported with the group-off string", async () => {
+  const bundle = groupRepo();
+  const { deps, statusCalls } = makeDeps({
+    sendWhatsapp: async () => ({ ok: false, code: "group_not_enabled", message: "'groupJid' is not an enabled WhatsApp group for this session" }),
+  });
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+  assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
+});
+
+test("groups outbound: not a group contact -> today's path unchanged (phone normalised, sticky routing)", async () => {
+  const bundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, samplePayloadFor({ messageId: "msg-not-group", phone: "07700 900123" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.deepEqual(sendCalls[0], { coachId: SECOND_TENANT_ID, to: "+447700900123", text: "hi there", idempotencyKey: "msg-not-group" });
+  assert.ok(bundle.calls.some((c) => c.method === "getStickyTenant"));
+});
+
+test("groups outbound (media split): text and every attachment go to the groupJid from the group's number", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf", "https://x/b.png"] }), deps);
+    assert.deepEqual(outcome, { kind: "accepted" });
+    assert.equal(sendCalls.length, 1);
+    assert.equal(sendCalls[0].groupJid, GROUP_JID);
+    assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+    assert.equal(sendAttachmentCalls.length, 2);
+    for (const call of sendAttachmentCalls) {
+      assert.equal(call.groupJid, GROUP_JID);
+      assert.equal(call.coachId, SECOND_TENANT_ID);
+      assert.equal("to" in call, false);
+    }
+  });
+});
+
+test("groups drain: a pending_send group row is retried to the groupJid on the row's own tenant", async () => {
+  const bundle = groupRepo();
+  const row = seedAcceptedRow(bundle, {
+    tenantId: SECOND_TENANT_ID,
+    ghlContactId: GROUP_CONTACT,
+    toPhone: null,
+    sendState: "pending_send",
+    pendingText: "hello group",
+    idempotencyKey: "idem-group-retry",
+  });
+  const { deps, sendCalls } = makeDeps();
+  const result = await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(result.retried, 1);
+  assert.deepEqual(sendCalls, [{ coachId: SECOND_TENANT_ID, groupJid: GROUP_JID, text: "hello group", idempotencyKey: "idem-group-retry" }]);
+  assert.equal(row.sendState, "accepted");
+});
+
+test("groups drain: a pending_send group row whose group was switched off meanwhile is retried (the bridge's replay check may still own it) and its group_not_enabled refusal reports the group-off string", async () => {
+  const bundle = groupRepo(false);
+  const row = seedAcceptedRow(bundle, {
+    tenantId: SECOND_TENANT_ID,
+    ghlContactId: GROUP_CONTACT,
+    toPhone: null,
+    sendState: "pending_send",
+    pendingText: "hello group",
+  });
+  const { deps, sendCalls, statusCalls } = makeDeps({
+    sendWhatsapp: async (input) => {
+      sendCalls.push(input);
+      return { ok: false, code: "group_not_enabled", message: "'groupJid' is not an enabled WhatsApp group for this session" };
+    },
+  });
+  await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].groupJid, GROUP_JID);
+  assert.equal(row.refusalReason, GROUP_OFF_REASON);
+  assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
+});
+
+test("groups drain: a pending_send row with no phone and no group contact keeps today's defensive give-up (no send)", async () => {
+  const bundle = createFakeRepo([makeAccount()]);
+  const row = seedAcceptedRow(bundle, { toPhone: null, sendState: "pending_send", pendingText: "hi" });
+  const { deps, sendCalls } = makeDeps();
+  await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(row.refusalReason, GHL_PROVIDER_REASONS.bridgeUnreachableExhausted);
+});
+
+test("groups outbound (media split): the up-front budget check counts a group part as 5 units, like the bridge", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps({
+      // 9 units left: enough for 2 one-to-one parts, not for 2 group parts (10).
+      getSession: async (coachId) => ({
+        ok: true,
+        session: { coachId, status: "connected", phoneNumber: "+447700900000", qr: null, sentToday: 141, dailyCap: 150, queueLength: 0 },
+      }),
+    });
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.capReached });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  });
+});
+
+test("groups drain: a group send that failed with 'no longer in that group' marks the group left on its number, and reports the bridge's string", async () => {
+  const bundle = groupRepo();
+  const row = seedAcceptedRow(bundle, { tenantId: SECOND_TENANT_ID, ghlContactId: GROUP_CONTACT, toPhone: null, idempotencyKey: "idem-left" });
+  bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:idem-left`, { status: "failed", error: GROUP_LEFT_REASON });
+  const { deps, statusCalls } = makeDeps();
+  const result = await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(bundle.groupsLeft, [{ tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID }]);
+  assert.equal(statusCalls[0].errorMessage, GROUP_LEFT_REASON);
+  assert.equal(row.reportedStatus, "failed");
+});
+
+test("groups drain: any OTHER failure never marks a group left", async () => {
+  const bundle = groupRepo();
+  seedAcceptedRow(bundle, { tenantId: SECOND_TENANT_ID, ghlContactId: GROUP_CONTACT, toPhone: null, idempotencyKey: "idem-other" });
+  bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:idem-other`, { status: "failed", error: "WhatsApp delivery failed" });
+  const { deps } = makeDeps();
+  await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.deepEqual(bundle.groupsLeft, []);
+});
+
+test("groups drain: marking the group left is best effort — a repo failure there never stops the report", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const bundle = groupRepo();
+  bundle.repo.markWhatsappGroupLeft = async () => {
+    throw new Error("db down");
+  };
+  const row = seedAcceptedRow(bundle, { tenantId: SECOND_TENANT_ID, ghlContactId: GROUP_CONTACT, toPhone: null, idempotencyKey: "idem-left-2" });
+  bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:idem-left-2`, { status: "failed", error: GROUP_LEFT_REASON });
+  const { deps, statusCalls } = makeDeps();
+  const result = await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(result.failed, 1);
+  assert.equal(statusCalls[0].errorMessage, GROUP_LEFT_REASON);
+  assert.equal(row.reportedStatus, "failed");
+});
+
+test("groups drain (multipart): an attachment part failing with 'no longer in that group' marks the group left too", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps } = makeDeps();
+    await handleProviderOutboundMessage(bundle.repo, groupPayload({ messageId: "msg-group-mp", attachments: ["https://x/a.pdf"] }), deps);
+    const row = [...bundle.rows.values()][0];
+    const part = [...bundle.attachments.values()][0];
+    bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:${row.idempotencyKey}`, { status: "failed", error: GROUP_LEFT_REASON });
+    bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:${part.idempotencyKey}`, { status: "failed", error: GROUP_LEFT_REASON });
+    await drainGhlOutboundStatuses(bundle.repo, deps);
+    assert.deepEqual(bundle.groupsLeft, [{ tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID }]);
+    assert.equal(row.reportedStatus, "failed");
+  });
 });

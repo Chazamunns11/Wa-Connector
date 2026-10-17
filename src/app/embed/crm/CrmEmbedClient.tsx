@@ -650,6 +650,153 @@ function EmbedNumberCard({
         poll={poll}
         logout={logout}
       />
+
+      <GroupsSection slot={slot} callEmbedApi={callEmbedApi} />
+    </div>
+  );
+}
+
+/** One group as `POST /api/crm/embed/groups` returns it — WhatsApp's own group id, never a tenant id. */
+interface EmbedGroup {
+  jid: string;
+  name: string;
+  size: number;
+  enabled: boolean;
+  left: boolean;
+}
+
+/** Shown once, after the first group is switched on for this number. */
+const GROUP_TAG_HINT = "Group contacts are tagged whatsapp-group. Exclude that tag from bulk SMS workflows.";
+
+/** The groups list from a route response, or `null` when the response isn't a success. */
+function groupsFrom(json: Record<string, unknown>): EmbedGroup[] | null {
+  return json.ok === true && Array.isArray(json.groups) ? (json.groups as EmbedGroup[]) : null;
+}
+
+/**
+ * Opt-in groups (Task 9) — one number's WhatsApp groups, collapsed until the
+ * owner asks ("Show groups"). Every call posts `{ slot }` (plus the group's
+ * JID and the new switch value to change one); the server answers with the
+ * whole list each time. Server `message`s are shown verbatim. A group the
+ * number has left is shown as "Left", with no switch.
+ */
+function GroupsSection({
+  slot,
+  callEmbedApi,
+}: {
+  slot: LocationSlot;
+  callEmbedApi: (path: string, method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [groups, setGroups] = useState<EmbedGroup[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busyJid, setBusyJid] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showHint, setShowHint] = useState(false);
+
+  async function request(body: Record<string, unknown>): Promise<EmbedGroup[] | null> {
+    try {
+      const json = await callEmbedApi("/api/crm/embed/groups", "POST", body);
+      const list = groupsFrom(json);
+      if (list) {
+        setError(null);
+        return list;
+      }
+      setError(typeof json.message === "string" ? json.message : "Something went wrong. Please try again.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    }
+    return null;
+  }
+
+  async function load() {
+    setLoading(true);
+    const list = await request({ slot });
+    setLoading(false);
+    if (list) setGroups(list);
+  }
+
+  async function toggle(group: EmbedGroup) {
+    const enabling = !group.enabled;
+    const firstEnable = enabling && !(groups ?? []).some((g) => g.enabled);
+    setBusyJid(group.jid);
+    const list = await request({ slot, groupJid: group.jid, enabled: enabling });
+    setBusyJid(null);
+    if (!list) return;
+    setGroups(list);
+    if (firstEnable) setShowHint(true);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-expanded={open}
+          onClick={() => {
+            const next = !open;
+            setOpen(next);
+            if (next && groups === null && !loading) void load();
+          }}
+        >
+          {open ? "Hide groups" : "Show groups"}
+        </Button>
+      </div>
+
+      {open ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-border px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-semibold text-ink">Groups</h3>
+            {groups !== null ? (
+              <Button size="sm" variant="ghost" disabled={loading} onClick={() => void load()}>
+                {loading ? "Loading…" : "Reload"}
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-xs text-ink-faint">Switch a group on to see its messages in HighLevel and reply to the whole group.</p>
+
+          {loading && groups === null ? <p className="text-xs text-ink-faint">Loading groups…</p> : null}
+          {error ? <p className="text-xs text-loss">{error}</p> : null}
+          {showHint ? <p className="rounded border border-info/30 bg-info/10 px-2.5 py-2 text-xs text-info">{GROUP_TAG_HINT}</p> : null}
+
+          {groups !== null && groups.length === 0 ? <p className="text-xs text-ink-faint">This number isn&apos;t in any WhatsApp groups.</p> : null}
+          {groups !== null && groups.length > 0 ? (
+            <ul className="flex flex-col divide-y divide-border">
+              {groups.map((group) => (
+                <li key={group.jid} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm text-ink">{group.name || "Unnamed group"}</p>
+                    {!group.left ? (
+                      <p className="text-xs text-ink-faint">
+                        {group.size} {group.size === 1 ? "member" : "members"}
+                      </p>
+                    ) : null}
+                  </div>
+                  {group.left ? (
+                    <Chip tone="muted" title="This number is no longer in this group">
+                      Left
+                    </Chip>
+                  ) : (
+                    <label className="flex shrink-0 items-center gap-2 text-xs text-ink">
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        checked={group.enabled}
+                        disabled={busyJid !== null}
+                        onChange={() => void toggle(group)}
+                        aria-label={`Sync ${group.name || "this group"} to HighLevel`}
+                        className="h-4 w-4 accent-[var(--color-accent)]"
+                      />
+                      {busyJid === group.jid ? "Saving…" : group.enabled ? "On" : "Off"}
+                    </label>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
