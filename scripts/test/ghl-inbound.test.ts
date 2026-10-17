@@ -29,7 +29,8 @@ import {
   type GhlInboundDeps,
   type GhlInboundRepo,
 } from "@/lib/ghl-inbound";
-import type { GhlAccount, WhatsappInboundMessage } from "@/lib/types";
+import { shouldReplaceSticky } from "@/lib/location-numbers";
+import type { GhlAccount, LocationNumber, WhatsappInboundMessage } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // describeInboundMediaPlaceholder — pure, direct tests (plan §Q6 / test 6).
@@ -134,15 +135,35 @@ interface FakeCall {
  * (`claimWhatsappInboundMessage`, the SAME shape the coach drain uses), the
  * un-claim-on-retry contract (`recordGhlInboundPushFailure`'s `unclaim`
  * flag), and an atomic-ish `claimGhlTokenRefresh`.
+ *
+ * Multiple numbers (Task 3): `numbers` seeds a location's
+ * `ghl_location_numbers` rows (default: the one slot-1 row install creates for
+ * the account's tenant). `getGhlAccountByTenantId` resolves through them like
+ * supabase.ts does, so a second number's row finds its location's account
+ * (whose `tenantId` stays the DEFAULT number). `sticky` is the in-memory
+ * `ghl_contact_numbers`, written with the same strictly-newer rule
+ * (`shouldReplaceSticky`) the real repository applies.
  */
-function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessage[] = []) {
+function createFakeRepo(
+  accounts: GhlAccount[] = [],
+  rows: WhatsappInboundMessage[] = [],
+  numbers: Record<string, LocationNumber[]> = {}
+) {
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const rowsById = new Map(rows.map((r) => [r.id, { ...r }]));
   const calls: FakeCall[] = [];
+  const sticky = new Map<string, { tenantId: string; lastInboundAt: string }>();
   let claimedAt: number | null = null;
 
+  function numbersFor(locationId: string): LocationNumber[] {
+    const seeded = numbers[locationId];
+    if (seeded) return seeded;
+    const account = accountsByLocation.get(locationId);
+    return account ? [{ tenantId: account.tenantId, slot: 1, isDefault: true, label: null }] : [];
+  }
+
   function accountForTenant(tenantId: string): GhlAccount | undefined {
-    return [...accountsByLocation.values()].find((a) => a.tenantId === tenantId);
+    return [...accountsByLocation.values()].find((a) => numbersFor(a.locationId).some((n) => n.tenantId === tenantId));
   }
 
   const repo: GhlInboundRepo = {
@@ -217,9 +238,19 @@ function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessag
       if (path.startsWith(FAIL_SIGN_PREFIX)) return null;
       return `https://storage.example.supabase.co/object/sign/wa-media/${path}?token=fake`;
     },
+    async listLocationNumbers(locationId: string) {
+      calls.push({ method: "listLocationNumbers", args: [locationId] });
+      return numbersFor(locationId);
+    },
+    async recordInboundForStickiness(locationId: string, ghlContactId: string, tenantId: string, receivedAtIso: string) {
+      calls.push({ method: "recordInboundForStickiness", args: [locationId, ghlContactId, tenantId, receivedAtIso] });
+      const key = `${locationId}:${ghlContactId}`;
+      if (!shouldReplaceSticky(sticky.get(key)?.lastInboundAt ?? null, receivedAtIso)) return;
+      sticky.set(key, { tenantId, lastInboundAt: receivedAtIso });
+    },
   };
 
-  return { repo, accountsByLocation, rowsById, calls };
+  return { repo, accountsByLocation, rowsById, calls, sticky };
 }
 
 /** Media plan test fixture marker — see `createFakeRepo`'s `createWhatsappMediaSignedUrl` fake above. */
@@ -771,4 +802,105 @@ test("describeStoredMediaLabel / describeTooLargeMediaPlaceholder — pure, dire
     describeTooLargeMediaPlaceholder("imageMessage"),
     "[Photo received on WhatsApp (too large to transfer — view it on the connected phone)]"
   );
+});
+
+// ---------------------------------------------------------------------------
+// Multiple numbers per location (Task 3) — stickiness + the inbound prefix.
+// ---------------------------------------------------------------------------
+
+const SECOND_TENANT_ID = "33333333-3333-4333-8333-333333333333";
+
+/** Slot 1 (the account's own tenant) is the unlabelled default; slot 2 is labelled "Sales". */
+const TWO_NUMBERS: Record<string, LocationNumber[]> = {
+  [LOCATION_ID]: [
+    { tenantId: TENANT_ID, slot: 1, isDefault: true, label: null },
+    { tenantId: SECOND_TENANT_ID, slot: 2, isDefault: false, label: "Sales" },
+  ],
+};
+
+test("drainGhlInboundReplies: after a successful push, stickiness is recorded with the ROW's tenant (not the account's default) and its received_at", async () => {
+  const row = makeRow({ coachId: SECOND_TENANT_ID, receivedAt: "2026-08-01T09:00:00.000Z" });
+  const { repo, calls, sticky } = createFakeRepo([makeAccount()], [row], TWO_NUMBERS);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  const recorded = calls.filter((c) => c.method === "recordInboundForStickiness");
+  assert.deepEqual(recorded.map((c) => c.args), [[LOCATION_ID, "contact-1", SECOND_TENANT_ID, "2026-08-01T09:00:00.000Z"]]);
+  assert.deepEqual(sticky.get(`${LOCATION_ID}:contact-1`), { tenantId: SECOND_TENANT_ID, lastInboundAt: "2026-08-01T09:00:00.000Z" });
+});
+
+test("drainGhlInboundReplies: stickiness is never recorded for a push that did not land", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeRow()], TWO_NUMBERS);
+  const { deps } = makeDeps({ addInboundMessage: async () => ({ ok: false, kind: "rejected", error: "GHL inbound message rejected (HTTP 400)" }) });
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.rejected, 1);
+  assert.equal(calls.filter((c) => c.method === "recordInboundForStickiness").length, 0);
+});
+
+test("drainGhlInboundReplies: an OLDER row drained after a newer one never overwrites the newer sticky number (Review Focus 3)", async () => {
+  // Drained oldest-created first, but the second-created row carries the
+  // EARLIER received_at — the out-of-order shape a replayed/late row has.
+  const newer = makeRow({ coachId: SECOND_TENANT_ID, receivedAt: "2026-08-01T10:00:00.000Z", createdAt: "2026-08-01T10:00:01.000Z" });
+  const older = makeRow({ coachId: TENANT_ID, receivedAt: "2026-08-01T09:00:00.000Z", createdAt: "2026-08-01T10:00:02.000Z" });
+  const { repo, sticky } = createFakeRepo([makeAccount()], [newer, older], TWO_NUMBERS);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 2);
+  assert.deepEqual(sticky.get(`${LOCATION_ID}:contact-1`), { tenantId: SECOND_TENANT_ID, lastInboundAt: "2026-08-01T10:00:00.000Z" });
+});
+
+test("drainGhlInboundReplies: a stickiness write that throws never un-pushes the reply — the row stays 'ghl_pushed'", async () => {
+  const row = makeRow({ coachId: SECOND_TENANT_ID });
+  const { repo, rowsById } = createFakeRepo([makeAccount()], [row], TWO_NUMBERS);
+  const throwingSticky: GhlInboundRepo = {
+    ...repo,
+    recordInboundForStickiness: async () => {
+      throw new Error("simulated Supabase error");
+    },
+  };
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(throwingSticky, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(result.retried, 0);
+  assert.equal(postCalls.length, 1);
+  assert.equal(rowsById.get(row.id)!.resolution, "ghl_pushed");
+});
+
+test("drainGhlInboundReplies: with more than one number, the GHL body is prefixed '[<label>] ' or '[Number <slot>] '", async () => {
+  const labelled = makeRow({ coachId: SECOND_TENANT_ID, body: "hi from the sales line" });
+  const unlabelled = makeRow({ coachId: TENANT_ID, body: "hi from the main line" });
+  const { repo } = createFakeRepo([makeAccount()], [labelled, unlabelled], TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.deepEqual(postCalls.map((c) => c.body), ["[Sales] hi from the sales line", "[Number 1] hi from the main line"]);
+});
+
+test("drainGhlInboundReplies: with more than one number, a media placeholder body is prefixed too", async () => {
+  const row = makeRow({ coachId: SECOND_TENANT_ID, body: null, messageType: "imageMessage" });
+  const { repo } = createFakeRepo([makeAccount()], [row], TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, `[Sales] ${describeInboundMediaPlaceholder("imageMessage")}`);
+});
+
+test("drainGhlInboundReplies: with one number, the GHL body is never prefixed (even when that number has a label)", async () => {
+  const numbers = { [LOCATION_ID]: [{ tenantId: TENANT_ID, slot: 1 as const, isDefault: true, label: "Main" }] };
+  const { repo } = createFakeRepo([makeAccount()], [makeRow({ body: "plain" })], numbers);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "plain");
 });

@@ -55,7 +55,11 @@
  *      best-effort ordering, verify-at-go-live whether GHL actually honours
  *      it).
  *   5. RESOLVE — `'ghl_pushed'` on success; see the retry table below for
- *      every failure branch.
+ *      every failure branch. Multiple numbers (Task 3): on success only, the
+ *      contact is then stuck to the number this reply arrived on
+ *      (`recordStickiness`, never throws), and step 4's body carries a
+ *      `[label] ` / `[Number N] ` prefix when the location has more than one
+ *      number.
  *
  * ============ THE RETRY TABLE (plan §Q5, restated in code) ============
  *   - Contact upsert 429/5xx/network error -> RETRYABLE, pre-claim. Row
@@ -183,6 +187,7 @@ import {
   type GhlTokenRefreshDeps,
   type GhlTokenRefreshRepo,
 } from "@/lib/ghl-provider";
+import { inboundNumberPrefix } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
 import type { WhatsappInboundMessage } from "@/lib/types";
 
@@ -196,6 +201,10 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     | "recordGhlInboundPushFailure"
     | "resolveGhlInboundMessage"
     | "createWhatsappMediaSignedUrl"
+    // Multiple numbers (Task 3) — the `[label] ` prefix and per-contact
+    // stickiness (see `processGhlInboundRow`'s steps 4 and 5).
+    | "listLocationNumbers"
+    | "recordInboundForStickiness"
   >;
 
 /**
@@ -446,6 +455,16 @@ async function processGhlInboundRow(
     contactIdByKey.set(memoKey, contactId);
   }
 
+  // Multiple numbers (Task 3) — read PRE-CLAIM, like the upsert: a failure
+  // here throws to `drainGhlInboundReplies`'s per-row catch with the row
+  // still un-claimed, so it is simply retried next pass (never pushed
+  // without knowing which number it came in on). `row.coachId` — the number
+  // this reply actually arrived on — is what the prefix describes, never
+  // `account.tenantId` (the location's DEFAULT number, whichever number the
+  // row came from — see `getGhlAccountByTenantId`'s JSDoc).
+  const locationNumbers = await repo.listLocationNumbers(account.locationId);
+  const numberPrefix = inboundNumberPrefix(locationNumbers, row.coachId);
+
   // Step 3 — atomic claim, reused verbatim from the coach drain (see this
   // file's header's CLAIM-VS-NO-CLAIM ASYMMETRY note).
   const claimed = await repo.claimWhatsappInboundMessage(row.id);
@@ -465,7 +484,13 @@ async function processGhlInboundRow(
   const post = await deps.addInboundMessage(accessToken, {
     contactId,
     conversationProviderId,
-    body,
+    // Multiple numbers (Task 3) — `[label] ` / `[Number N] ` when the
+    // location has more than one number (media placeholders/labels
+    // included), else "" so a single-number location's body is byte-for-byte
+    // unchanged. No truncation needed: this module never length-caps the
+    // body it posts (GHL takes the reply as-is), and the prefix is at most a
+    // 40-char label (0003's CHECK) plus brackets.
+    body: numberPrefix + body,
     timestampIso: row.receivedAt,
     attachments,
   });
@@ -474,6 +499,7 @@ async function processGhlInboundRow(
     breaker.consecutivePostFailures = 0;
     await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_pushed", pushError: null });
     result.pushed++;
+    await recordStickiness(repo, account.locationId, contactId, row);
     return;
   }
 
@@ -507,6 +533,34 @@ async function processGhlInboundRow(
   // re-resolves the token from scratch before retrying.
   await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: post.error, unclaim: true });
   result.retried++;
+}
+
+/**
+ * Multiple numbers (Task 3) — step 5b, only after a push that LANDED (and
+ * after the row is already resolved `ghl_pushed`): this contact now sticks
+ * to the number this reply arrived on, so the next outbound to them goes out
+ * from it (`resolveSendingTenant`, src/lib/sending-number.ts).
+ *
+ *   - `row.coachId`, never `account.tenantId` — the account's tenant is the
+ *     location's DEFAULT number regardless of which number the row came in
+ *     on; recording it would silently re-stick every contact to the default.
+ *   - `row.receivedAt` — when the contact wrote, not when this drain ran.
+ *     The repository only overwrites a STRICTLY NEWER value
+ *     (`shouldReplaceSticky`, plus the conditional `last_inbound_at <
+ *     received_at` update in supabase.ts), so an out-of-order or replayed
+ *     row drained after a newer one can never move the contact back.
+ *   - Never throws: the reply is already in GHL and its row resolved — a
+ *     stickiness write failing must not count the row as retried (it would
+ *     never be re-pushed anyway, it is claimed). Worst case the contact
+ *     keeps its previous sticky number (or the default) until their next
+ *     reply.
+ */
+async function recordStickiness(repo: GhlInboundRepo, locationId: string, ghlContactId: string, row: WhatsappInboundMessage): Promise<void> {
+  try {
+    await repo.recordInboundForStickiness(locationId, ghlContactId, row.coachId, row.receivedAt);
+  } catch (err) {
+    console.error(`[ghl-inbound] row ${row.id} pushed, but recording the contact's sticky number failed (non-fatal):`, err);
+  }
 }
 
 /**

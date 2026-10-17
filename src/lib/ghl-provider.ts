@@ -105,6 +105,7 @@ import {
   type SendWhatsappAttachmentInput,
   type SendWhatsappInput,
 } from "@/lib/whatsapp-bridge";
+import { resolveSendingTenant, type SendingNumber } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
 import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage } from "@/lib/types";
 
@@ -125,6 +126,10 @@ export type GhlProviderRepo = Pick<
   | "recordGhlOutboundAttachments"
   | "listGhlOutboundAttachmentsForMessages"
   | "updateGhlOutboundAttachmentSendState"
+  // Multiple numbers (Task 3) — which of the location's numbers an outbound
+  // goes out from (`resolveOutboundSendingNumber` below).
+  | "listLocationNumbers"
+  | "getStickyTenant"
 >;
 
 /**
@@ -265,6 +270,16 @@ const REASON_TOO_LONG = "message with attachments too long for WhatsApp bridge";
 const REASON_NEEDS_REAUTH = `GHL provider needs re-authorising — reconnect from your ${brandConfig().name} dashboard`;
 const REASON_DISABLED = "this GHL WhatsApp number has been disabled";
 const REASON_NOT_CONNECTED = `WhatsApp isn't connected for this number yet — connect it from your ${brandConfig().name} dashboard first`;
+/**
+ * Multiple numbers (Task 3) — the not-connected refusal when the number this
+ * contact is routed to is NOT the location's default (i.e. it is their
+ * sticky number). Deliberately a different sentence from
+ * `REASON_NOT_CONNECTED`: the GHL user needs to know it is THIS contact's
+ * number that is down (the location's other numbers may be fine), and that
+ * nothing was sent from another number instead. The default number keeps
+ * `REASON_NOT_CONNECTED` unchanged (controller ruling).
+ */
+const REASON_STICKY_NUMBER_DISCONNECTED = "The WhatsApp number this contact uses is disconnected — reconnect it to reply";
 /** Plan's D7, verbatim (including the cap value — this is the bridge's own documented default, restated here as a fixed string rather than parsed out of the bridge's response text). */
 const REASON_CAP_REACHED = "daily WhatsApp cap (150) reached for this number — resumes at UTC midnight";
 const REASON_IDEMPOTENCY_CONFLICT = "message could not be sent — a conflicting send already used this message id";
@@ -333,6 +348,18 @@ function mapBridgeFailureReason(code: string): string {
     default:
       return REASON_BRIDGE_REFUSED;
   }
+}
+
+/**
+ * `mapBridgeFailureReason`, aware of which number the send went from
+ * (multiple numbers, Task 3). The ONLY difference: `session_not_connected`
+ * from a non-default number reports `REASON_STICKY_NUMBER_DISCONNECTED`.
+ * Every other code — and every code from the default number — maps exactly
+ * as before.
+ */
+function mapSendFailureReason(code: string, sendingNumber: SendingNumber): string {
+  if (code === "session_not_connected" && !sendingNumber.isDefault) return REASON_STICKY_NUMBER_DISCONNECTED;
+  return mapBridgeFailureReason(code);
 }
 
 /**
@@ -589,6 +616,8 @@ export async function handleProviderOutboundMessage(
   // Phase B (below) can reach them; see the assignment site's own comment.
   let mediaSplit: boolean;
   let attachments: string[];
+  // Multiple numbers (Task 3) — hoisted for Phase B like the two above.
+  let sendingNumber: SendingNumber;
   try {
     account = await repo.getGhlAccountByLocationId(locationId);
     if (!account) {
@@ -618,9 +647,22 @@ export async function handleProviderOutboundMessage(
     mediaSplit = isMediaOutboundEnabled() && attachments.length > 0;
     textResult = buildOutboundText(rawMessage, mediaSplit ? [] : attachments);
 
+    // Multiple numbers (Task 3) — WHICH of the location's numbers this goes
+    // out from, decided ONCE, here, before the intake row exists, and
+    // recorded as the row's `tenantId`. Everything downstream (this
+    // handler's own sends, the drain's retries and its bridge-ledger joins)
+    // reads `row.tenantId`, never `account.tenantId` (which is only the
+    // location's DEFAULT number), so a row can never be retried or resolved
+    // against a different number than the one it was routed to. Kept as one
+    // named call so a check that must win over sticky/default routing (a
+    // group contact belongs to its group's number) can sit in front of it.
+    // A failure here is pre-intake: `{ kind: "error", recorded: false }`, so
+    // GHL's own retry gets a chance — nothing has been sent from any number.
+    sendingNumber = await resolveOutboundSendingNumber(repo, account, contactId);
+
     ({ message: row, isNew } = await repo.recordGhlOutboundMessage({
       locationId: account.locationId,
-      tenantId: account.tenantId,
+      tenantId: sendingNumber.tenantId,
       ghlMessageId: messageId,
       ghlContactId: contactId,
       idempotencyKey: deriveIdempotencyKey(messageId),
@@ -655,7 +697,7 @@ export async function handleProviderOutboundMessage(
     // flags-off regression guarantee true regardless of what
     // `handleMediaSplitOutbound` does.
     if (mediaSplit) {
-      return await handleMediaSplitOutbound(repo, deps, account, row, toPhone, textResult, attachments, messageId);
+      return await handleMediaSplitOutbound(repo, deps, account, row, toPhone, textResult, attachments, messageId, sendingNumber);
     }
 
     // Terminal refusals that never reach the bridge at all (plan's D5/D6).
@@ -684,8 +726,15 @@ export async function handleProviderOutboundMessage(
       return { kind: "refused", reason };
     }
 
+    // Multiple numbers (Task 3) — a disconnected sticky (non-default) number
+    // is refused here, before any send, and NEVER swapped for another number.
+    const stickyRefusal = await refuseIfSendingNumberDisconnected(repo, deps, account, row, sendingNumber);
+    if (stickyRefusal) return stickyRefusal;
+
+    // `row.tenantId` — the number `resolveOutboundSendingNumber` routed this
+    // row to (Task 3), not `account.tenantId` (the location's default).
     const sendResult = await deps.sendWhatsapp({
-      coachId: account.tenantId,
+      coachId: row.tenantId,
       to: toPhone,
       text: textResult.text,
       idempotencyKey: row.idempotencyKey,
@@ -709,7 +758,7 @@ export async function handleProviderOutboundMessage(
       return { kind: "pending_retry" };
     }
 
-    const reason = mapBridgeFailureReason(sendResult.code);
+    const reason = mapSendFailureReason(sendResult.code, sendingNumber);
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
     await reportGhlOutcome(repo, deps, account, row, "failed", reason);
     return { kind: "refused", reason };
@@ -717,6 +766,53 @@ export async function handleProviderOutboundMessage(
     console.error(`[ghl-provider] handleProviderOutboundMessage: post-intake failure for row ${row.id} (row already recorded — the drain owns it from here):`, err);
     return { kind: "error", recorded: true };
   }
+}
+
+/**
+ * Multiple numbers (Task 3) — the ONE place an outbound is routed to a
+ * number: the contact's sticky number if it is still one of the location's
+ * numbers, else the default (`resolveSendingTenant`, src/lib/sending-number.ts).
+ * `account.tenantId` is passed only as the fallback for a location with no
+ * `ghl_location_numbers` rows at all (structurally impossible after Task 2;
+ * see `resolveSendingTenant`'s JSDoc) — then this is exactly the
+ * pre-multiple-numbers behaviour.
+ */
+function resolveOutboundSendingNumber(repo: GhlProviderRepo, account: GhlAccount, ghlContactId: string): Promise<SendingNumber> {
+  return resolveSendingTenant(repo, account.locationId, ghlContactId, account.tenantId);
+}
+
+/**
+ * Multiple numbers (Task 3) — refuse up front when the number this contact
+ * is routed to is a NON-default (sticky) number whose bridge session is not
+ * `connected`. Same terminal-refusal shape as every other pre-bridge refusal
+ * in this module (`refused` + the inline `failed` report), with
+ * `REASON_STICKY_NUMBER_DISCONNECTED`. NEVER falls back to another number:
+ * the contact wrote to THIS number, and a reply from a number they have
+ * never seen is worse than a visible failure the GHL user can act on.
+ *
+ * Returns `null` (carry on and attempt the send) when:
+ *   - the number is the location's DEFAULT — today's behaviour, unchanged:
+ *     no pre-check, the bridge's own `session_not_connected` refusal and
+ *     `REASON_NOT_CONNECTED` (controller ruling);
+ *   - the session snapshot itself can't be read (`deps.getSession` failed) —
+ *     the same "a DIAGNOSTIC call failing never refuses on its own" rule as
+ *     `hasSufficientOutboundBudget`. The bridge is still authoritative: if it
+ *     refuses with `session_not_connected`, `mapSendFailureReason` reports
+ *     the same sticky string, and that send was from this number only.
+ */
+async function refuseIfSendingNumberDisconnected(
+  repo: GhlProviderRepo,
+  deps: GhlProviderDeps,
+  account: GhlAccount,
+  row: GhlOutboundMessage,
+  sendingNumber: SendingNumber
+): Promise<HandleProviderOutboundOutcome | null> {
+  if (sendingNumber.isDefault) return null;
+  const session = await deps.getSession(row.tenantId);
+  if (!session.ok || session.session.status === "connected") return null;
+  await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_STICKY_NUMBER_DISCONNECTED });
+  await reportGhlOutcome(repo, deps, account, row, "failed", REASON_STICKY_NUMBER_DISCONNECTED);
+  return { kind: "refused", reason: REASON_STICKY_NUMBER_DISCONNECTED };
 }
 
 // ---------------------------------------------------------------------------
@@ -828,8 +924,12 @@ async function handleMediaSplitOutbound(
   toPhone: string | null,
   textResult: ReturnType<typeof buildOutboundText>,
   attachmentUrls: string[],
-  ghlMessageId: string
+  ghlMessageId: string,
+  sendingNumber: SendingNumber
 ): Promise<HandleProviderOutboundOutcome> {
+  // Multiple numbers (Task 3) — every send below goes from `row.tenantId`
+  // (the number `resolveOutboundSendingNumber` routed this row to), never
+  // `account.tenantId` (the location's default).
   // Terminal refusals shared with the legacy path, in the SAME order — see
   // `handleProviderOutboundMessage`'s own comments for why each exists.
   if (!toPhone) {
@@ -855,11 +955,16 @@ async function handleMediaSplitOutbound(
     return { kind: "refused", reason };
   }
 
+  // Multiple numbers (Task 3) — same sticky-number refusal as the legacy
+  // path, before the budget check and before any attachment row is written.
+  const stickyRefusal = await refuseIfSendingNumberDisconnected(repo, deps, account, row, sendingNumber);
+  if (stickyRefusal) return stickyRefusal;
+
   // ACCEPT-TIME BUDGET CHECK (plan §5.6/O3) — before ANY dispatch, before ANY
   // `ghl_outbound_attachments` row is even written. Text + 3 attachments = 4
   // units, matching what WhatsApp itself will see as 4 separate frames.
   const totalUnits = (hasTextPart ? 1 : 0) + attachmentUrls.length;
-  const budgetOk = await hasSufficientOutboundBudget(deps, account.tenantId, totalUnits);
+  const budgetOk = await hasSufficientOutboundBudget(deps, row.tenantId, totalUnits);
   if (!budgetOk) {
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_CAP_REACHED });
     await reportGhlOutcome(repo, deps, account, row, "failed", REASON_CAP_REACHED);
@@ -882,7 +987,7 @@ async function handleMediaSplitOutbound(
   let anyTransientRetry = false;
 
   if (hasTextPart && textResult.ok) {
-    const sendResult = await deps.sendWhatsapp({ coachId: account.tenantId, to: toPhone, text: textResult.text, idempotencyKey: row.idempotencyKey });
+    const sendResult = await deps.sendWhatsapp({ coachId: row.tenantId, to: toPhone, text: textResult.text, idempotencyKey: row.idempotencyKey });
     if (sendResult.ok) {
       await repo.updateGhlOutboundSendState(row.id, { sendState: "accepted" });
       partOutcomes.push({ resolved: false });
@@ -892,7 +997,7 @@ async function handleMediaSplitOutbound(
       anyTransientRetry = true;
       partOutcomes.push({ resolved: false });
     } else {
-      const reason = mapBridgeFailureReason(sendResult.code);
+      const reason = mapSendFailureReason(sendResult.code, sendingNumber);
       await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
       partOutcomes.push({ resolved: true, sent: false, reason });
     }
@@ -926,7 +1031,7 @@ async function handleMediaSplitOutbound(
     // so reading it after that call would already be too late.
     const url = part.pendingUrl;
     const sendResult = await deps.sendAttachment({
-      coachId: account.tenantId,
+      coachId: row.tenantId,
       to: toPhone,
       attachment: { url: url ?? "", fileName: part.fileName ?? undefined },
       idempotencyKey: part.idempotencyKey,
@@ -938,7 +1043,7 @@ async function handleMediaSplitOutbound(
       anyTransientRetry = true;
       partOutcomes.push({ resolved: false });
     } else {
-      const reason = mapBridgeFailureReason(sendResult.code);
+      const reason = mapSendFailureReason(sendResult.code, sendingNumber);
       await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: reason });
       if (sendResult.code === "media_outbound_disabled" && url) mediaDisabledUrls.push(url);
       partOutcomes.push({ resolved: true, sent: false, reason });
@@ -968,7 +1073,7 @@ async function handleMediaSplitOutbound(
     const fallback = buildOutboundText("", mediaDisabledUrls);
     if (fallback.ok) {
       const fallbackResult = await deps.sendWhatsapp({
-        coachId: account.tenantId,
+        coachId: row.tenantId,
         to: toPhone,
         text: fallback.text,
         idempotencyKey: deriveMediaFallbackIdempotencyKey(ghlMessageId),
@@ -1565,6 +1670,7 @@ export const GHL_PROVIDER_REASONS = {
   needsReauth: REASON_NEEDS_REAUTH,
   disabled: REASON_DISABLED,
   notConnected: REASON_NOT_CONNECTED,
+  stickyNumberDisconnected: REASON_STICKY_NUMBER_DISCONNECTED,
   capReached: REASON_CAP_REACHED,
   idempotencyConflict: REASON_IDEMPOTENCY_CONFLICT,
   bridgeUnconfigured: REASON_BRIDGE_UNCONFIGURED,

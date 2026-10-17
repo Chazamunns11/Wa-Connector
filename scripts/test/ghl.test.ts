@@ -33,7 +33,14 @@ import {
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
 import type { BridgeSendResult, BridgeSessionResult, SendWhatsappAttachmentInput, SendWhatsappInput } from "@/lib/whatsapp-bridge";
-import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, GhlOutboundMessageDraft } from "@/lib/types";
+import type {
+  GhlAccount,
+  GhlOutboundAttachment,
+  GhlOutboundAttachmentDraft,
+  GhlOutboundMessage,
+  GhlOutboundMessageDraft,
+  LocationNumber,
+} from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // 1. Ed25519 synthetic fixture — src/lib/ghl.ts's verifyGhlSignature
@@ -358,8 +365,17 @@ interface FakeCall {
  * (locationId, ghlMessageId), pending_text cleared on any non-pending_send
  * transition, markGhlOutboundReported's nullable-reportedStatus contract,
  * an atomic-ish claimGhlTokenRefresh).
+ *
+ * Multiple numbers (Task 3): `opts.numbers` seeds a location's
+ * `ghl_location_numbers` rows and `opts.sticky` its `ghl_contact_numbers`
+ * (keyed `${locationId}:${ghlContactId}`). With no `numbers` entry, a
+ * location gets the one slot-1 default row install creates for the account's
+ * own tenant (Task 2), so every pre-Task-3 test sees exactly one number.
  */
-function createFakeRepo(accounts: GhlAccount[] = []) {
+function createFakeRepo(
+  accounts: GhlAccount[] = [],
+  opts: { numbers?: Record<string, LocationNumber[]>; sticky?: Record<string, string> } = {}
+) {
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const rows = new Map<string, GhlOutboundMessage>();
   const bridgeLedger = new Map<string, { status: string; error: string | null }>();
@@ -375,6 +391,17 @@ function createFakeRepo(accounts: GhlAccount[] = []) {
     async getGhlAccountByLocationId(locationId: string) {
       calls.push({ method: "getGhlAccountByLocationId", args: [locationId] });
       return accountsByLocation.get(locationId) ?? null;
+    },
+    async listLocationNumbers(locationId: string) {
+      calls.push({ method: "listLocationNumbers", args: [locationId] });
+      const seeded = opts.numbers?.[locationId];
+      if (seeded) return seeded;
+      const account = accountsByLocation.get(locationId);
+      return account ? [{ tenantId: account.tenantId, slot: 1, isDefault: true, label: null }] : [];
+    },
+    async getStickyTenant(locationId: string, ghlContactId: string) {
+      calls.push({ method: "getStickyTenant", args: [locationId, ghlContactId] });
+      return opts.sticky?.[`${locationId}:${ghlContactId}`] ?? null;
     },
     async recordGhlOutboundMessage(draft: GhlOutboundMessageDraft) {
       calls.push({ method: "recordGhlOutboundMessage", args: [draft] });
@@ -779,6 +806,164 @@ test("drainGhlOutboundStatuses: the 'refused' defensive branch reports the row's
 });
 
 // ---------------------------------------------------------------------------
+// 5b. Multiple numbers per location (Task 3) — which number an outbound goes
+// out from: the contact's sticky number, else the location's default. A
+// disconnected sticky number is refused, NEVER silently swapped for another
+// number (a reply from an unfamiliar number is worse than a visible failure).
+// ---------------------------------------------------------------------------
+
+const SECOND_TENANT_ID = "22222222-2222-4222-8222-222222222222";
+const STICKY_DISCONNECTED_REASON = "The WhatsApp number this contact uses is disconnected — reconnect it to reply";
+
+/** Slot 1 is the default (the account's own tenant), slot 2 a second number labelled "Sales". */
+const TWO_NUMBERS: Record<string, LocationNumber[]> = {
+  [LOCATION_ID]: [
+    { tenantId: TENANT_ID, slot: 1, isDefault: true, label: null },
+    { tenantId: SECOND_TENANT_ID, slot: 2, isDefault: false, label: "Sales" },
+  ],
+};
+const STICKY_TO_SECOND = { [`${LOCATION_ID}:ghl-contact-1`]: SECOND_TENANT_ID };
+
+function sessionWithStatus(statusByTenant: Record<string, "connected" | "disconnected" | "logged_out">): GhlProviderDeps["getSession"] {
+  return async (coachId) => ({
+    ok: true,
+    session: { coachId, status: statusByTenant[coachId] ?? "connected", phoneNumber: "+447700900000", qr: null, sentToday: 0, dailyCap: 150, queueLength: 0 },
+  });
+}
+
+test("handleProviderOutboundMessage: a contact sticky to a second number sends from THAT number, and the intake row carries its tenant", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+  assert.equal([...rows.values()][0].tenantId, SECOND_TENANT_ID);
+});
+
+test("handleProviderOutboundMessage: no sticky row -> the location's default number", async () => {
+  const numbers = { [LOCATION_ID]: TWO_NUMBERS[LOCATION_ID].map((n) => ({ ...n, isDefault: n.slot === 2 })) };
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers });
+  const { deps, sendCalls } = makeDeps();
+  await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-default" }), deps);
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID, "slot 2 is the default here, not the account's tenant");
+  assert.equal([...rows.values()][0].tenantId, SECOND_TENANT_ID);
+});
+
+test("handleProviderOutboundMessage: the sticky number's session is not connected -> refused with the fixed string, NO send attempted, no fallback to another number", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const sessionCalls: string[] = [];
+  const getSession = sessionWithStatus({ [SECOND_TENANT_ID]: "disconnected" });
+  const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps({
+    getSession: async (coachId) => {
+      sessionCalls.push(coachId);
+      return getSession(coachId);
+    },
+  });
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky-down" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: STICKY_DISCONNECTED_REASON });
+  assert.equal(GHL_PROVIDER_REASONS.stickyNumberDisconnected, STICKY_DISCONNECTED_REASON);
+  assert.equal(sendCalls.length, 0, "no send from the disconnected number, and none from any other number");
+  assert.equal(sendAttachmentCalls.length, 0);
+  assert.deepEqual(sessionCalls, [SECOND_TENANT_ID], "only the resolved number's session is consulted");
+  const row = [...rows.values()][0];
+  assert.equal(row.sendState, "refused");
+  assert.equal(row.refusalReason, STICKY_DISCONNECTED_REASON);
+  assert.equal(statusCalls.length, 1);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+});
+
+test("handleProviderOutboundMessage: the bridge itself says session_not_connected for a non-default number -> the same fixed sticky string (the bridge stays authoritative)", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, sendCalls, statusCalls } = makeDeps({
+    sendWhatsapp: async (input) => {
+      sendCalls.push(input);
+      return { ok: false, code: "session_not_connected", message: "session status is 'disconnected'" };
+    },
+  });
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky-race" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: STICKY_DISCONNECTED_REASON });
+  assert.equal(sendCalls.length, 1, "exactly one attempt, from the sticky number — never retried from another");
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+  assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+});
+
+test("handleProviderOutboundMessage: the DEFAULT number disconnected keeps today's behaviour — no pre-check, the bridge's own refusal, the existing string", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS });
+  const sessionCalls: string[] = [];
+  const { deps, sendCalls, statusCalls } = makeDeps({
+    getSession: async (coachId) => {
+      sessionCalls.push(coachId);
+      return sessionWithStatus({ [TENANT_ID]: "disconnected" })(coachId);
+    },
+    sendWhatsapp: async (input) => {
+      sendCalls.push(input);
+      return { ok: false, code: "session_not_connected", message: "session status is 'disconnected'" };
+    },
+  });
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-default-down" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.notConnected });
+  assert.equal(sessionCalls.length, 0, "the default number's path never gains a session pre-check");
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].coachId, TENANT_ID);
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notConnected);
+});
+
+test("handleProviderOutboundMessage: a sticky number whose session snapshot is unreadable still attempts the send (the diagnostic call never refuses on its own)", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, sendCalls } = makeDeps({
+    getSession: async () => ({ ok: false, code: "unreachable", message: "WhatsApp bridge unreachable or timed out." }),
+  });
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky-unknown" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+});
+
+test("handleProviderOutboundMessage (media split): a disconnected sticky number refuses before any part is dispatched or any attachment row written", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo, attachments } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+    const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps({
+      getSession: sessionWithStatus({ [SECOND_TENANT_ID]: "logged_out" }),
+    });
+    const outcome = await handleProviderOutboundMessage(
+      repo,
+      samplePayloadFor({ messageId: "msg-sticky-media-down", message: "docs", attachments: ["https://x/a.pdf"] }),
+      deps
+    );
+    assert.deepEqual(outcome, { kind: "refused", reason: STICKY_DISCONNECTED_REASON });
+    assert.equal(sendCalls.length, 0);
+    assert.equal(sendAttachmentCalls.length, 0);
+    assert.equal(attachments.size, 0);
+    assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+  });
+});
+
+test("handleProviderOutboundMessage (media split): a sticky number sends every part from that number", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(
+      repo,
+      samplePayloadFor({ messageId: "msg-sticky-media", message: "docs", attachments: ["https://x/a.pdf"] }),
+      deps
+    );
+    assert.deepEqual(outcome, { kind: "accepted" });
+    assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+    assert.equal(sendAttachmentCalls[0].coachId, SECOND_TENANT_ID);
+  });
+});
+
+test("handleProviderOutboundMessage: no number rows at all (defensive) -> the account's own tenant, exactly as before multiple numbers", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers: { [LOCATION_ID]: [] } });
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-no-numbers" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls[0].coachId, TENANT_ID);
+  assert.equal([...rows.values()][0].tenantId, TENANT_ID);
+});
+
+// ---------------------------------------------------------------------------
 // 6. drainGhlOutboundStatuses
 // ---------------------------------------------------------------------------
 
@@ -1119,6 +1304,12 @@ test("handleProviderOutboundMessage: a repo failure BEFORE the intake row exists
     },
     async saveGhlTokens() {},
     async markGhlNeedsReauth() {},
+    async listLocationNumbers() {
+      return [];
+    },
+    async getStickyTenant() {
+      return null;
+    },
   };
   const { deps } = makeDeps();
   // If this rejects, the `await` throws and the test fails with that error —

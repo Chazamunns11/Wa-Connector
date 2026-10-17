@@ -638,6 +638,15 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (!shouldReplaceSticky(existing, receivedAtIso)) return;
     // The .lt guard makes the write itself conditional, so a concurrent newer
     // update between our read and write is never overwritten.
+    // PINNED (Task 3, Review Focus 3) — this must stay the SQL
+    //   update ghl_contact_numbers set tenant_id = $3, last_inbound_at = $4
+    //   where location_id = $1 and ghl_contact_id = $2
+    //     and last_inbound_at < $4
+    // Strictly-less-than, never <=, and never dropped: the inbound drain
+    // (src/lib/ghl-inbound.ts's `recordStickiness`) can replay or reorder
+    // rows, and an older inbound must never move a contact back to the
+    // number they wrote from before. The in-process `shouldReplaceSticky`
+    // check above is only the cheap early-out; this clause is the guarantee.
     const { error } = await supabase
       .from("ghl_contact_numbers")
       .update({ tenant_id: tenantId, last_inbound_at: receivedAtIso })
