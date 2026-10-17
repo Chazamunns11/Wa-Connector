@@ -42,6 +42,7 @@
  */
 import { createHash, verify as cryptoVerify } from "crypto";
 import { brandConfig } from "@/lib/brand-config";
+import { normalisePhoneE164 } from "@/lib/phone";
 
 /**
  * CONFIRMED against the marketplace app's own "Install link" on 3 Aug 2026,
@@ -1120,4 +1121,70 @@ export function describeStoredMediaLabel(messageType: string): string {
 export function describeTooLargeMediaPlaceholder(messageType: string): string {
   const base = MEDIA_PLACEHOLDERS[messageType] ?? MEDIA_PLACEHOLDER_DEFAULT;
   return base.replace(/ — view it on the connected phone\]$/, " (too large to transfer — view it on the connected phone)]");
+}
+
+export interface GhlContactLite {
+  id: string;
+  name: string;
+  phone: string | null;
+  tags: string[];
+}
+
+export type ListGhlContactsResult =
+  | { ok: true; contacts: GhlContactLite[]; nextStartAfterId: string | null }
+  | { ok: false; kind: "rejected" | "rate_limited" | "unreachable"; error: string };
+
+const CONTACTS_PAGE_LIMIT = 100;
+
+/**
+ * GET /contacts/?locationId=&limit=100[&query=][&startAfterId=] (Version
+ * 2021-07-28: documented, marked deprecated by GHL, still served). Read-only,
+ * used to pick group members. Response is read defensively like
+ * `upsertGhlContact`. Phones go through `normalisePhoneE164(raw, "GB")`;
+ * contacts without a usable phone keep `phone: null`. Never throws; every
+ * error string is a fixed literal (no upstream text, no phone numbers).
+ */
+export async function listGhlContacts(
+  accessToken: string,
+  locationId: string,
+  opts: { query?: string; startAfterId?: string; limit?: number }
+): Promise<ListGhlContactsResult> {
+  const limit = opts.limit ?? CONTACTS_PAGE_LIMIT;
+  const params = new URLSearchParams({ locationId, limit: String(limit) });
+  if (opts.query) params.set("query", opts.query);
+  if (opts.startAfterId) params.set("startAfterId", opts.startAfterId);
+  try {
+    const res = await fetch(`${API_BASE}/contacts/?${params.toString()}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json", Version: CONTACTS_API_VERSION },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!res.ok) {
+      console.error(`[ghl] contacts list rejected: HTTP ${res.status}`);
+      return { ok: false, kind: res.status === 429 ? "rate_limited" : "rejected", error: `GHL contacts list rejected (HTTP ${res.status})` };
+    }
+    const raw = Array.isArray(json?.contacts) ? (json.contacts as unknown[]) : [];
+    const contacts: GhlContactLite[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue;
+      const o = item as Record<string, unknown>;
+      if (typeof o.id !== "string" || !o.id) continue;
+      const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+      const name = str(o.contactName) || [str(o.firstName), str(o.lastName)].filter(Boolean).join(" ");
+      contacts.push({
+        id: o.id,
+        name,
+        phone: typeof o.phone === "string" ? normalisePhoneE164(o.phone, "GB") : null,
+        tags: Array.isArray(o.tags) ? o.tags.filter((t): t is string => typeof t === "string") : [],
+      });
+    }
+    const meta = json?.meta as Record<string, unknown> | undefined;
+    const metaNext = typeof meta?.startAfterId === "string" && meta.startAfterId ? meta.startAfterId : null;
+    const nextStartAfterId = raw.length === limit ? (metaNext ?? contacts[contacts.length - 1]?.id ?? null) : null;
+    return { ok: true, contacts, nextStartAfterId };
+  } catch {
+    console.error("[ghl] contacts list unreachable");
+    return { ok: false, kind: "unreachable", error: "GHL contacts list request failed" };
+  }
 }
