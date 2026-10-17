@@ -14,7 +14,14 @@ export const SITE_ROUTES = {
   login: "/login",
   dashboard: "/dashboard",
   billing: "/dashboard/billing",
+  groups: "/dashboard/groups",
+  newGroup: "/dashboard/groups/new",
 } as const;
+
+/** A single group's page. Not in SITE_ROUTES: it is a dynamic segment. */
+export function groupPath(id: string): string {
+  return `${SITE_ROUTES.groups}/${encodeURIComponent(id)}`;
+}
 
 /** Route handlers that leave the app (not pages, so not in SITE_ROUTES): link with a plain <a>. */
 export const APP_ROUTE_HANDLERS = {
@@ -42,6 +49,8 @@ export const NOINDEX_ROUTES: readonly string[] = [
   SITE_ROUTES.login,
   SITE_ROUTES.dashboard,
   SITE_ROUTES.billing,
+  SITE_ROUTES.groups,
+  SITE_ROUTES.newGroup,
 ];
 
 export const NAV_LINKS: readonly { href: string; label: string }[] = [

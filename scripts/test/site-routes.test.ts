@@ -28,6 +28,8 @@ const PAGE_FILES: Record<string, string> = {
   [SITE_ROUTES.signupComplete]: "src/app/(site)/signup/complete/page.tsx",
   [SITE_ROUTES.dashboard]: "src/app/(app)/dashboard/page.tsx",
   [SITE_ROUTES.billing]: "src/app/(app)/dashboard/billing/page.tsx",
+  [SITE_ROUTES.groups]: "src/app/(app)/dashboard/groups/page.tsx",
+  [SITE_ROUTES.newGroup]: "src/app/(app)/dashboard/groups/new/page.tsx",
 };
 
 // Routes whose pages later tasks create (4-10). Each task removes its own

@@ -14,7 +14,6 @@ import {
   groupGate,
   inviteIdempotencyKey,
   inviteText,
-  memberStateForOutcome,
   planAddMembers,
   reasonForBridgeFailure,
   reconcileJob,
