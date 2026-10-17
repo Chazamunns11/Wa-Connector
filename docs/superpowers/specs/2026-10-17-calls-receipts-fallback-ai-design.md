@@ -75,7 +75,7 @@ Items 5 (missed-call logging) and 8 (read receipts) are built without triggers, 
 Items 6 (SMS fallback) and 7 (AI replies) were built on 17 Oct, pending the sandbox:
 
 - **SMS fallback, option A: built.** The `whatsapp_not_on_whatsapp` trigger carries the contact and the unsent text, and "not on WhatsApp" is remembered for 30 days per (location, phone), cleared when that phone messages us one-to-one. STOP still wins. Workflow setup: `docs/GHL-WORKFLOW-TRIGGERS-SETUP.md`.
-- **SMS fallback, option B (automatic SMS): not built.** It waits for customer demand and for Charlie's answer on cost (open question 3).
+- **SMS fallback, option B (automatic SMS): built 17 Oct**, after Charlie's answer: "Text should send as replacement if not on WA". The setting ("Send as SMS when a contact isn't on WhatsApp") is on unless a sub-account turns it off, behind the global `GHL_SMS_FALLBACK_ENABLED` (off) until the sandbox check's section D shows which provider sends the SMS. When the SMS is sent, the `whatsapp_not_on_whatsapp` trigger is not fired. A loop guard refuses our own SMS if GHL hands it back to PingWren (PingWren is the sub-account's SMS provider) and turns the fallback off for that sub-account. Known limit: the same text sent to the same contact by hand within 10 minutes of a fallback is treated as the echo, refused, and turns the fallback off. Plan: `docs/superpowers/plans/2026-10-17-sms-fallback-b.md`.
 - **AI replies: documented, not built.** Website guide at `/docs/ai-replies`. Pending the live check in `2026-10-17-workflow-triggers-sandbox-check.md` section C.
 - The trigger halves of items 5 (missed call) and 8 (read) are built as `whatsapp_missed_call` and `whatsapp_message_read`, pending the same sandbox check.
 
@@ -94,5 +94,5 @@ Items 6 (SMS fallback) and 7 (AI replies) were built on 17 Oct, pending the sand
 
 1. Does GHL's message status API accept `read`? (Sandbox.)
 2. Does GHL's Conversation AI reply through a custom Conversation Provider? (Sandbox.)
-3. For the built-in SMS fallback (6B), is per-message SMS cost on the customer's own account acceptable, or should it stay workflow-only?
+3. For the built-in SMS fallback (6B), is per-message SMS cost on the customer's own account acceptable, or should it stay workflow-only? **Answered 17 Oct:** send automatically, on the customer's own SMS provider (built as option B).
 4. Should missed-call text-back come with a ready-made workflow template we publish (a GHL snapshot)?

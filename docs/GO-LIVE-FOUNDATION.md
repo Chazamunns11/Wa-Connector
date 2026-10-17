@@ -74,9 +74,9 @@ two are filled in a second pass once both domains exist. That is expected.
    (`0002_accounts.sql`, `0003_activation_cap.sql`, `0004_reliability.sql`,
    `0005_whatsapp_sessions_phone_linked_at.sql`, `0006_ghl_location_numbers.sql`,
    `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`,
-   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, `0011_message_events.sql`, `0012_workflow_triggers.sql`, `0013_keep_pending_text_until_reported.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
+   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, `0011_message_events.sql`, `0012_workflow_triggers.sql`, `0013_keep_pending_text_until_reported.sql`, `0014_sms_fallback.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
    every logout, so 0005 must be applied before the bridge is deployed.
-   Likewise apply 0001 to 0013 in order before deploying the bridge and the
+   Likewise apply 0001 to 0014 in order before deploying the bridge and the
    app: 0002 to 0004 add accounts, activation and held messages / STOP
    opt-outs (see `docs/GO-LIVE-ACCOUNTS.md`), 0006 the several-numbers
    tables, 0007 the group tables, 0008 the `whatsapp_messages.group_jid`
@@ -90,8 +90,11 @@ two are filled in a second pass once both domains exist. That is expected.
    and quoted replies" in Part 5). 0012 adds the workflow-trigger
    subscriptions, the "not on WhatsApp" memory and the trigger columns on
    `whatsapp_sessions`; 0013 is a comment-only change. See "Workflow triggers"
-   in Part 5.
-   The app build must not go live before 0006 to 0013 are applied. Without
+   in Part 5. 0014 adds the SMS fallback: the per-sub-account switch and
+   loop-guard block on `ghl_accounts`, the once-per-message column on
+   `ghl_outbound_messages` and the `ghl_sms_fallback_echoes` table. See "SMS
+   fallback (GHL)" in Part 5.
+   The app build must not go live before 0006 to 0014 are applied. Without
    them every GHL outbound message fails before it is recorded, the GHL
    inbound drain fails on every pass (no replies reach GHL), and a GHL
    install (OAuth) errors after it has already written the account. The
@@ -585,8 +588,9 @@ Two app settings (Vercel):
   ask for `workflows.readonly`. It does not turn firing on.
 - `GHL_WORKFLOW_TRIGGERS_ENABLED`: off by default. Only `true` turns firing on.
   With it off, subscriptions are still stored and nothing is sent to GHL. With
-  it off, an accepted message's text is cleared at once (it is only kept for
-  the "not on WhatsApp" trigger).
+  it off (and `GHL_SMS_FALLBACK_ENABLED` off too), an accepted message's text
+  is cleared at once (it is only kept for the "not on WhatsApp" trigger and the
+  SMS fallback).
 
 Turn it on in this order: enable the `workflows.readonly` scope in the
 developer portal, set `GHL_REQUEST_WORKFLOWS_SCOPE=true`, re-authorise existing
@@ -609,6 +613,47 @@ customer $0.01 and needs LC Premium Triggers & Actions.
 Leave the flag off until the sandbox check in
 `docs/superpowers/specs/2026-10-17-workflow-triggers-sandbox-check.md` passes.
 Firing `targetUrl` is undocumented by GHL, so the method is unverified.
+
+### SMS fallback (GHL): checks before go-live
+
+When a contact isn't on WhatsApp, PingWren can ask GHL to send the same text
+as an SMS on that contact (`POST /conversations/messages`, `type: "SMS"`),
+through the sub-account's own SMS provider, so the SMS cost is the
+sub-account's. Apply migration 0014 first (0001 to 0014 apply on Postgres 16).
+
+- `GHL_SMS_FALLBACK_ENABLED`: off by default. Only `true` turns it on, for
+  every sub-account that has not switched it off. Leave it off until the
+  sandbox check's section D
+  (`docs/superpowers/specs/2026-10-17-workflow-triggers-sandbox-check.md`)
+  shows which provider sends the SMS.
+- Per sub-account: the embed's "Send as SMS when a contact isn't on WhatsApp"
+  switch (`ghl_accounts.sms_fallback_enabled`), on unless the sub-account
+  turns it off.
+- It falls back where PingWren learns the contact isn't on WhatsApp: the
+  status drain, and a send refused at once by the 30-day memory. Once per
+  message. Text only: attachments are not sent; a message with no text gets
+  no SMS. Group sends never fall back. A contact who sent STOP gets nothing,
+  and no trigger.
+- When the SMS was sent, GHL shows the original as failed with `Not on
+  WhatsApp — sent as SMS instead`, and the `whatsapp_not_on_whatsapp` trigger
+  is not fired (so a workflow doesn't send a second SMS). When it wasn't sent,
+  the reason stays `recipient has no WhatsApp account` and the trigger fires
+  as before.
+- **Loop guard.** PingWren may be the sub-account's own SMS provider, so GHL
+  may hand our SMS straight back to PingWren. Before each SMS, PingWren
+  records a pending echo (sub-account, contact, sha256 of the text, never the
+  text) for 10 minutes. If that message comes back through the provider
+  webhook, it is refused with `This sub-account sends SMS through PingWren, so
+  the SMS fallback can't be used — not sent`, never sent over WhatsApp, and
+  the fallback is turned off for that sub-account
+  (`ghl_accounts.sms_fallback_blocked_at`). The embed then says "Turned off:
+  this sub-account's SMS goes through PingWren. Connect another SMS provider
+  (LC Phone or Twilio) in GHL, then switch it back on." Switching it back on
+  clears the block.
+- **Known limit.** If a coach sends the same text to the same contact by hand
+  within 10 minutes of a fallback SMS, it is treated as the echo: refused, and
+  the fallback switches off for that sub-account. Accepted risk; switch it
+  back on in the embed.
 
 ---
 
@@ -647,12 +692,13 @@ Firing `targetUrl` is undocumented by GHL, so the method is unverified.
 | `GHL_WORKFLOW_WEBHOOK_SECRET` | For triggers | none | Shared secret for `POST /api/webhooks/ghl-trigger-subscription`, sent by GHL as `X-PingWren-Secret`. Unset means the route answers 503 |
 | `GHL_REQUEST_WORKFLOWS_SCOPE` | No | `false` | Exactly `true` adds `workflows.readonly` to the OAuth install. Set only after the scope is enabled in the developer portal, then re-authorise |
 | `GHL_WORKFLOW_TRIGGERS_ENABLED` | No | `false` | Exactly `true` fires WhatsApp events to GHL workflow triggers. Turn on only after the sandbox check, and after `GHL_REQUEST_WORKFLOWS_SCOPE` |
+| `GHL_SMS_FALLBACK_ENABLED` | No | `false` | Exactly `true` sends a message's text as an SMS through GHL when the contact isn't on WhatsApp (each sub-account can switch it off). Turn on only after the sandbox check's section D. Needs migration 0014 |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Supabase Storage bucket for inbound media; must match the bridge |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | Web-app side media switch; see the flip order below |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | Lifetime of signed media URLs |
 | `NODE_ENV` | Set by Vercel | n/a | Not an operator setting |
 
-That is 25 foundation names (the `BRAND_*` website variables above are extra): 24 from `src/` (including `NODE_ENV`) plus
+That is 26 foundation names (the `BRAND_*` website variables above are extra): 25 from `src/` (including `NODE_ENV`) plus
 `GHL_EMBED_FRAME_ANCESTORS` from `next.config.ts`.
 
 **Media switches, flip order.** Both media features default off and stay off

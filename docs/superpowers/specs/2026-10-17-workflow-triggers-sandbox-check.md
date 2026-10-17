@@ -38,3 +38,15 @@ If the fire fails (check the fixed error line and HTTP status in the logs), `pos
 - [ ] A contact who sent STOP gets no AI reply.
 
 If the AI does not use custom providers, spec a bridge then; do not guess now. Update `src/app/(site)/docs/ai-replies/page.tsx` with the result.
+
+## D. SMS fallback B (calls spec section 6)
+
+Only after migration 0014. Set `GHL_SMS_FALLBACK_ENABLED=true` and leave the sub-account's "Send as SMS when a contact isn't on WhatsApp" switch on.
+- [ ] Send from GHL to a number not on WhatsApp. Record which provider sends the SMS (LC Phone, Twilio, or PingWren itself), and that the contact gets the same text once. GHL shows the original as failed with `Not on WhatsApp — sent as SMS instead`. `whatsapp_not_on_whatsapp` does not fire.
+- [ ] Send again (the 30-day memory refuses it at once): one SMS, same reason.
+- [ ] A message with an attachment and text: the SMS carries the text only. Attachment only: no SMS, and the trigger fires.
+- [ ] A contact who sent STOP: nothing, and no trigger.
+- [ ] On a sub-account whose SMS provider is PingWren: if GHL hands the SMS back to PingWren, it is refused with `This sub-account sends SMS through PingWren, so the SMS fallback can't be used — not sent`, nothing goes out on WhatsApp, and the embed shows the setting off with the "Turned off: this sub-account's SMS goes through PingWren…" notice. The next not-on-WhatsApp send gets no SMS and fires the trigger. Switching the setting back on clears the notice.
+- [ ] If the SMS call itself is refused, `sendGhlSms` in `src/lib/ghl.ts` is the one function to change. Record the working call here:
+
+> Working call: _to fill in_
