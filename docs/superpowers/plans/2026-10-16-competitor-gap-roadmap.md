@@ -23,13 +23,13 @@ Order of work from the design spec (`docs/superpowers/specs/2026-10-12-brand-wha
 | E. Groups | `docs/superpowers/specs/2026-10-17-whatsapp-groups-design.md`. Opt-in per group, one synthetic contact per group, no sender contacts. |
 | F. Voice notes and message events | `docs/superpowers/specs/2026-10-17-voice-notes-and-message-events-design.md`. Reactions and deletes are off by default, because anything posted as inbound fires GHL's "Customer replied". |
 
-Each spec ends with its open questions. Once Charlie signs one off, the next step is its implementation plan (`superpowers:writing-plans`).
+**Build order (Charlie, 17 Oct): B (several numbers) and E (groups) first.** Each spec ends with its open questions. Once Charlie signs one off, the next step is its implementation plan (`superpowers:writing-plans`).
 
-## Decisions (A and B decided 17 Oct; the trial and C are recommendations awaiting Charlie's yes)
+## Decisions (A, B and C decided 17 Oct)
 
 ### A. Pricing and trial: decided 17 Oct, written into the spec
 - **Decided:** per sub-account, 3 numbers included, with volume tiers and an annual discount. Amounts still Charlie's to set.
-- **Recommended, awaiting confirmation:** 14-day trial with no card; sending pauses when it ends without one.
+- **Decided 17 Oct:** 7-day trial with no card; sending pauses when it ends without one.
 - **Spec:** `docs/superpowers/specs/2026-10-12-brand-whatsapp-saas-design.md` Decisions table and §2 updated. Stripe quantity was already activated locations, so the billing mechanics barely change: the trial limit is now 3 sub-accounts, and a `paused` state covers a trial ending with no card.
 
 ### B. Several numbers per sub-account
@@ -39,7 +39,7 @@ Each spec ends with its open questions. Once Charlie signs one off, the next ste
 - **Why it matters:** GHL's top WhatsApp request (607 votes); native GHL still allows one.
 
 ### C. White-label, agency install, affiliates
-- **Recommended 17 Oct, awaiting confirmation:** at launch, agency branding inherited by every sub-account plus auto-claiming new sub-accounts; a 20% recurring affiliate scheme after the soft launch; custom domains later. Still to pick: affiliate tooling (Stripe-native coupons, or a tool such as Rewardful or Reditus).
+- **Decided 17 Oct:** at launch, agency branding inherited by every sub-account plus auto-claiming new sub-accounts; a 20% recurring affiliate scheme after the soft launch; custom domains later. Still to pick: affiliate tooling (Stripe-native coupons, or a tool such as Rewardful or Reditus).
 - **Already there:** per-location branding (`src/lib/brand.ts`, `client-logos` bucket, `saveGhlAccountBrandingAction`) and agency-level OAuth installs (spec §1).
 - **Missing:** agency-level branding that every sub-account inherits; auto-claiming locations added to an agency after the install (needs GHL's location-created webhook, to be confirmed in GHL's docs); wholesale pricing for SaaS-mode agencies (depends on A).
 

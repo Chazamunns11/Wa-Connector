@@ -62,4 +62,4 @@ If firing isn't possible from outside, fall back to GHL's documented inbound web
 ## Open questions for Charlie
 
 - Should PingWren add its own per-execution price on top of GHL's $0.01? Proposed: no. It's a small cost to customers already, and GoGHL's triggers are part of its plan.
-- Is GHL's requirement for LC Premium acceptable for the launch audience (coaches on FitPro CRM)? If most of them don't have it, these triggers are agency features, not coach features.
+- ~~Is LC Premium acceptable for the launch audience?~~ **Answered 17 Oct:** most FitPro CRM coaches have LC Premium Triggers & Actions on, so these triggers are a coach feature, not only an agency one.

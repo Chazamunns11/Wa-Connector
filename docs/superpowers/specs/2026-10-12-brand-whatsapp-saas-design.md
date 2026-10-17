@@ -18,9 +18,9 @@ A public, paid product that anyone running GoHighLevel can find (through ads or 
 |---|---|
 | Customer | Anyone with GHL: **agency owners** (many sub-accounts) **and single sub-account owners** (often under a white-label like FitPro CRM). Both use the same system. |
 | Price | **Per activated sub-account, monthly** (decided 17 Oct), with **3 WhatsApp numbers included** per sub-account. Volume tiers and an annual discount; the amounts are Charlie's to set (market: $29, $22 at 3+, $19 at 10+ per sub-account; extra numbers $9–10). |
-| Trial | **Recommended 17 Oct, not yet confirmed:** **14 days, no card.** When the trial ends without a card, sending pauses until one is added. Trial limited to **3 active sub-accounts**. (Previously: 7 days, card at signup. Every competitor checked runs a no-card trial.) |
+| Trial | **7 days, no card** (decided 17 Oct). When the trial ends without a card, sending pauses until one is added. Trial limited to **3 active sub-accounts**. (Previously: card at signup. Every competitor checked runs a no-card trial.) |
 | Numbers per sub-account | Up to 3 included (decided 17 Oct). **One default sending number per sub-account; a contact who has messaged a particular number gets replies from that number** (sticky). See roadmap item B. |
-| Agency resale | **Recommended 17 Oct, not yet confirmed:** at launch, agency branding that every sub-account inherits, plus auto-claiming sub-accounts added to an installed agency later. After the soft launch, a 20% recurring affiliate scheme. Custom domains later. |
+| Agency resale | **Decided 17 Oct:** at launch, agency branding that every sub-account inherits, plus auto-claiming sub-accounts added to an installed agency later. After the soft launch, a 20% recurring affiliate scheme. Custom domains later. |
 | Brand | **A new brand on its own domain** (`app.<brand>.com`). Agencies never see "FitClosers". |
 | Login | **Both:** a passwordless email sign-in link on `app.<brand>.com` (the main login; Supabase OTP, as the Hub uses), plus the in-GHL page per sub-account (GHL signs that user in for that one sub-account only). |
 | Architecture | **Standalone** (revised 16 Oct): its own private GitHub repo, its own Vercel project, its **own Supabase project** and its **own bridge service**, in the same Railway account/project and Supabase organisation as the Hub (one login, one bill, separate instances). |
@@ -79,7 +79,7 @@ Steps 1–2 above ship before §1–§4. Paid traffic must not land on a product
 
 ## 2. Signup and billing
 
-**Flow:** landing page → **Start 14-day free trial** → `/signup` (account name, "agency or single business?", email; sign-in link emailed) → **Stripe Checkout** (subscription mode, `trial_period_days: 14`, `payment_method_collection: 'if_required'` so no card is asked for, `trial_settings.end_behavior.missing_payment_method: 'pause'`) → the dashboard (`/`) → **Connect GHL** → choose sub-accounts in GHL → **Activate** each one wanted → scan the QR or send a connect link → checklist: set the Telephony Provider.
+**Flow:** landing page → **Start 7-day free trial** → `/signup` (account name, "agency or single business?", email; sign-in link emailed) → **Stripe Checkout** (subscription mode, `trial_period_days: 7`, `payment_method_collection: 'if_required'` so no card is asked for, `trial_settings.end_behavior.missing_payment_method: 'pause'`) → the dashboard (`/`) → **Connect GHL** → choose sub-accounts in GHL → **Activate** each one wanted → scan the QR or send a connect link → checklist: set the Telephony Provider.
 
 **Stripe:**
 - A **separate Stripe account** for `<Brand>`, with one recurring price per number per month. Stripe Tax handles UK and EU VAT.
