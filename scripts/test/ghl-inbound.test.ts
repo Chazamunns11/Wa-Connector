@@ -1780,7 +1780,14 @@ function withTriggerReads(repo: GhlInboundRepo, phone: string | null = "+4477009
   } as GhlInboundRepo;
 }
 
+const triggerFlagBefore = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+afterEach(() => {
+  if (triggerFlagBefore === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = triggerFlagBefore;
+});
+
 function fireRecorder(behaviour: "ok" | "throw" | "slow" = "ok") {
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
   const fired: FiredTrigger[] = [];
   const fireTrigger: GhlInboundDeps["fireTrigger"] = async (_repo, locationId, key, payload) => {
     fired.push({ locationId, key, payload });
@@ -1906,4 +1913,26 @@ test("triggers: with the flag off the real helper posts nothing anywhere", async
     if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
     else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
   }
+});
+
+test("triggers: a STOP or START keyword row fires nothing", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow({ body: "STOP" }), makeRow({ body: "START" })]);
+  const { fired, fireTrigger } = fireRecorder();
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  assert.equal(result.pushed, 2);
+  assert.equal(result.optedOut, 1);
+  assert.equal(result.optedIn, 1);
+  assert.deepEqual(fired, []);
+});
+
+test("triggers: flag off means no phone read and no fire", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow()]);
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const reads: string[] = [];
+  const fired: unknown[] = [];
+  const spy = { ...withTriggerReads(repo), async getWhatsappSessionSummary() { reads.push("read"); return { phoneNumber: "+447700900999" } as never; } } as GhlInboundRepo;
+  const result = await drainGhlInboundReplies(spy, makeDeps({ fireTrigger: async (...a) => { fired.push(a); } }).deps);
+  assert.equal(result.pushed, 1);
+  assert.deepEqual(fired, []);
+  assert.deepEqual(reads, []);
 });

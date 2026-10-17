@@ -111,7 +111,7 @@ import { resolveSendingTenant, type SendingNumber } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
 import { decideNotConnected, REASON_NUMBER_BANNED, type NotConnectedDecision } from "@/lib/ghl-held-rules";
 import type { TriggerKey } from "@/lib/ghl-trigger-keys";
-import type { TriggerPayloads, TriggerRepo } from "@/lib/ghl-triggers";
+import { isWorkflowTriggersEnabled, type TriggerPayloads, type TriggerRepo } from "@/lib/ghl-triggers";
 import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, LocationNumber } from "@/lib/types";
 
 /** Repo slice this module needs — every method it touches is already on `GhlRepository` (Phase 2's extension of Phase 1's interface — see that Pick list's own comment, src/lib/data/index.ts). Both entry points are only ever driven via `webhookRepo` (the webhook route, the poke route, the reminders cron — none carry a user session). */
@@ -304,17 +304,18 @@ export function capTriggerMessage(text: string | null): string {
 }
 
 /** Fires `whatsapp_not_on_whatsapp` for a row the bridge reported as not on WhatsApp. Never throws. */
-async function fireNotOnWhatsapp(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage): Promise<void> {
+async function fireNotOnWhatsapp(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage, text: string | null): Promise<void> {
   try {
+    if (!isWorkflowTriggersEnabled()) return;
     const numbers = await repo.listLocationNumbers(row.locationId);
     const target = await resolveTriggerNumber(repo, row.tenantId, numbers.find((n) => n.tenantId === row.tenantId)?.label);
     if (!target) return;
-    // `pendingText` is cleared once a row leaves `pending_send`, so by now it is
-    // normally null and the message is "".
+    // `text` is the row's `pendingText` as read BEFORE the failure was reported
+    // (reporting clears it from the database); never logged.
     await fireTriggerBestEffort(repo, deps, row.locationId, "whatsapp_not_on_whatsapp", {
       ...target,
       contactId: row.ghlContactId,
-      message: capTriggerMessage(row.pendingText),
+      message: capTriggerMessage(text),
     });
   } catch {
     // never changes the drain result
@@ -1811,12 +1812,13 @@ async function drainMultipartRow(
   );
 
   const status = aggregate.status === "delivered" ? "delivered" : "failed";
+  const unsentText = row.pendingText;
   const outcome = await reportGhlOutcome(repo, deps, account, row, status, aggregate.status === "failed" ? aggregate.reason : null);
   if (outcome === "reported") {
     if (aggregate.status === "delivered") result.delivered++;
     else {
       result.failed++;
-      if (aggregate.reason === REASON_NOT_ON_WHATSAPP) await fireNotOnWhatsapp(repo, deps, row);
+      if (aggregate.reason === REASON_NOT_ON_WHATSAPP) await fireNotOnWhatsapp(repo, deps, row, unsentText);
     }
   } else {
     result.reportFailed++;
@@ -2231,10 +2233,11 @@ async function drainAcceptedRow(
     return;
   }
   if (bridgeMessage.status === "not_on_whatsapp") {
+    const unsentText = row.pendingText;
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
     if (outcome === "reported") {
       result.failed++;
-      await fireNotOnWhatsapp(repo, deps, row);
+      await fireNotOnWhatsapp(repo, deps, row, unsentText);
     } else result.reportFailed++;
     return;
   }
@@ -2326,6 +2329,7 @@ async function fireMessageRead(
   numbersByLocation: Map<string, LocationNumber[]>
 ): Promise<void> {
   try {
+    if (!isWorkflowTriggersEnabled()) return;
     let numbers = numbersByLocation.get(row.locationId);
     if (!numbers) {
       numbers = await repo.listLocationNumbers(row.locationId);

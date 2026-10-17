@@ -2,7 +2,7 @@
  * Read receipts to GHL (migration 0010) — offline: an in-memory repo and a
  * fake status PUT. Nothing here touches GHL or the network.
  */
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
@@ -270,7 +270,14 @@ function withTriggerReads(s: ReturnType<typeof setup>, phone: string | null = "+
   return { repo, sessionReads };
 }
 
+const flagBefore = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+afterEach(() => {
+  if (flagBefore === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = flagBefore;
+});
+
 function fakeFire(behaviour: "ok" | "throw" = "ok") {
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
   const fired: { locationId: string; key: string; payload: unknown }[] = [];
   const fireTrigger = async (_repo: unknown, locationId: string, key: string, payload: unknown) => {
     fired.push({ locationId, key, payload });
@@ -345,4 +352,15 @@ test("triggers: with the flag off the real helper posts nothing anywhere", async
     if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
     else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
   }
+});
+
+test("triggers: flag off means no phone read and no fire", async () => {
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const s = setup([row(1)], ["key-1"]);
+  const { repo, sessionReads } = withTriggerReads(s);
+  const fired: unknown[] = [];
+  const r = await drainGhlReadReceipts(repo, { ...s.deps, fireTrigger: async (...a: unknown[]) => { fired.push(a); } } as unknown as GhlProviderDeps);
+  assert.equal(r.reported, 1);
+  assert.deepEqual(fired, []);
+  assert.deepEqual(sessionReads, []);
 });

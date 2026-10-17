@@ -216,7 +216,7 @@ import {
   type GhlTokenRefreshDeps,
   type GhlTokenRefreshRepo,
 } from "@/lib/ghl-provider";
-import { toTriggerMessageType } from "@/lib/ghl-triggers";
+import { isWorkflowTriggersEnabled, toTriggerMessageType } from "@/lib/ghl-triggers";
 import { inboundNumberPrefix } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
 import { classifyOptOutMessage } from "@/lib/opt-out";
@@ -768,7 +768,7 @@ async function processGhlInboundRow(
     // Not for a group contact: it belongs to its group's number, and the
     // sender is not a contact at all.
     if (!group) await recordStickiness(repo, account.locationId, contactId, row);
-    await fireInboundTrigger(repo, deps, memos, account.locationId, locationNumbers, contactId, row, group !== null);
+    await fireInboundTrigger(repo, deps, memos, account.locationId, locationNumbers, contactId, row, group !== null || optOutOutcome !== null);
     return;
   }
 
@@ -818,10 +818,11 @@ async function fireInboundTrigger(
   locationNumbers: LocationNumber[],
   contactId: string,
   row: WhatsappInboundMessage,
-  isGroup: boolean
+  skip: boolean
 ): Promise<void> {
   try {
-    if (isGroup) return;
+    // A group row, or a STOP/START keyword (a compliance keyword, not a conversation).
+    if (skip || !isWorkflowTriggersEnabled()) return;
     const isMissedCall = row.eventKind === "missed_call";
     if (row.eventKind && !isMissedCall) return;
     const target = await resolveTriggerNumber(repo, row.coachId, locationNumbers.find((n) => n.tenantId === row.coachId)?.label, memos.phoneByTenant);

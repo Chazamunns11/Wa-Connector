@@ -329,7 +329,7 @@ export interface GhlRepository {
 
   /**
    * Advance a ledger row's `send_state`/`send_attempts` — Phase 2's
-   * handler/drain only. IMPLEMENTATIONS MUST CLEAR `pending_text` to `null`
+   * handler/drain only. IMPLEMENTATIONS MUST CLEAR `pending_text` to `null` on a refusal (an accepted row keeps it until `markGhlOutboundReported` reports a status, 0013; the clause below is the pre-0013 rule, kept for history)
    * whenever `patch.sendState` is neither `'pending_send'` nor `'held'` (a held
    * row keeps its text so the release pass can still send it) (0070_ghl_outbound_pending_text.sql's
    * whole contract: that column exists only for the duration a row is

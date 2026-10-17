@@ -1268,7 +1268,9 @@ export class SupabaseGhlRepository implements GhlRepository {
     // it the instant the row leaves 'pending_send' (see that migration's
     // header and Repository.updateGhlOutboundSendState's JSDoc).
     // A held row keeps its text: the release pass still has to send it.
-    if (patch.sendState !== "pending_send" && patch.sendState !== "held") update.pending_text = null;
+    // 0013: an accepted row keeps it too, until its status is reported
+    // (`markGhlOutboundReported`), so a "not on WhatsApp" trigger can carry it.
+    if (patch.sendState === "refused") update.pending_text = null;
     // 0071_ghl_outbound_refusal_reason.sql — stamped once, alongside (not
     // instead of) report_error, and never cleared again (adversarial-review
     // finding 3 — see Repository.updateGhlOutboundSendState's JSDoc).
@@ -1398,6 +1400,8 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (patch.reportedStatus !== null) {
       update.reported_status = patch.reportedStatus;
       update.reported_at = new Date().toISOString();
+      // 0013: the kept text is dropped the moment the status is reported.
+      update.pending_text = null;
     }
     const { error } = await supabase.from("ghl_outbound_messages").update(update).eq("id", id);
     if (error) throw error;

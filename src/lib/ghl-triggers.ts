@@ -94,10 +94,15 @@ export async function postTriggerEvent(
   }
 }
 
+/** Whether firing is switched on: `GHL_WORKFLOW_TRIGGERS_ENABLED` is exactly "true". Callers check it before building a payload. */
+export function isWorkflowTriggersEnabled(): boolean {
+  return process.env.GHL_WORKFLOW_TRIGGERS_ENABLED === "true";
+}
+
 export function defaultTriggerDeps(base: GhlTokenRefreshDeps): TriggerDeps {
   return {
     ...base,
-    enabled: () => process.env.GHL_WORKFLOW_TRIGGERS_ENABLED === "true",
+    enabled: isWorkflowTriggersEnabled,
     postTriggerEvent: (url, token, payload) => postTriggerEvent(url, token, payload),
   };
 }

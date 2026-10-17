@@ -7,7 +7,7 @@
  * here can send a real WhatsApp message, scan a QR, or call a real GHL/
  * WhatsApp endpoint.
  */
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign as cryptoSign, createHash } from "node:crypto";
 
@@ -503,7 +503,8 @@ function createFakeRepo(
       row.sendState = patch.sendState;
       if (patch.sendAttempts !== undefined) row.sendAttempts = patch.sendAttempts;
       // Mirrors src/lib/data/supabase.ts's own clearing rule (0070).
-      if (patch.sendState !== "pending_send" && patch.sendState !== "held") row.pendingText = null;
+      // 0013: an accepted row keeps its text until its status is reported.
+      if (patch.sendState === "refused") row.pendingText = null;
       // Mirrors src/lib/data/supabase.ts's own stamp-once rule (0071).
       if (patch.sendState === "refused" && patch.refusalReason !== undefined) row.refusalReason = patch.refusalReason;
       return 1;
@@ -543,6 +544,7 @@ function createFakeRepo(
       if (patch.reportedStatus !== null) {
         row.reportedStatus = patch.reportedStatus;
         row.reportedAt = new Date().toISOString();
+        row.pendingText = null; // 0013: cleared when the status is reported
       }
       row.reportError = patch.reportError;
     },
@@ -769,7 +771,7 @@ test("handleProviderOutboundMessage: bridge 202 accept -> row accepted, zero sta
   assert.equal(statusCalls.length, 0);
   const row = [...rows.values()][0];
   assert.equal(row.sendState, "accepted");
-  assert.equal(row.pendingText, null, "pending_text must be cleared once the row leaves pending_send");
+  assert.equal(row.pendingText, "hi there", "0013: an accepted row keeps its text until its status is reported");
 });
 
 test("handleProviderOutboundMessage: bridge 429 daily_cap_reached -> inline failed PUT with the fixed cap message", async () => {
@@ -1378,7 +1380,7 @@ test("drainGhlOutboundStatuses: a pending_send retry that succeeds transitions t
 
   await drainGhlOutboundStatuses(repoBundle.repo, deps);
   assert.equal(row.sendState, "accepted");
-  assert.equal(row.pendingText, null);
+  assert.equal(row.pendingText, "resend me please", "0013: kept until reported");
 });
 
 test("drainGhlOutboundStatuses: the 6th attempt (sendAttempts already at 5) gives up without calling the bridge again — reports the fixed exhaustion reason", async () => {
@@ -3718,7 +3720,14 @@ test("getGhlContact: a 404 is flagged notFound", async () => {
 // Workflow triggers: whatsapp_not_on_whatsapp from the status drain.
 // ---------------------------------------------------------------------------
 
+const triggerFlagBefore = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+afterEach(() => {
+  if (triggerFlagBefore === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = triggerFlagBefore;
+});
+
 function triggerFake(behaviour: "ok" | "throw" = "ok") {
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
   const fired: { locationId: string; key: string; payload: unknown }[] = [];
   const fireTrigger: GhlProviderDeps["fireTrigger"] = async (_repo, locationId, key, payload) => {
     fired.push({ locationId, key, payload });
@@ -3728,18 +3737,30 @@ function triggerFake(behaviour: "ok" | "throw" = "ok") {
   return { fired, fireTrigger };
 }
 
-test("triggers: not_on_whatsapp reported to GHL fires whatsapp_not_on_whatsapp with an empty message (pending_text is cleared once sent)", async () => {
+test("triggers: an accepted row keeps its text until reported, then it is cleared", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  const row = seedAcceptedRow(repoBundle, { pendingText: "hello there" });
+  await repoBundle.repo.updateGhlOutboundSendState(row.id, { sendState: "accepted" });
+  assert.equal(row.pendingText, "hello there");
+  await repoBundle.repo.markGhlOutboundReported(row.id, { reportedStatus: null, reportError: "down" });
+  assert.equal(row.pendingText, "hello there", "a failed PUT leaves it for the retry");
+  await repoBundle.repo.markGhlOutboundReported(row.id, { reportedStatus: "delivered", reportError: null });
+  assert.equal(row.pendingText, null);
+});
+
+test("triggers: not_on_whatsapp reported to GHL fires whatsapp_not_on_whatsapp carrying the unsent text", async () => {
   const repoBundle = createFakeRepo([makeAccount()]);
   repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
-  const row = seedAcceptedRow(repoBundle);
+  const row = seedAcceptedRow(repoBundle, { pendingText: "Hi, your booking is tomorrow" });
   repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
   const { fired, fireTrigger } = triggerFake();
   const { deps } = makeDeps({ fireTrigger });
 
   const result = await drainGhlOutboundStatuses(repoBundle.repo, deps);
   assert.equal(result.failed, 1);
+  assert.equal(row.pendingText, null, "cleared once reported");
   assert.deepEqual(fired, [
-    { locationId: LOCATION_ID, key: "whatsapp_not_on_whatsapp", payload: { number: "+447700900999", numberLabel: null, contactId: "ghl-contact-1", message: "" } },
+    { locationId: LOCATION_ID, key: "whatsapp_not_on_whatsapp", payload: { number: "+447700900999", numberLabel: null, contactId: "ghl-contact-1", message: "Hi, your booking is tomorrow" } },
   ]);
 });
 
@@ -3820,4 +3841,17 @@ test("triggers: with the flag off the real helper posts nothing anywhere", async
     if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
     else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
   }
+});
+
+test("triggers: flag off means no phone read and no fire for the status drain", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const row = seedAcceptedRow(repoBundle, { pendingText: "x" });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const fired: unknown[] = [];
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger: async (...a) => { fired.push(a); } }).deps);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(fired, []);
+  assert.equal(repoBundle.calls.filter((c) => c.method === "getWhatsappSessionSummary").length, 0);
 });
