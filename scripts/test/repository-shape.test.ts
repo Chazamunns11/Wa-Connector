@@ -97,15 +97,15 @@ const METHODS = [
   "listSessionsForTriggers",
 ] as const;
 
-test("SupabaseGhlRepository implements all 85 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 85);
-  assert.equal(new Set(METHODS).size, 85);
+test("SupabaseGhlRepository implements all 86 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 86);
+  assert.equal(new Set(METHODS).size, 86);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 85", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 86", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });
