@@ -19,9 +19,9 @@ export interface PricingConfig {
 }
 
 export const CURRENCY = "GBP";
-export const STANDARD_PENCE = 1499;
-export const MID_PENCE = 1199;
-export const VOLUME_PENCE = 999;
+export const STANDARD_PENCE = 999;
+export const MID_PENCE = 799;
+export const VOLUME_PENCE = 599;
 /** First sub-account count that gets the middle price. */
 export const MID_FROM = 11;
 /** First sub-account count that gets the lowest price. */
@@ -57,7 +57,7 @@ export function monthlyCost(subAccounts: number): number {
   return monthlyCostPence(subAccounts) / 100;
 }
 
-/** en-GB currency string, always with pence: "£14.99", "£119.90". */
+/** en-GB currency string, always with pence: "£9.99", "£79.90". */
 export function formatMoney(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-GB", {
     style: "currency",
@@ -69,12 +69,12 @@ export function formatMoney(amount: number, currency: string): string {
 
 const money = (pence: number, currency: string) => formatMoney(pence / 100, currency);
 
-/** The 1 to 10 sub-account price per sub-account, e.g. "£14.99". */
+/** The 1 to 10 sub-account price per sub-account, e.g. "£9.99". */
 export function standardPrice(currency: string): string {
   return money(STANDARD_PENCE, currency);
 }
 
-/** The 11 to 24 sub-account price per sub-account, e.g. "£11.99". */
+/** The 11 to 24 sub-account price per sub-account, e.g. "£7.99". */
 export function midPrice(currency: string): string {
   return money(MID_PENCE, currency);
 }
@@ -98,7 +98,7 @@ export function tierRows(currency: string): { range: string; each: string }[] {
   ];
 }
 
-/** e.g. "10 sub-accounts = £149.90/month"; "1 sub-account = £14.99/month". */
+/** e.g. "10 sub-accounts = £99.90/month"; "1 sub-account = £9.99/month". */
 export function priceLine(subAccounts: number, pricing: PricingConfig): string {
   const n = Number.isFinite(subAccounts) && subAccounts > 0 ? Math.floor(subAccounts) : 0;
   return `${n} ${n === 1 ? "sub-account" : "sub-accounts"} = ${formatMoney(monthlyCost(n), pricing.currency)}/month`;

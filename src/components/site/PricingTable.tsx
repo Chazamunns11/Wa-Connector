@@ -1,6 +1,6 @@
 import { CALCULATOR_PRESETS, formatMoney, monthlyCost, type PricingConfig } from "@/lib/pricing";
 
-/** "1 sub-account is £14.99 a month, 3 sub-accounts £44.97 ..." as one sentence built from the presets. */
+/** "1 sub-account is £9.99 a month, 3 sub-accounts £29.97 ..." as one sentence built from the presets. */
 function fallbackSentence(pricing: PricingConfig): string {
   const parts = CALCULATOR_PRESETS.map((n) => {
     const cost = formatMoney(monthlyCost(n), pricing.currency);

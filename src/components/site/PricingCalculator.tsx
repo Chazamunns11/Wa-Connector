@@ -7,7 +7,7 @@ import { CALC_MAX, CALC_MIN, calculatorValue } from "@/lib/site/calculator";
 const DEFAULT = "5";
 
 /**
- * The calculator is one sentence: "If I activate [5] sub-accounts, I'll pay £74.95 a month."
+ * The calculator is one sentence: "If I activate [5] sub-accounts, I'll pay £49.95 a month."
  * The label is the first clause; the amount sits in a polite live region, and
  * the help or error line below is the input's description.
  */

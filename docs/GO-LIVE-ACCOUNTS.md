@@ -106,14 +106,14 @@ same organisation**.
    - Recurring, monthly, currency GBP.
    - Pricing model: **Volume pricing** (`tiers_mode = volume`,
      `billing_scheme = tiered`).
-   - Tier 1: first unit 1, last unit 10, **£14.99** per unit (1499 pence).
-   - Tier 2: first unit 11, last unit 24, **£11.99** per unit (1199 pence).
-   - Tier 3: first unit 25, last unit and above, **£9.99** per unit (999 pence).
+   - Tier 1: first unit 1, last unit 10, **£5.99** per unit (599 pence).
+   - Tier 2: first unit 11, last unit 24, **£7.99** per unit (799 pence).
+   - Tier 3: first unit 25, last unit and above, **£5.99** per unit (599 pence).
    - No flat fee on any tier.
 
    That matches `stripeVolumeTiers()` in `src/lib/stripe/billing.ts`. Volume
    means the whole order gets the tier price. Twenty-five sub-accounts cost
-   25 x £9.99, not ten at £14.99, fourteen at £11.99 and one at £9.99. If the prices in `src/lib/pricing.ts`
+   25 x £5.99, not ten at £9.99, fourteen at £7.99 and one at £5.99. If the prices in `src/lib/pricing.ts`
    ever change, the Stripe price must change with them.
 4. Copy the price id (starts `price_`). It becomes `STRIPE_PRICE_ID`.
 5. **Developers → API keys.** Copy the secret key (starts `sk_test_`). It
@@ -311,7 +311,7 @@ Then walk this journey:
    `4242 4242 4242 4242` on the Stripe page, and land back on Billing ("Card
    saved..."). In Stripe the card is the customer's and the subscription's
    default, the subscription is **Active**, its billing period starts today,
-   and the first invoice (1 x £14.99, plus tax if on) is paid. The webhook
+   and the first invoice (1 x £9.99, plus tax if on) is paid. The webhook
    gets `checkout.session.completed` (setup mode), then
    `customer.subscription.resumed`; `billing_status` becomes `active`. Send
    the workflow SMS again: it reaches WhatsApp. If the subscription stays
@@ -322,7 +322,7 @@ Then walk this journey:
    status goes straight from trialing to **active**, never paused.
 6. **Volume tiers.** Activate eleven sub-accounts (use the comped FitClosers
    account's locations, or a test account). Charge for the month should be
-   11 x £11.99. At 25 it should be 25 x £9.99.
+   11 x £7.99. At 25 it should be 25 x £5.99.
 7. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
    attaches, then declines). Advance one billing cycle. Status becomes
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the

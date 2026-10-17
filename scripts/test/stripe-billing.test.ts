@@ -42,7 +42,7 @@ function withEnv(env: Record<string, string | undefined>, fn: () => Promise<void
   });
 }
 
-const input = { accountId: "acc-1", customerEmail: "a@b.co", successUrl: "S", cancelUrl: "C" };
+const input = { accountId: "acc-1", customerEmail: "a£7\.99.co", successUrl: "S", cancelUrl: "C" };
 const base = { STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_9", STRIPE_WEBHOOK_SECRET: "whsec" };
 
 test("createCheckoutSession: 7-day trial with no card, pausing when it ends without one; no tax by default", async () => {
@@ -53,7 +53,7 @@ test("createCheckoutSession: 7-day trial with no card, pausing when it ends with
     assert.equal(calls[0].path, "/checkout/sessions");
     assert.deepEqual(calls[0].params, {
       mode: "subscription",
-      customer_email: "a@b.co",
+      customer_email: "a£7\.99.co",
       client_reference_id: "acc-1",
       line_items: [{ price: "price_9", quantity: 1 }],
       subscription_data: {
@@ -61,7 +61,7 @@ test("createCheckoutSession: 7-day trial with no card, pausing when it ends with
         trial_settings: { end_behavior: { missing_payment_method: "pause" } },
         metadata: { account_id: "acc-1" },
       },
-      metadata: { account_id: "acc-1", owner_email: "a@b.co" },
+      metadata: { account_id: "acc-1", owner_email: "a£7\.99.co" },
       payment_method_collection: "if_required",
       success_url: "S",
       cancel_url: "C",
@@ -223,9 +223,9 @@ test("stripeVolumeTiers: Stripe volume-price definition matches W40 pence", () =
       { up_to: "inf", unit_amount: VOLUME_PENCE },
     ],
   });
-  assert.equal(STANDARD_PENCE, 1499);
-  assert.equal(MID_PENCE, 1199);
-  assert.equal(VOLUME_PENCE, 999);
+  assert.equal(STANDARD_PENCE, 999);
+  assert.equal(MID_PENCE, 799);
+  assert.equal(VOLUME_PENCE, 599);
   assert.equal(MID_FROM, 11);
   assert.equal(VOLUME_FROM, 25);
   assert.deepEqual(stripeVolumeTiers().tiers.map((t) => t.up_to), [10, 24, "inf"]);

@@ -109,7 +109,7 @@ test("getBilling given the rows does not list locations again", async () => {
 test("getBilling at 25 active sub-accounts prices every sub-account at the volume rate", async () => {
   const many = Array.from({ length: 25 }, (_, i) => loc(`l${i}`, `L${i}`, true));
   const b = await make(fakes({ locations: many })).getBilling();
-  assert.equal(b.nextInvoiceAmount, 249.75);
+  assert.equal(b.nextInvoiceAmount, 149.75);
 });
 
 test("getBilling for an account with no subscription (comped or pending) never calls Stripe", async () => {
