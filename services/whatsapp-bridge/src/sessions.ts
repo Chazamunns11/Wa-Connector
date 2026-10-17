@@ -1681,7 +1681,7 @@ export class SessionManager {
     try {
       const jids = await this.store.listEnabledGroupJids(session.coachId);
       const { enabled, lookupFailed } = await withRecentlyCreated(jids.filter(isGroupJid), session.recentlyCreated, Date.now(), (pending) =>
-        this.store.existingGroupJids(session.coachId, pending)
+        this.store.groupRowStates(session.coachId, pending)
       );
       if (lookupFailed) this.log.error({ coachId: session.coachId }, "recently created groups could not be checked — not kept enabled by this load");
       if (session.enabledGroupsLoad === generation) session.enabledGroups = enabled;

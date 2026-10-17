@@ -256,6 +256,8 @@ async function findJustCreatedGroup(ctx: GroupOpContext, subject: string, err: u
     const match = Object.values(all).find(
       (g) =>
         isGroupJid(g.id) &&
+        // An earlier create in the same window is not this one.
+        !ctx.groups.recentlyCreated.has(g.id) &&
         g.subject === subject &&
         typeof g.creation === "number" &&
         nowS - g.creation <= JUST_CREATED_WINDOW_S &&
@@ -273,13 +275,22 @@ async function findJustCreatedGroup(ctx: GroupOpContext, subject: string, err: u
   return null;
 }
 
+/** A `whatsapp_groups` row's switch state, as `BridgeStore.groupRowStates` reads it. */
+export interface GroupRowState {
+  jid: string;
+  enabled: boolean;
+  left: boolean;
+}
+
 /**
  * The enabled set a load returned, plus every group this session created in
- * the last 10 minutes that the app has NOT recorded yet — the app records a
- * new group and refreshes shortly after the create, and a socket bounce or
- * an older in-flight load before that must not switch it off. A recent group
- * that already has a `whatsapp_groups` row but is missing from the loaded
- * list was switched off (or left) since: it is forgotten and stays off.
+ * the last 10 minutes that is still meant to be on — the app records a new
+ * group and refreshes shortly after the create, and a socket bounce or an
+ * older in-flight load before that must not switch it off. For each recent
+ * group missing from the loaded list, its row decides:
+ *   - no row yet (the app has not recorded it): kept on;
+ *   - row enabled and not left (written between the two reads): kept on;
+ *   - row disabled or left (switched off since): forgotten, stays off.
  * Prunes expired entries. If the row lookup fails, nothing is forced in
  * (fail closed) and `lookupFailed` is set; the entries are kept for the next load.
  */
@@ -287,7 +298,7 @@ export async function withRecentlyCreated(
   loaded: Iterable<string>,
   recentlyCreated: Map<string, number>,
   now: number,
-  existingGroupJids: (jids: string[]) => Promise<string[]>
+  groupRowStates: (jids: string[]) => Promise<GroupRowState[]>
 ): Promise<{ enabled: Set<string>; lookupFailed: boolean }> {
   const enabled = new Set(loaded);
   const pending: string[] = [];
@@ -296,14 +307,15 @@ export async function withRecentlyCreated(
     else if (!enabled.has(jid)) pending.push(jid);
   }
   if (pending.length === 0) return { enabled, lookupFailed: false };
-  let recorded: Set<string>;
+  let rows: Map<string, GroupRowState>;
   try {
-    recorded = new Set(await existingGroupJids(pending));
+    rows = new Map((await groupRowStates(pending)).map((r) => [r.jid, r]));
   } catch {
     return { enabled, lookupFailed: true };
   }
   for (const jid of pending) {
-    if (recorded.has(jid)) recentlyCreated.delete(jid);
+    const row = rows.get(jid);
+    if (row && (!row.enabled || row.left)) recentlyCreated.delete(jid);
     else enabled.add(jid);
   }
   return { enabled, lookupFailed: false };
@@ -485,15 +497,24 @@ async function addParticipants(ctx: GroupOpContext, groupJid: string, phones: st
     return { kind: "ok", value: results };
   }
 
-  // One batched existence check (hard rule 3): each phone is added by the
-  // JID WhatsApp returns for it, matched back by its phone-number JID.
-  let found: Map<string, string>;
+  // Existence check (hard rule 3): each phone is added by the JID WhatsApp
+  // returns for it. One batched call first; a result is credited to a phone
+  // only when it is exactly that phone's PN JID. WhatsApp may canonicalise a
+  // number differently (e.g. Brazil's extra 9), and Baileys drops results
+  // without a contact, so count and order prove nothing: every phone the
+  // batch did not answer unambiguously is looked up on its own.
+  const resolved = new Map<string, string | null>();
   try {
-    const lookup = await ctx.sock.onWhatsApp(...eligible.map((i) => phones[i]!));
-    found = new Map();
+    const unique = [...new Set(eligible.map((i) => phones[i]!))];
+    const lookup = await ctx.sock.onWhatsApp(...unique);
+    const byPnJid = new Map<string, string>();
     for (const r of lookup ?? []) {
       const key = r.exists ? jidNormalizedUser(r.jid) : "";
-      if (key && !found.has(key)) found.set(key, r.jid);
+      if (key && !byPnJid.has(key)) byPnJid.set(key, r.jid);
+    }
+    for (const phone of unique) {
+      const exact = byPnJid.get(`${phone.slice(1)}@s.whatsapp.net`);
+      resolved.set(phone, exact ?? (await resolveOnWhatsApp(ctx.sock, phone)));
     }
   } catch (err) {
     logFailure(ctx, "add_lookup", err);
@@ -502,7 +523,7 @@ async function addParticipants(ctx: GroupOpContext, groupJid: string, phones: st
   const candidates: { index: number; jid: string }[] = [];
   const queued = new Set<string>();
   for (const index of eligible) {
-    const waJid = found.get(`${phones[index]!.slice(1)}@s.whatsapp.net`);
+    const waJid = resolved.get(phones[index]!) ?? null;
     if (!waJid) results[index]!.result = "not_on_whatsapp";
     else if (queued.has(waJid)) results[index]!.result = "duplicate";
     else {

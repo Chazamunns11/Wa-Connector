@@ -608,23 +608,28 @@ export class BridgeStore {
   }
 
   /**
-   * Which of `groupJids` already have a `whatsapp_groups` row for this
-   * tenant, enabled or not. Read-only. Lets the enabled-set load tell a
-   * just-created group the app has not recorded yet (no row: keep it on)
-   * from one the owner has since switched off (row, not enabled: keep it
-   * off). Every JID is checked with `isGroupJid` first; a malformed one
-   * throws before Supabase is touched.
+   * The `whatsapp_groups` rows this tenant has for `groupJids`: each one's
+   * switch (`enabled`) and whether the number has left (`left_at` set).
+   * JIDs with no row are simply absent. Read-only. Lets the enabled-set
+   * load tell a just-created group the app has not recorded yet, or has
+   * recorded enabled, from one the owner has since switched off. Every JID
+   * is checked with `isGroupJid` first; a malformed one throws before
+   * Supabase is touched.
    */
-  async existingGroupJids(tenantId: string, groupJids: string[]): Promise<string[]> {
-    if (!groupJids.every(isGroupJid)) throw new Error("[store] existingGroupJids: refused a malformed group jid");
+  async groupRowStates(tenantId: string, groupJids: string[]): Promise<{ jid: string; enabled: boolean; left: boolean }[]> {
+    if (!groupJids.every(isGroupJid)) throw new Error("[store] groupRowStates: refused a malformed group jid");
     if (groupJids.length === 0) return [];
     const { data, error } = await this.supabase
       .from("whatsapp_groups")
-      .select("group_jid")
+      .select("group_jid, enabled, left_at")
       .eq("tenant_id", tenantId)
       .in("group_jid", groupJids);
     if (error) throw error;
-    return ((data ?? []) as { group_jid: string }[]).map((r) => r.group_jid);
+    return ((data ?? []) as { group_jid: string; enabled: boolean; left_at: string | null }[]).map((r) => ({
+      jid: r.group_jid,
+      enabled: r.enabled === true,
+      left: r.left_at !== null && r.left_at !== undefined,
+    }));
   }
 
   // -------------------------------------------------------------------------

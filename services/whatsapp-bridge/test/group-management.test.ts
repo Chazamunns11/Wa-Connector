@@ -99,7 +99,7 @@ function makeHarness(opts: {
   log?: ReturnType<typeof pino>;
 } = {}) {
   /** whatsapp_groups rows the app has written (any enabled state), and whether that lookup fails. */
-  const groupRows = { jids: [] as string[], throws: false };
+  const groupRows = { rows: [] as { jid: string; enabled: boolean; left: boolean }[], throws: false };
   const calls: Call[] = [];
   const actions: { action: GroupActionKind; count: number; groupJid: string | null }[] = [];
   let createThrowsLeft = opts.createThrows ?? 0;
@@ -113,10 +113,10 @@ function makeHarness(opts: {
       return (opts.inbound ?? []).includes(phone);
     },
     listEnabledGroupJids: async () => [],
-    existingGroupJids: async (_tenantId: string, jids: string[]) => {
-      calls.push({ method: "existingGroupJids", args: [jids] });
+    groupRowStates: async (_tenantId: string, jids: string[]) => {
+      calls.push({ method: "groupRowStates", args: [jids] });
       if (groupRows.throws) throw new Error("supabase down");
-      return jids.filter((j) => groupRows.jids.includes(j));
+      return groupRows.rows.filter((r) => jids.includes(r.jid));
     },
   };
   const record = (method: string) => async (...args: unknown[]) => {
@@ -196,7 +196,7 @@ function makeHarness(opts: {
   };
   (manager as unknown as { sessions: Map<string, unknown> }).sessions.set(TENANT, session);
   const called = (method: string) => calls.filter((c) => c.method === method);
-  const reads = new Set(["groupMetadata", "hasInboundFromPhone", "onWhatsApp", "groupInviteCode", "groupFetchAllParticipating", "existingGroupJids"]);
+  const reads = new Set(["groupMetadata", "hasInboundFromPhone", "onWhatsApp", "groupInviteCode", "groupFetchAllParticipating", "groupRowStates"]);
   const mutations = () => calls.filter((c) => !reads.has(c.method));
   return { manager, session, calls, called, mutations, actions, pacer, groupRows };
 }
@@ -331,7 +331,7 @@ test("create: a 408 timeout with no matching group -> one groupCreate, failed, a
   assert.equal(h.called("groupFetchAllParticipating").length, 1);
 });
 
-test("create: a 408 timeout where the scan finds our new group -> ok with that jid, no second create", async () => {
+test("create: a Connection Closed error where the scan finds our new group -> ok with that jid, no second create", async () => {
   const h = makeHarness({
     createThrows: 1,
     createError: () => new Error("Connection Closed"),
@@ -344,6 +344,19 @@ test("create: a 408 timeout where the scan finds our new group -> ok with that j
   assert.equal(h.called("groupCreate").length, 1);
   assert.ok(h.session.enabledGroups.has(NEW_GROUP_JID));
   assert.deepEqual(h.called("groupUpdateDescription").map((c) => c.args), [[NEW_GROUP_JID, GROUP_DESC]]);
+});
+
+test("create: the ambiguous-create scan ignores a group this session already created in the window", async () => {
+  const h = makeHarness({
+    createThrows: 1,
+    createError: timeout,
+    allGroups: {
+      [NEW_GROUP_JID]: { id: NEW_GROUP_JID, subject: GROUP_NAME, owner: "200000000000001@lid", creation: Math.floor(Date.now() / 1000) - 30 },
+    },
+  });
+  h.session.recentlyCreated.set(NEW_GROUP_JID, Date.now() - 30_000); // an earlier create with the same name
+  assert.deepEqual(await h.manager.createGroup(TENANT, { requestId: "req-00022", name: GROUP_NAME, participants: [] }), { kind: "failed" });
+  assert.equal(h.called("groupCreate").length, 1);
 });
 
 test("create: a just-created group stays enabled across a reconnect's reload, for 10 minutes", async () => {
@@ -368,17 +381,35 @@ test("create: no whatsapp_groups row yet -> a reload keeps the new group enabled
   await h.manager.createGroup(TENANT, { requestId: "req-00017", name: GROUP_NAME, participants: [] });
   await loadOf(h)(h.session);
   assert.ok(h.session.enabledGroups.has(NEW_GROUP_JID));
-  assert.deepEqual(h.called("existingGroupJids").map((c) => c.args), [[[NEW_GROUP_JID]]]);
+  assert.deepEqual(h.called("groupRowStates").map((c) => c.args), [[[NEW_GROUP_JID]]]);
   assert.ok(h.session.recentlyCreated.has(NEW_GROUP_JID));
 });
 
 test("create: the app recorded it, then it was switched off -> a reload leaves it off, for good", async () => {
   const h = makeHarness();
   await h.manager.createGroup(TENANT, { requestId: "req-00018", name: GROUP_NAME, participants: [] });
-  h.groupRows.jids.push(NEW_GROUP_JID); // a row exists, but listEnabledGroupJids does not list it: disabled
+  h.groupRows.rows.push({ jid: NEW_GROUP_JID, enabled: false, left: false });
   await loadOf(h)(h.session);
   assert.equal(h.session.enabledGroups.has(NEW_GROUP_JID), false);
   assert.equal(h.session.recentlyCreated.has(NEW_GROUP_JID), false, "forgotten, so later loads don't ask again");
+});
+
+test("create: the app recorded it and then we left -> a reload leaves it off", async () => {
+  const h = makeHarness();
+  await h.manager.createGroup(TENANT, { requestId: "req-00020", name: GROUP_NAME, participants: [] });
+  h.groupRows.rows.push({ jid: NEW_GROUP_JID, enabled: true, left: true });
+  await loadOf(h)(h.session);
+  assert.equal(h.session.enabledGroups.has(NEW_GROUP_JID), false);
+});
+
+test("create: the row is written enabled between the list read and the row read -> kept on", async () => {
+  const h = makeHarness();
+  await h.manager.createGroup(TENANT, { requestId: "req-00021", name: GROUP_NAME, participants: [] });
+  // listEnabledGroupJids (read first) still returns [], but by the row read the app has recorded it enabled.
+  h.groupRows.rows.push({ jid: NEW_GROUP_JID, enabled: true, left: false });
+  await loadOf(h)(h.session);
+  assert.ok(h.session.enabledGroups.has(NEW_GROUP_JID));
+  assert.ok(h.session.recentlyCreated.has(NEW_GROUP_JID));
 });
 
 test("create: the row lookup fails -> not forced in (fail closed), the entry kept for the next load", async () => {
@@ -392,7 +423,7 @@ test("create: the row lookup fails -> not forced in (fail closed), the entry kep
   assert.ok(h.session.enabledGroups.has(NEW_GROUP_JID));
 });
 
-test("store.existingGroupJids: tenant-scoped IN query; a malformed JID throws before Supabase; empty asks nothing", async () => {
+test("store.groupRowStates: tenant-scoped IN query mapped to { jid, enabled, left }; a malformed JID throws before Supabase; empty asks nothing", async () => {
   const store = new BridgeStore(makeConfig());
   const filters: unknown[][] = [];
   const builder: Record<string, unknown> = {};
@@ -404,19 +435,22 @@ test("store.existingGroupJids: tenant-scoped IN query; a malformed JID throws be
   }
   builder.in = async (...args: unknown[]) => {
     filters.push(["in", ...args]);
-    return { data: [{ group_jid: NEW_GROUP_JID }], error: null };
+    return { data: [{ group_jid: NEW_GROUP_JID, enabled: false, left_at: null }, { group_jid: GROUP_JID, enabled: true, left_at: "2026-10-17T10:00:00Z" }], error: null };
   };
   (store as unknown as { supabase: unknown }).supabase = { from: (table: string) => (filters.push(["from", table]), builder) };
-  assert.deepEqual(await store.existingGroupJids(TENANT, [NEW_GROUP_JID, GROUP_JID]), [NEW_GROUP_JID]);
+  assert.deepEqual(await store.groupRowStates(TENANT, [NEW_GROUP_JID, GROUP_JID]), [
+    { jid: NEW_GROUP_JID, enabled: false, left: false },
+    { jid: GROUP_JID, enabled: true, left: true },
+  ]);
   assert.deepEqual(filters, [
     ["from", "whatsapp_groups"],
-    ["select", "group_jid"],
+    ["select", "group_jid, enabled, left_at"],
     ["eq", "tenant_id", TENANT],
     ["in", "group_jid", [NEW_GROUP_JID, GROUP_JID]],
   ]);
   filters.length = 0;
-  await assert.rejects(store.existingGroupJids(TENANT, [NEW_GROUP_JID, "abc@g.us"]));
-  assert.deepEqual(await store.existingGroupJids(TENANT, []), []);
+  await assert.rejects(store.groupRowStates(TENANT, [NEW_GROUP_JID, "abc@g.us"]));
+  assert.deepEqual(await store.groupRowStates(TENANT, []), []);
   assert.equal(filters.length, 0);
 });
 
@@ -508,8 +542,22 @@ test("add: the onWhatsApp lookups are one batched call; a repeated phone is dupl
     kind: "ok",
     value: [{ phone: PHONE_A, result: "ok" }, { phone: PHONE_B, result: "ok" }, { phone: PHONE_A, result: "duplicate" }],
   });
-  assert.deepEqual(h.called("onWhatsApp").map((c) => c.args), [[PHONE_A, PHONE_B, PHONE_A]]);
+  assert.deepEqual(h.called("onWhatsApp").map((c) => c.args), [[PHONE_A, PHONE_B]]);
   assert.deepEqual(h.called("groupParticipantsUpdate").map((c) => c.args[1]), [["447700900311@s.whatsapp.net", "447700900322@s.whatsapp.net"]]);
+});
+
+test("add: WhatsApp canonicalises one number differently -> that phone resolves by its own lookup, not not_on_whatsapp", async () => {
+  const BR = "+551112345678"; // WhatsApp's JID for it carries the extra 9
+  const BR_JID = "5511912345678@s.whatsapp.net";
+  const h = makeHarness({ inbound: [PHONE_A, BR] });
+  (h.session.sock as Record<string, unknown>).onWhatsApp = async (...phones: string[]) => {
+    h.calls.push({ method: "onWhatsApp", args: phones });
+    return phones.map((p) => ({ exists: true, jid: p === BR ? BR_JID : `${p.slice(1)}@s.whatsapp.net` }));
+  };
+  const outcome = await h.manager.updateGroupParticipants(TENANT, GROUP_JID, { action: "add", phones: [PHONE_A, BR] });
+  assert.deepEqual(outcome, { kind: "ok", value: [{ phone: PHONE_A, result: "ok" }, { phone: BR, result: "ok" }] });
+  assert.deepEqual(h.called("onWhatsApp").map((c) => c.args), [[PHONE_A, BR], [BR]], "one batch, then BR alone");
+  assert.deepEqual(h.called("groupParticipantsUpdate").map((c) => c.args[1]), [["447700900311@s.whatsapp.net", BR_JID]], "added by the JID WhatsApp returned");
 });
 
 test("add / remove: more than 50 in one call is too_many, nothing looked up", async () => {
