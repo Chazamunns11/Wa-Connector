@@ -14,6 +14,9 @@
  * check, not the authorization (node_modules/next/dist/docs/01-app/
  * 01-getting-started/16-proxy.md).
  *
+ * `/dashboard/**` needs a signed-in user (no role lookup): the page's
+ * `requireAccountSession()` (src/lib/account-session.ts) is the authorisation.
+ *
  * Everything else — `/login`, `/auth/callback`, `/embed/crm`,
  * `/connect/[token]` — falls through with the refreshed-session response.
  * API routes are excluded by the matcher (webhooks must never be redirected
@@ -25,6 +28,11 @@ import { createServerClient } from "@supabase/ssr";
 import { getProfile } from "@/lib/auth";
 
 const OWNER_PREFIX = "/admin";
+const APP_PREFIX = "/dashboard";
+
+function isAppPath(pathname: string): boolean {
+  return pathname === APP_PREFIX || pathname.startsWith(`${APP_PREFIX}/`);
+}
 
 function isOwnerPath(pathname: string): boolean {
   return pathname === OWNER_PREFIX || pathname.startsWith(`${OWNER_PREFIX}/`);
@@ -44,7 +52,12 @@ export async function proxy(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) {
-    throw new Error("Supabase is not configured: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are both required.");
+    // Public pages (marketing, signup, login) must render before Supabase is
+    // configured; only the guarded prefix needs it.
+    if (isOwnerPath(pathname) || isAppPath(pathname)) {
+      throw new Error("Supabase is not configured: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are both required.");
+    }
+    return NextResponse.next({ request });
   }
 
   let response = NextResponse.next({ request });
@@ -72,6 +85,12 @@ export async function proxy(request: NextRequest) {
     if (!user) return redirectTo(request, "/login", response);
     const profile = await getProfile(user.id);
     if (profile?.role !== "owner") return redirectTo(request, "/login", response);
+  }
+
+  if (isAppPath(pathname)) {
+    // Optimistic only: signed in is enough here. requireAccountSession() on
+    // the page decides whether this user may see a dashboard at all.
+    if (!user) return redirectTo(request, "/login", response);
   }
 
   return response;

@@ -1,0 +1,104 @@
+import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
+import type { AccountSummary, LocationRow } from "./types";
+
+const DAY_MS = 86_400_000;
+
+/** Whole days left (rounded up), never negative; null or unparseable → 0. */
+export function trialDaysLeft(trialEndsAt: string | null, now: Date): number {
+  if (!trialEndsAt) return 0;
+  const end = Date.parse(trialEndsAt);
+  if (!Number.isFinite(end)) return 0;
+  return Math.max(0, Math.ceil((end - now.getTime()) / DAY_MS));
+}
+
+export interface PlanStatus {
+  label: string;
+  tone: "win" | "warn" | "loss" | "info" | "muted";
+  banner: string | null;
+}
+
+export function planStatus(account: AccountSummary, now: Date): PlanStatus {
+  switch (account.billingStatus) {
+    case "pending":
+      // Checkout abandoned: the dashboard offers a working "add a card" button.
+      return { label: "Trial not started", tone: "warn", banner: `Add a card to start your ${TRIAL_DAYS}-day free trial.` };
+    case "trialing": {
+      const n = trialDaysLeft(account.trialEndsAt, now);
+      if (n === 0) return { label: "Trial ended", tone: "warn", banner: null };
+      return { label: `Trial: ${n} ${n === 1 ? "day" : "days"} left`, tone: "warn", banner: null };
+    }
+    case "active":
+    case "comped":
+      return { label: "Active", tone: "win", banner: null };
+    case "past_due":
+      return {
+        label: "Payment failed",
+        tone: "loss",
+        banner: "Payment failed — update your card. Sending continues while we retry.",
+      };
+    case "paused":
+      return { label: "Paused", tone: "loss", banner: "Sending is paused — update billing to resume" };
+    case "cancelled":
+      return { label: "Cancelled", tone: "muted", banner: null };
+  }
+}
+
+/** The single most important reason a row needs attention, or null. */
+export function needsAttention(row: LocationRow): string | null {
+  if (row.state.kind === "disconnected") {
+    const n = row.state.waiting;
+    return `Disconnected — ${n} ${n === 1 ? "message" : "messages"} waiting`;
+  }
+  if (row.state.kind === "waiting_qr") return "Waiting for QR scan";
+  if (row.providerNudge) return "No messages from GoHighLevel yet. Is the Telephony Provider set?";
+  if (row.activated && row.dailyCap > 0 && row.sentToday >= row.dailyCap) return "Daily cap reached";
+  return null;
+}
+
+export function activeCount(rows: LocationRow[]): number {
+  return rows.filter((r) => r.activated).length;
+}
+
+/** e.g. "2 numbers active · £29.98/month". Volume pricing over activated numbers. */
+export function headline(rows: LocationRow[]): string {
+  const n = activeCount(rows);
+  const cost = formatMoney(monthlyCostPence(n) / 100, pricingConfig().currency);
+  return `${n} ${n === 1 ? "number" : "numbers"} active · ${cost}/month`;
+}
+
+export interface RowActions {
+  activate: boolean;
+  showQr: boolean;
+  sendLink: boolean;
+  disconnect: boolean;
+  deactivate: boolean;
+}
+
+export function rowActionsFor(row: LocationRow): RowActions {
+  const connected = row.state.kind === "connected";
+  return {
+    activate: !row.activated,
+    showQr: row.state.kind === "waiting_qr",
+    sendLink: row.activated && !connected,
+    disconnect: connected,
+    deactivate: row.activated,
+  };
+}
+
+export interface PrimaryAction {
+  /** Matches a RowActions key; the row action treats it as an intent. */
+  key: "activate" | "show-qr";
+  label: string;
+}
+
+/** The one action worth showing inline on a row, or null (connected rows need none). Built on rowActionsFor. */
+export function primaryActionFor(row: LocationRow): PrimaryAction | null {
+  const a = rowActionsFor(row);
+  if (a.activate) return { key: "activate", label: "Activate" };
+  if (a.showQr) return { key: "show-qr", label: "Show QR" };
+  if (a.sendLink) return { key: "show-qr", label: "Reconnect" };
+  return null;
+}
+
+/** Shown when a trialing account tries to activate past the trial cap. */
+export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_NUMBERS} numbers. Start your paid plan now to add more.`;

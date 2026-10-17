@@ -9,7 +9,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { recordFailed, recordNotOnWhatsapp, recordSent } from "../src/sessions.js";
+import { recordFailed, recordNotOnWhatsapp, recordReconnected, recordSent } from "../src/sessions.js";
 import type { BridgeStore } from "../src/store.js";
 import type { PortalPoke } from "../src/poke.js";
 
@@ -76,4 +76,14 @@ test("each call schedules exactly once — not once per terminal outcome type co
   await recordFailed(store, poke, "b", "internal error before dispatch — not sent", false);
   await recordNotOnWhatsapp(store, poke, "c");
   assert.equal(scheduleCount(), 3, "three terminal outcomes must produce exactly three poke schedules, one each");
+});
+
+test("recordReconnected: schedules exactly one poke", () => {
+  const { poke, scheduleCount } = makeFakePoke();
+  recordReconnected(poke);
+  assert.equal(scheduleCount(), 1);
+});
+
+test("recordReconnected: null poke is a no-op and does not throw", () => {
+  assert.doesNotThrow(() => recordReconnected(null));
 });

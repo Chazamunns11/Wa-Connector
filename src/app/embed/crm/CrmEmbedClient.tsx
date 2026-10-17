@@ -90,7 +90,7 @@ const HANDSHAKE_TIMEOUT_MS = 5000;
 
 const NOT_IN_HIGHLEVEL_MESSAGE = "This page only works inside HighLevel.";
 
-type Phase = "handshaking" | "handshake_error" | "not_installed" | "disabled" | "ready";
+type Phase = "handshaking" | "handshake_error" | "not_installed" | "disabled" | "unclaimed" | "billing_paused" | "not_activated" | "ready";
 
 /**
  * The exact shape `POST /api/crm/embed/session` returns — see that route's
@@ -103,7 +103,8 @@ type Phase = "handshaking" | "handshake_error" | "not_installed" | "disabled" | 
  */
 interface EmbedSessionResponse {
   ok: boolean;
-  state?: "ok" | "not_installed" | "disabled";
+  state?: "ok" | "not_installed" | "disabled" | "unclaimed" | "billing_paused" | "not_activated";
+  claimUrl?: string | null;
   token?: string;
   label?: string;
   summary?: GhlEmbedWhatsappSummary | null;
@@ -121,6 +122,9 @@ type HandshakeOutcome =
   | { kind: "ok"; token: string; summary: GhlEmbedWhatsappSummary | null; label: string | null; bridgeReachable: boolean | null }
   | { kind: "not_installed" }
   | { kind: "disabled" }
+  | { kind: "unclaimed"; claimUrl: string | null }
+  | { kind: "billing_paused" }
+  | { kind: "not_activated" }
   | { kind: "error" };
 
 /** The postMessage round trip + `/api/crm/embed/session` POST, pure — see `HandshakeOutcome`'s own header. */
@@ -149,6 +153,9 @@ async function runHandshake(): Promise<HandshakeOutcome> {
 
   if (json.state === "not_installed") return { kind: "not_installed" };
   if (json.state === "disabled") return { kind: "disabled" };
+  if (json.state === "unclaimed") return { kind: "unclaimed", claimUrl: typeof json.claimUrl === "string" ? json.claimUrl : null };
+  if (json.state === "billing_paused") return { kind: "billing_paused" };
+  if (json.state === "not_activated") return { kind: "not_activated" };
   if (json.state !== "ok" || typeof json.token !== "string") return { kind: "error" };
 
   return {
@@ -225,6 +232,7 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
   // "THE BRIDGE-HEALTH PROBE LIVES HERE"). `null` until the first successful
   // handshake, same "nothing to show yet" meaning it always had.
   const [bridgeReachable, setBridgeReachable] = useState<boolean | null>(null);
+  const [claimUrl, setClaimUrl] = useState<string | null>(null);
 
   // The embed token itself — a ref, not state: every closure below reads
   // `tokenRef.current` synchronously at call time rather than closing over a
@@ -253,6 +261,15 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
     }
     if (outcome.kind === "disabled") {
       setPhase("disabled");
+      return null;
+    }
+    if (outcome.kind === "unclaimed") {
+      setClaimUrl(outcome.claimUrl);
+      setPhase("unclaimed");
+      return null;
+    }
+    if (outcome.kind === "billing_paused" || outcome.kind === "not_activated") {
+      setPhase(outcome.kind);
       return null;
     }
     tokenRef.current = outcome.token;
@@ -399,6 +416,55 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
         <EmptyState
           title="Not set up yet"
           description={`This location isn't set up with ${brandName}'s WhatsApp provider yet — contact us to get it installed.`}
+        />
+      </Card>
+    );
+  }
+
+  if (phase === "unclaimed") {
+    return (
+      <Card>
+        <CardHeader title="WhatsApp" />
+        <EmptyState
+          title="Start your 7-day free trial"
+          description={
+            claimUrl
+              ? `Connect this sub-account's WhatsApp by creating a ${brandName} account.`
+              : `Visit ${brandName} to start your free trial.`
+          }
+          action={
+            claimUrl ? (
+              <a
+                href={claimUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center rounded-md bg-accent px-4 py-2 text-sm font-semibold text-accent-ink hover:brightness-105"
+              >
+                Start free trial
+              </a>
+            ) : undefined
+          }
+        />
+      </Card>
+    );
+  }
+
+  if (phase === "billing_paused") {
+    return (
+      <Card>
+        <CardHeader title="WhatsApp" />
+        <EmptyState title="Sending is paused" description="The account owner needs to update billing." />
+      </Card>
+    );
+  }
+
+  if (phase === "not_activated") {
+    return (
+      <Card>
+        <CardHeader title="WhatsApp" />
+        <EmptyState
+          title="WhatsApp isn't active for this sub-account"
+          description="Ask your account owner to activate it."
         />
       </Card>
     );

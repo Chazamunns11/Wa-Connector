@@ -49,6 +49,7 @@
  *     `guardFailureResponseBody`'s identical split for the guard.
  */
 import type { GhlAccountStatus, GhlEmbedWhatsappSummary, WhatsappSessionSummary } from "@/lib/types";
+import { toEmbedWhatsappSummary } from "@/lib/embed-summary";
 import { isConnectLinkConfigured, mintConnectSessionToken, verifyConnectLinkToken } from "@/lib/ghl-connect-link";
 import { getWhatsappBridgeHealth, isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
 import { checkConnectSessionThrottle, type ConnectThrottleDecision } from "@/lib/connect-throttle";
@@ -121,13 +122,6 @@ export type ConnectSessionDecision =
   | { kind: "revoked" }
   | { kind: "disabled" }
   | { kind: "ok"; token: string; label: string; summary: GhlEmbedWhatsappSummary | null; bridgeReachable: boolean };
-
-/** Same "enumerate, never spread" discipline as `toEmbedSummary` in `src/app/api/crm/embed/session/route.ts` — a future field added to `WhatsappSessionSummary` must never ride along by default. */
-function toConnectSummary(summary: WhatsappSessionSummary | null): GhlEmbedWhatsappSummary | null {
-  if (!summary) return null;
-  const { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday } = summary;
-  return { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday };
-}
 
 /**
  * The full decision for one `POST /api/connect/session` attempt — see this
@@ -224,7 +218,7 @@ export async function decideConnectSession(
     kind: "ok",
     token: sessionToken,
     label: account.label,
-    summary: toConnectSummary(summary),
+    summary: toEmbedWhatsappSummary(summary),
     bridgeReachable,
   };
 }

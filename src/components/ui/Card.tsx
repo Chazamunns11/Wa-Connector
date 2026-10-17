@@ -5,7 +5,7 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
   padded?: boolean;
 }
 
-/** Base dark panel: 8px radius, hairline border, no shadow, no glow. */
+/** Base panel: 8px radius, hairline border, no shadow. White on Cream, a lifted slate on Ink. */
 export function Card({
   children,
   padded = true,
@@ -36,7 +36,7 @@ export function CardHeader({
   return (
     <div className="mb-5 flex items-start justify-between gap-4">
       <div>
-        <h3 className="font-display text-lg font-bold uppercase italic tracking-[.01em] text-ink">
+        <h3 className="font-display text-lg font-medium text-ink">
           {title}
         </h3>
         {subtitle ? (

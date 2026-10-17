@@ -50,6 +50,9 @@
  *      Custom Page won't have installed the provider), not an error.
  *   6. `status === "disabled"` — an operator deliberately turned this
  *      location off. Returns 200 `{ state: "disabled" }`, NO token.
+ *      Accounts stage (see `./logic.ts` `embedStateFor`): an installed
+ *      location may also answer 200 `unclaimed` (with `claimUrl`),
+ *      `billing_paused` or `not_activated` — all tokenless, no QR.
  *   7. Otherwise: mint a token (`mintGhlEmbedToken`), probe the bridge's own
  *      `/health` (see "THE BRIDGE-HEALTH PROBE LIVES HERE, NOT ON THE
  *      UNAUTHENTICATED SHELL" below), and return
@@ -119,8 +122,11 @@
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { decryptGhlSsoPayload, ghlSsoSharedSecret, isGhlEmbedConfigured, mintGhlEmbedToken, parseGhlUserContext } from "@/lib/ghl-embed";
+import { embedStateFor } from "./logic";
+import { brandConfig } from "@/lib/brand-config";
+import { claimSignupUrl, isClaimConfigured } from "@/lib/ghl-claim";
 import { getWhatsappBridgeHealth, isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
-import type { GhlEmbedWhatsappSummary, WhatsappSessionSummary } from "@/lib/types";
+import { toEmbedWhatsappSummary } from "@/lib/embed-summary";
 
 export const dynamic = "force-dynamic";
 
@@ -137,12 +143,6 @@ function fail(status: number, error: string): NextResponse {
  * EITHER". `null` in, `null` out (a coach — here, GHL location — with no
  * `whatsapp_sessions` row at all).
  */
-function toEmbedSummary(summary: WhatsappSessionSummary | null): GhlEmbedWhatsappSummary | null {
-  if (!summary) return null;
-  const { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday } = summary;
-  return { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday };
-}
-
 export async function POST(request: Request) {
   try {
     if (!isGhlEmbedConfigured()) return fail(503, "embed_not_configured");
@@ -198,8 +198,12 @@ export async function POST(request: Request) {
     if (!account) {
       return NextResponse.json({ ok: true, state: "not_installed" });
     }
-    if (account.status === "disabled") {
-      return NextResponse.json({ ok: true, state: "disabled" });
+    const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
+    const claimUrl = !account.accountId && isClaimConfigured() ? claimSignupUrl(brandConfig().appUrl, account.locationId) : null;
+    const embedState = embedStateFor(account, owner?.billingStatus ?? null, claimUrl);
+    if (embedState.state !== "ok") {
+      // disabled / unclaimed / billing_paused / not_activated: no embed token, no QR.
+      return NextResponse.json({ ok: true, ...embedState });
     }
 
     const token = mintGhlEmbedToken(account.locationId);
@@ -213,7 +217,7 @@ export async function POST(request: Request) {
     // display isn't worth the request).
     const bridgeReachable = isWhatsappBridgeConfigured() ? (await getWhatsappBridgeHealth()).ok : null;
 
-    return NextResponse.json({ ok: true, state: "ok", token, label: account.label, summary: toEmbedSummary(summary), bridgeReachable });
+    return NextResponse.json({ ok: true, state: "ok", token, label: account.label, summary: toEmbedWhatsappSummary(summary), bridgeReachable });
   } catch (err) {
     // Adversarial review lens 4, finding 6 (MINOR) — see this file's header.
     // Never echoes `err` into the response.

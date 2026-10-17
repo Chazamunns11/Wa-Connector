@@ -4,8 +4,10 @@ The code is built and tested. This is the operator checklist for the parts
 only a human with the accounts can do. Work top to bottom: each part feeds
 values into the next.
 
-`<Brand>` below means whatever you set `BRAND_NAME` to (default "WA
-Connector"). `<app>` means this app's public URL, for example
+Sign-up, Stripe billing and the dashboard have their own checklist:
+[`GO-LIVE-ACCOUNTS.md`](GO-LIVE-ACCOUNTS.md). Do this document first, then that one.
+
+`<Brand>` below means whatever you set `BRAND_NAME` to (default "PingWren"). `<app>` means this app's public URL, for example
 `https://wa.example.com`, no trailing slash. `<bridge>` means the Railway
 bridge's public URL.
 
@@ -87,13 +89,13 @@ that has no auth user simply never gets a link. Create the user first:
 
    ```sql
    insert into profiles (id, role, email)
-   select id, 'owner', email from auth.users
-   where email = 'you@example.com';
+   select id, 'owner', lower(email) from auth.users
+   where lower(email) = 'you@example.com';
    ```
 
    Check it inserted exactly one row. `/admin` and every admin action require
-   `profiles.role = 'owner'`; a signed-in user with no profiles row is bounced
-   back to `/login`.
+   `profiles.role = 'owner'`; a signed-in user with no profiles row is signed out
+   and sent to `/signup`.
 
 ### 1c. Auth URLs (do this once the Vercel domain is known)
 
@@ -106,8 +108,8 @@ Without the redirect entry the emailed link lands on the wrong place or is
 rejected, and `/login?error=auth_callback` is what you see. Add
 `http://localhost:3000/auth/callback` too if you will run it locally.
 
-There is **no sign-out button yet**. To sign out, clear the site's cookies
-for `<app>` in the browser.
+Customers sign out with **Log out** on their dashboard. The owner panel at
+`/admin` has no sign-out button yet: clear the site's cookies for `<app>`.
 
 ---
 
@@ -182,7 +184,7 @@ drain instead of arriving in seconds.
    | `NEXT_PUBLIC_SUPABASE_URL` | Part 1 |
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Part 1 |
    | `SUPABASE_SERVICE_ROLE_KEY` | Part 1 |
-   | `BRAND_NAME` | `<Brand>` (optional; default "WA Connector") |
+   | `BRAND_NAME` | `<Brand>` (optional; default "PingWren") |
    | `WHATSAPP_BRIDGE_URL` | `<bridge>` (https) |
    | `WHATSAPP_BRIDGE_SECRET` | the Railway `WA_BRIDGE_SECRET` value |
    | `WHATSAPP_INBOUND_POKE_SECRET` | the Railway `WA_INBOUND_POKE_SECRET` value |
@@ -191,8 +193,9 @@ drain instead of arriving in seconds.
    | `SLACK_WEBHOOK_URL` | optional; an incoming-webhook URL for operational alerts |
 
    **The Supabase variables are required at runtime**, not just at build:
-   without them the proxy returns 500 on every request. There is no demo
-   mode.
+   without them `/admin` fails (the proxy throws for it) and sign-in cannot
+   work. Public pages (the website, `/login`, `/signup`) still render. There
+   is no demo mode.
 4. Deploy. Visit `<app>/login`; it should render. The GHL variables come in
    Part 4, then redeploy.
 
@@ -413,7 +416,9 @@ zero still applies: no secrets in screenshots you share.
    minted in `/admin`), choose connect and scan the QR with your phone:
    WhatsApp → Linked devices → Link a device. Status moves to connected.
 3. **Set the Telephony Provider.** In the sub-account: Settings → Phone
-   Numbers → Advanced Settings → SMS Provider → select `<Brand>`.
+   System → Advanced Settings → Telephony Provider → select `<Brand>`. Some
+   accounts label it Phone Numbers → SMS Provider instead; it is the same
+   setting.
 4. **Send.** Build or run a workflow with an SMS step to a contact whose
    phone is your number. It should arrive on WhatsApp within the pacing
    delay (the first send waits at least the 45 s gap plus jitter) and the
@@ -458,16 +463,22 @@ live sessions fight over one WhatsApp account.
 
 | Variable | Required? | Default | Purpose |
 | --- | --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | Yes (runtime and build) | none | Supabase project URL; proxy 500s without it |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | none | Supabase anon key (login, session refresh) |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes at runtime | none | Supabase project URL; `/admin` and sign-in fail without it (public pages still render) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes at runtime | none | Supabase anon key; `/admin` and sign-in fail without it (public pages still render) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | none | Service-role key; server only |
 | `NEXT_PUBLIC_APP_URL` | Yes in production, **and for `next build`** | `http://localhost:3000` in dev only | Public base URL; `brandConfig()` throws in production without it |
-| `BRAND_NAME` | No | `WA Connector` | Product name shown to users |
+| `BRAND_NAME` | No | `PingWren` | Product name shown to users |
+| `BRAND_TAGLINE` | No | `WhatsApp for GoHighLevel` | Short descriptor next to the name |
+| `BRAND_LOGO_PATH` | No | the PingWren kit logo | Logo for light surfaces: a `/public` path or absolute URL |
+| `BRAND_LOGO_REVERSE_PATH` | No | falls back to `BRAND_LOGO_PATH`, then the kit logo | Logo for dark surfaces |
+| `BRAND_ACCENT` | No | PingWren Coral | Accent colour as hex, e.g. `#FF6B5B`; invalid values fall back to the default |
 | `BRAND_SUPPORT_EMAIL` | No | unset | Support address shown to users |
+| `BRAND_SUPPORT_WHATSAPP` | No | unset | Support WhatsApp number, E.164 |
 | `WHATSAPP_BRIDGE_URL` | Yes for sending | unset (sends fail closed) | `<bridge>`, https (plain http only for localhost) |
 | `WHATSAPP_BRIDGE_SECRET` | Yes for sending | unset (fail closed) | Must equal the bridge's `WA_BRIDGE_SECRET` |
 | `WHATSAPP_INBOUND_POKE_SECRET` | Yes for pokes | unset (poke routes return 503; the hourly cron still drains) | Must equal the bridge's `WA_INBOUND_POKE_SECRET`; guards both poke routes |
 | `CRON_SECRET` | Yes | unset (`/api/cron/drain` returns 503) | Bearer secret for the hourly drain |
+| `OUTBOUND_HOLD_MAX_HOURS` | No | `24` (accepted 1 to 168) | How long a message to a disconnected number is held before it is reported as failed |
 | `ONBOARD_STATE_SECRET` | Yes for connect links and the embed | unset (those features show "not switched on") | Signs connect-link and embed tokens; separate from `CRON_SECRET` |
 | `SLACK_WEBHOOK_URL` | No | unset (alerts skipped) | Operational alerts |
 | `GHL_CLIENT_ID` | Yes for GHL | unset (GHL features off) | Marketplace app client id |
@@ -476,12 +487,13 @@ live sessions fight over one WhatsApp account.
 | `GHL_CONVERSATION_PROVIDER_ID` | Yes for replies to reach GHL | unset (replies queue) | Provider id from 4f |
 | `GHL_SSO_SHARED_SECRET` | Yes for the Custom Page | unset (embed off) | Decrypts GHL's SSO payload |
 | `GHL_EMBED_FRAME_ANCESTORS` | No | unset (GHL's own hosts only) | Extra `frame-ancestors` origins for whitelabel domains |
+| `GHL_SYNC_DND` | No | `false` | Exactly `true` mirrors STOP/START onto the GHL contact's WhatsApp and SMS DND (`PUT /contacts/{id}` `dndSettings`; verify at first go-live). Failures are logged and never block the opt-out |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Supabase Storage bucket for inbound media; must match the bridge |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | Web-app side media switch; see the flip order below |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | Lifetime of signed media URLs |
 | `NODE_ENV` | Set by Vercel | n/a | Not an operator setting |
 
-That is 22 names: 21 from `src/` (including `NODE_ENV`) plus
+That is 22 foundation names (the `BRAND_*` website variables above are extra): 21 from `src/` (including `NODE_ENV`) plus
 `GHL_EMBED_FRAME_ANCESTORS` from `next.config.ts`.
 
 **Media switches, flip order.** Both media features default off and stay off
@@ -531,9 +543,40 @@ That is 28 variables, all read in `config.ts`.
 
 ---
 
+## Go-live gates — the website promises these
+
+The marketing site, FAQ and setup guide describe the launched product. Do not
+launch publicly until each of these is built or the copy is changed to match:
+
+- **(a) Held messages while a phone is disconnected.** Built — `src/lib/ghl-held.ts`.
+  Messages to a previously linked, offline number are held and released oldest
+  first when it reconnects (reconnect poke and the hourly drain). A message held
+  longer than `OUTBOUND_HOLD_MAX_HOURS` (default 24) is reported to GoHighLevel
+  as failed, never sent late. New messages for a number with held rows wait
+  behind them, so order is kept. Picture and file messages are held the same
+  way: the whole message waits and is released text first, then attachments in
+  order; a drop part-way keeps the remaining parts held and no part sends twice.
+- **(b) STOP opt-outs.** Built — `src/lib/opt-out.ts` + `src/lib/ghl-inbound.ts`. Whole-message, case-insensitive keywords. Opt-out: STOP, STOPALL, STOP ALL, UNSUBSCRIBE, END, QUIT, OPT OUT, OPTOUT (CANCEL is deliberately excluded: it cancels appointments). Opt-in: START, UNSTOP, SUBSCRIBE, OPT IN, OPTIN. The reply is still delivered to GoHighLevel.
+- **Known limits of (a) and (b).**
+  - A message already inside the bridge's paced queue when a STOP lands still
+    sends. The opt-out applies from the next send on every path.
+  - The GoHighLevel do-not-disturb endpoint (`GHL_SYNC_DND`, off by default) is
+    not live-verified. A failure is logged and never blocks anything.
+  - The hold limit is `OUTBOUND_HOLD_MAX_HOURS` (default 24, accepted 1 to 168).
+    Older messages are reported to GoHighLevel as not sent, never sent late.
+- **(e) Real legal text.** Replace the draft notice and the "(drafts)" label
+  on the privacy, terms and related pages with reviewed legal text.
+
+Also before launch:
+
+- Confirm the launch prices in `src/lib/pricing.ts` (volume pricing in GBP: £14.99 a month per number below 10 numbers, £7.99 a month for every number at 10 or more). There is no price env var any more. See GO-LIVE-ACCOUNTS.md Part 2.
+- Run a trademark search for "PingWren".
+
+---
+
 ## Still true after first light
 
-- There is no sign-out button; clear the site cookies.
+- The account dashboard has Log out. The owner panel at /admin has none yet: clear the site cookies.
 - Use a **dedicated business number** for every location, and make sure the
   client has agreed in writing that the number will receive and be answered
   for cold inbound WhatsApp. The bridge stores every 1:1 reply; it does not

@@ -762,6 +762,11 @@ function SteadyView({
           written for. `friendlyDisconnectReason` translates the bridge's fixed
           internal strings and passes anything else through unchanged. */}
       <p className="text-ink-faint">{friendlyDisconnectReason(summary.lastDisconnectReason, copy)}</p>
+      {summary.heldMessages > 0 ? (
+        <p className="text-xs text-warn">
+          {summary.heldMessages} {summary.heldMessages === 1 ? "message" : "messages"} waiting &mdash; they send when the phone reconnects
+        </p>
+      ) : null}
       {staleNote ? <p className="text-xs text-warn">{staleNote}</p> : null}
       <Button size="sm" onClick={onConnect} disabled={connecting} className="self-start">
         {connecting ? "Starting…" : "Reconnect"}

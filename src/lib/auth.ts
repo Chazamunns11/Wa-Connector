@@ -23,6 +23,8 @@ export interface Session {
   role: Role;
   /** `profiles.email` — the address the owner signs in with. */
   email: string;
+  /** `profiles.account_id` — null for owners (and for an account profile not yet linked). */
+  accountId: string | null;
 }
 
 const VALID_ROLES: Role[] = ["owner", "account"];
@@ -34,6 +36,7 @@ export function isRole(value: string | undefined | null): value is Role {
 interface ProfileRow {
   role: string;
   email: string;
+  account_id: string | null;
 }
 
 /**
@@ -71,16 +74,16 @@ async function createSupabaseServerClient() {
  * error, or an unconfigured service key — every one of those is "not an
  * owner", never a throw that could 500 a page.
  */
-export async function getProfile(userId: string): Promise<{ role: Role; email: string } | null> {
+export async function getProfile(userId: string): Promise<{ role: Role; email: string; accountId: string | null } | null> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceKey) return null;
   const supabase = createClient(url, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
-  const { data, error } = await supabase.from("profiles").select("role, email").eq("id", userId).maybeSingle();
+  const { data, error } = await supabase.from("profiles").select("role, email, account_id").eq("id", userId).maybeSingle();
   if (error || !data) return null;
   const profile = data as ProfileRow;
   if (!isRole(profile.role)) return null;
-  return { role: profile.role, email: profile.email };
+  return { role: profile.role, email: profile.email, accountId: profile.account_id ?? null };
 }
 
 /** Read the signed-in user + their `profiles` row. */
@@ -96,7 +99,7 @@ async function getLiveSession(): Promise<Session | null> {
   const profile = await getProfile(user.id);
   if (!profile) return null;
 
-  return { profileId: user.id, role: profile.role, email: profile.email };
+  return { profileId: user.id, role: profile.role, email: profile.email, accountId: profile.accountId };
 }
 
 /** Read the current session (server components/actions/route handlers only). */

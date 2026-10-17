@@ -2,11 +2,15 @@
  * The data-access contract for the standalone GHL WhatsApp provider.
  *
  * Copied from PortalHub's `Repository`/`WebhookRepository` (src/lib/data/index.ts),
- * reduced to the 27 methods the provider slice uses. There is exactly one
+ * reduced to the 27 methods (plus the 16 accounts/billing methods of migration 0002) the provider slice uses. There is exactly one
  * implementation (service-role Supabase, `SupabaseGhlRepository`) and no
  * user-session repo: every method here is service-role by design.
  */
 import type {
+  Account,
+  AccountAdminRow,
+  AccountBillingPatch,
+  AccountDraft,
   GhlAccount,
   GhlAccountBrandingPatch,
   GhlAccountDraft,
@@ -19,6 +23,8 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  LocationStats,
+  Role,
   Scope,
   WhatsappInboundMessage,
   WhatsappSessionSummary,
@@ -190,7 +196,8 @@ export interface GhlRepository {
   /**
    * Advance a ledger row's `send_state`/`send_attempts` — Phase 2's
    * handler/drain only. IMPLEMENTATIONS MUST CLEAR `pending_text` to `null`
-   * whenever `patch.sendState !== 'pending_send'` (0070_ghl_outbound_pending_text.sql's
+   * whenever `patch.sendState` is neither `'pending_send'` nor `'held'` (a held
+   * row keeps its text so the release pass can still send it) (0070_ghl_outbound_pending_text.sql's
    * whole contract: that column exists only for the duration a row is
    * eligible for a bridge-send retry).
    *
@@ -214,11 +221,25 @@ export interface GhlRepository {
    * a false `failed` for. Every OTHER `sendState` transition this method
    * writes stays unconditional — see `src/lib/data/supabase.ts`'s
    * implementation for the exact guard.
+   *
+   * `onlyIfSendState` (Review Focus 4): when set, the write also requires the
+   * row's CURRENT `send_state` to equal it (0 rows affected, no error, if it
+   * has moved on). The held-release pass uses `held` → `accepted`/`refused`
+   * under this guard so it never overwrites a row another pass already moved.
+   * Returns the number of rows matched (0 or 1): a caller that reports the
+   * outcome to GoHighLevel must only do so when it won the write (1).
+   * Attachment rows have no `held` state and stay `pending_send` while their
+   * parent message is held.
    */
   updateGhlOutboundSendState(
     id: string,
-    patch: { sendState: GhlOutboundSendState; sendAttempts?: number; refusalReason?: string }
-  ): Promise<void>;
+    patch: {
+      sendState: GhlOutboundSendState;
+      sendAttempts?: number;
+      refusalReason?: string;
+      onlyIfSendState?: GhlOutboundSendState;
+    }
+  ): Promise<number>;
 
   /**
    * Oldest-first, `reported_status IS NULL` rows, capped at `limit` — Phase
@@ -237,6 +258,34 @@ export interface GhlRepository {
    * eligible again with no separate re-activation step.
    */
   listUnreportedGhlOutboundMessages(limit?: number): Promise<GhlOutboundMessage[]>;
+
+  /**
+   * Distinct tenant ids with at least one `send_state = 'held'` row (paged by
+   * tenant, so one busy tenant cannot hide the others; capped at 1000 tenants)
+   * — the release pass's work list.
+   */
+  listHeldTenantIds(): Promise<string[]>;
+
+  /**
+   * One tenant's `held` rows, oldest first (default 50). Held rows are NEVER
+   * returned by `listUnreportedGhlOutboundMessages` (Review Focus 5): the main
+   * drain must not report them failed while they wait for a reconnect.
+   * `pending_text` is kept on held rows.
+   */
+  listHeldGhlOutboundMessages(tenantId: string, limit?: number): Promise<GhlOutboundMessage[]>;
+
+  /**
+   * `held` rows with `created_at < cutoffIso`, oldest first (default 50) — the
+   * expiry sweep (see `isHeldExpired` in src/lib/ghl-held-rules.ts).
+   */
+  listExpiredHeldGhlOutboundMessages(cutoffIso: string, limit?: number): Promise<GhlOutboundMessage[]>;
+
+  /**
+   * Per-tenant count of rows `send_state in ('pending_send','held')` — the
+   * "waiting" definition, same as `getLocationStats.pendingSend`. Tenants with
+   * none are absent from the map (callers default to 0).
+   */
+  countHeldByTenant(tenantIds: string[]): Promise<Map<string, number>>;
 
   /**
    * Stamp a ledger row's reported outcome — Phase 2's drain only. No atomic
@@ -549,4 +598,61 @@ export interface GhlRepository {
    * defeat the panel's entire purpose.
    */
   getGhlHealthSnapshot(): Promise<GhlHealthSnapshot>;
+
+  // -------------------------------------------------------------------------
+  // Accounts and billing (migration 0002)
+  // -------------------------------------------------------------------------
+
+  /** One account by id, or null. */
+  getAccountById(id: string): Promise<Account | null>;
+  /** The account holding this Stripe customer id, or null. */
+  getAccountByStripeCustomerId(customerId: string): Promise<Account | null>;
+  /** Inserts an account with billingStatus 'pending' and returns it. */
+  createAccount(draft: AccountDraft): Promise<Account>;
+  /** Applies only the fields present in the patch. */
+  updateAccountBilling(id: string, patch: AccountBillingPatch): Promise<void>;
+  /** Every account with its location and activated-number counts, oldest first. */
+  listAccountsForAdmin(): Promise<AccountAdminRow[]>;
+  /** Accounts with cancelled_at < iso AND cleaned_up_at IS NULL. */
+  listAccountsCancelledBefore(iso: string): Promise<Account[]>;
+  /** Inserts a portal profile row for an existing auth user. */
+  createProfile(draft: { id: string; role: Role; email: string; accountId: string | null }): Promise<void>;
+  /** Profile lookup by lower-cased, trimmed email (all writes store it normalised), or null. */
+  getProfileByEmail(email: string): Promise<{ id: string; role: Role; accountId: string | null } | null>;
+  /** The redacted summaries of an account's locations, ordered by label. */
+  listGhlAccountsForAccount(accountId: string): Promise<GhlAccountSummary[]>;
+  /** Claims an unowned location (UPDATE ... WHERE account_id IS NULL); true iff exactly one row changed. */
+  claimGhlAccount(locationId: string, accountId: string): Promise<boolean>;
+  /**
+   * Clears (null) or sets activated_at; returns the rows changed. Setting is conditional
+   * (only while activated_at IS NULL, so 0 = already active) and the database enforces the
+   * trial cap and the optional platform cap, throwing ActivationCapError when it refuses.
+   */
+  setGhlActivated(locationId: string, activatedAt: string | null, opts?: { platformCap?: number | null }): Promise<number>;
+  /** Number of activated locations owned by this account. */
+  countActivatedForAccount(accountId: string): Promise<number>;
+  /** Number of activated locations across all accounts. */
+  countActivatedAll(): Promise<number>;
+  /** Session summaries for exactly these tenant ids (no role scope; callers authorise first). */
+  getWhatsappSessionSummariesForTenants(tenantIds: string[]): Promise<WhatsappSessionSummary[]>;
+  /** Per-location outbound stats since sinceIso; every requested id appears in the result. */
+  getLocationStats(locationIds: string[], sinceIso: string): Promise<Record<string, LocationStats>>;
+  /**
+   * Records that `phone` opted out on this tenant's number (W10: one number
+   * only). Upsert on (tenant_id, phone), refreshing `opted_out_at`, so a
+   * repeated STOP is harmless. The phone is normalised with
+   * `normalisePhoneE164(phone, "GB")` like every other phone in the portal;
+   * one that cannot be normalised throws (never stored as a guess).
+   */
+  recordOptOut(input: { tenantId: string; phone: string; keyword: string; ghlContactId: string | null }): Promise<void>;
+  /** Opt-in (START): deletes the (tenant, phone) opt-out; a no-op when absent or when the phone cannot be normalised. */
+  clearOptOut(tenantId: string, phone: string): Promise<void>;
+  /** True iff this (tenant, phone) has opted out. An unnormalisable phone is never opted out. */
+  isOptedOut(tenantId: string, phone: string): Promise<boolean>;
+  /** Opt-out counts per tenant; every requested id appears (0 when none). */
+  countOptOutsByTenant(tenantIds: string[]): Promise<Map<string, number>>;
+  /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */
+  recordStripeEvent(eventId: string, type: string): Promise<boolean>;
+  /** Releases a recorded Stripe event id after a processing failure so Stripe's retry is handled, not dropped as a duplicate. */
+  deleteStripeEvent(eventId: string): Promise<void>;
 }

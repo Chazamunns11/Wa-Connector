@@ -32,6 +32,7 @@ import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { drainGhlOutboundStatuses } from "@/lib/ghl-provider";
+import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
 
 /** Verbatim copy of `GET /api/cron/reminders`'s identical helper (same rationale as `whatsapp-replies/route.ts`'s own copy — small enough that duplicating beats a shared import for one function). */
 function constantTimeEqualStr(a: string, b: string): boolean {
@@ -39,6 +40,9 @@ function constantTimeEqualStr(a: string, b: string): boolean {
   const bBuf = Buffer.from(b, "utf8");
   return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
 }
+
+/** Release (25 s budget) then status drain (25 s budget) run back to back; same ceiling as the cron route. */
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   const secret = process.env.WHATSAPP_INBOUND_POKE_SECRET;
@@ -53,6 +57,9 @@ export async function POST(request: Request) {
   }
 
   // Body ignored entirely — see file header. The bridge always sends "{}".
+  // A reconnect poke releases held messages first (the release never trusts
+  // the DB session status; the bridge's live answer decides), then drains.
+  await releaseHeldOutboundMessages(repo);
   const result = await drainGhlOutboundStatuses(repo);
   return NextResponse.json({ ok: true, ...result });
 }

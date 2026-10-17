@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PingWren: WhatsApp reminders for GoHighLevel (Direction A, Appointment book)</title>
+<meta name="description" content="PingWren puts the reminders your GoHighLevel workflows already send on WhatsApp, from your own number.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#FFFFFF;
+  --ink:#1B1F2A;
+  --ink-2:#4A5060;      /* secondary text, 7.9:1 on white */
+  --wren:#7A4E2D;       /* structural: rules, times, accents, 7.1:1 on white */
+  --wren-line:#D9C3B1;  /* hairline tint of wren */
+  --wren-wash:#F7F1EC;  /* faint tint for open slots, not a cream ground */
+  --blue:#23415E;       /* secondary: confirmed, links */
+  --blue-wash:#E6EDF4;
+  --coral:#FF5A36;      /* primary button only */
+  --tan:#D9A47A;        /* only on ink */
+  --gutter:clamp(16px,4vw,48px);
+  --max:1200px;
+  --display:"Bricolage Grotesque","Arial Narrow",system-ui,sans-serif;
+  --body:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 1.0625rem/1.6 var(--body);overflow-x:hidden}
+img{max-width:100%;display:block}
+h1,h2,h3{font-family:var(--display);font-weight:800;line-height:1.05;margin:0;letter-spacing:-.02em;text-wrap:balance}
+p{margin:0}
+a{color:var(--blue);text-underline-offset:3px;text-decoration-thickness:1px}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:3px solid var(--blue);outline-offset:3px;border-radius:2px}
+.dark :focus-visible{outline-color:#fff}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 var(--gutter)}
+.skip{position:absolute;left:-999px;top:8px;background:var(--ink);color:#fff;padding:10px 14px;z-index:10}
+.skip:focus{left:8px}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 24px;font:600 1rem var(--body);text-decoration:none;border-radius:6px;border:2px solid var(--ink);color:var(--ink)}
+.btn-primary{background:var(--coral);border-color:var(--coral);color:var(--ink)}
+.btn-primary:hover{background:#ff6e4f;border-color:#ff6e4f;text-decoration:none}
+.btn-ghost{background:transparent}
+.btn-ghost:hover{background:var(--wren-wash);text-decoration:none}
+
+/* header */
+.top{border-bottom:1px solid var(--wren-line)}
+.top .wrap{display:flex;align-items:center;justify-content:space-between;min-height:68px;gap:16px}
+.top img{height:34px;width:auto}
+.top nav{display:flex;gap:6px;align-items:center}
+.top nav a{display:inline-flex;min-height:44px;align-items:center;padding:0 12px;color:var(--ink);text-decoration:none;font-weight:500;font-size:.95rem}
+.top nav a:hover{color:var(--wren);text-decoration:underline}
+.top nav .btn{min-height:44px;padding:0 18px;font-size:.95rem}
+@media (max-width:760px){.top nav a.hide-s{display:none}}
+
+/* HERO */
+.hero{padding:clamp(32px,6vw,72px) 0 clamp(48px,7vw,96px)}
+.hero .wrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,520px);gap:clamp(32px,6vw,88px);align-items:start}
+.hero h1{font-size:clamp(2.3rem,5vw,4.4rem);max-width:15ch}
+.hero h1 sup{font-size:.4em;font-weight:500;color:var(--wren);vertical-align:super;line-height:0}
+.hero .lede{margin-top:24px;font-size:1.25rem;max-width:34em;color:var(--ink)}
+.hero .cta{margin-top:32px;display:flex;flex-wrap:wrap;gap:12px}
+.hero .fine{margin-top:16px;max-width:34em;font-size:.95rem;color:var(--ink-2)}
+.slots{margin-top:40px;border-top:1px solid var(--wren);padding-top:14px;max-width:30em}
+.slots dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:8px 16px;align-items:center;font-size:.95rem}
+.slots dt{color:var(--ink-2)}
+.slots dd{margin:0;display:flex;gap:4px;align-items:center}
+.slots i{width:100%;max-width:26px;height:14px;border:1.5px solid var(--wren);display:block;flex:1}
+.slots i.f{background:var(--wren)}
+.slots i.h{background:linear-gradient(90deg,var(--wren) 50%,transparent 50%)}
+.slots .foot{margin-top:10px;font-size:.88rem;color:var(--ink-2)}
+
+/* THE BOOK */
+.book{position:relative;border:1.5px solid var(--ink);margin-top:6px;background:#fff;box-shadow:10px 10px 0 var(--wren-line)}
+.book-head{display:flex;justify-content:space-between;align-items:baseline;padding:14px 18px 12px;border-bottom:2px solid var(--wren);gap:12px}
+.book-head h2{font-size:1.6rem;font-weight:800}
+.book-head span{font-size:.9rem;color:var(--wren);font-weight:600}
+.rows{list-style:none;margin:0;padding:0;position:relative}
+.row{display:grid;grid-template-columns:76px minmax(0,1fr);border-bottom:1px solid var(--wren-line);min-height:92px}
+.row:last-child{border-bottom:0}
+.time{font:500 1.1rem/1 var(--display);color:var(--wren);padding:16px 0 0 18px;border-right:1px solid var(--wren);font-variant-numeric:tabular-nums}
+.what{padding:12px 16px 12px 14px;display:grid;gap:4px;align-content:center}
+.who{display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap}
+.who b{font-weight:600}
+.who small{font-size:.88rem;color:var(--ink-2)}
+.state{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:.9rem}
+.tag{font-weight:600;font-size:.82rem;padding:2px 8px;border:1.5px solid var(--blue);color:var(--blue);background:var(--blue-wash);border-radius:2px;white-space:nowrap}
+.tag.none{border-style:dashed;border-color:var(--ink);color:var(--ink);background:transparent}
+.tag.wait{border-color:var(--wren);color:var(--wren);background:transparent}
+.reply{font-style:italic;color:var(--ink)}
+.chan{color:var(--ink-2)}
+.row.open{background:repeating-linear-gradient(135deg,transparent 0 9px,var(--wren-wash) 9px 10px)}
+.row.open .what{color:var(--ink-2)}
+.row.lunch .what{color:var(--ink-2)}
+.book-foot{border-top:2px solid var(--wren);padding:10px 18px;font-size:.88rem;color:var(--ink-2)}
+
+/* one orchestrated moment: confirmations are stamped in, top to bottom */
+@media (prefers-reduced-motion:no-preference){
+  .tag.ok{animation:stamp .5s cubic-bezier(.2,.9,.3,1.2) both;animation-delay:calc(.5s + var(--i)*.28s)}
+  .reply.ok{animation:fade .5s ease both;animation-delay:calc(.5s + var(--i)*.28s)}
+}
+@keyframes stamp{from{opacity:0;transform:scale(1.5) rotate(-4deg)}to{opacity:1;transform:none}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+
+/* section scaffolding: a left margin gutter, like a diary's date column */
+section{padding:clamp(40px,5.5vw,80px) 0}
+.sec{display:grid;grid-template-columns:minmax(0,230px) minmax(0,1fr);gap:clamp(24px,5vw,72px)}
+.sec>h2{font-size:clamp(1.6rem,2.6vw,2.2rem);padding-top:14px;border-top:3px solid var(--wren);align-self:start}
+.sec>.body{border-top:1px solid var(--wren-line);padding-top:14px}
+.prose{max-width:38em}
+.prose p+p{margin-top:1em}
+.sample-tag{display:inline-block;font-size:.85rem;font-weight:600;color:var(--wren);border:1.5px solid var(--wren);padding:1px 8px;border-radius:2px;margin-bottom:14px}
+
+/* WHY: big pull line, wren-brown */
+.why{padding-top:0}
+.why .pull{font:500 clamp(1.5rem,2.8vw,2.3rem)/1.25 var(--display);color:var(--blue);max-width:24ch;margin-bottom:28px;letter-spacing:-.01em;text-wrap:balance}
+
+/* SIGNATURE: same reminder twice, as two diary entries */
+.twice{background:#fff;border-top:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink)}
+.twice h2{font-size:clamp(1.8rem,3.4vw,2.8rem);max-width:20ch}
+.pair{margin-top:36px;display:grid;grid-template-columns:1fr 1fr;border:1.5px solid var(--ink)}
+.entry{padding:22px 22px 24px;display:grid;gap:14px;align-content:start}
+.entry+.entry{border-left:1.5px solid var(--ink);background:var(--blue-wash)}
+.entry h3{font-size:1.15rem;font-weight:800}
+.entry .meta{font-size:.92rem;color:var(--ink-2)}
+.msg{border-left:4px solid var(--wren);padding:6px 0 6px 14px}
+.msg.reply-msg{border-left-color:var(--blue);margin-left:28px;font-style:italic}
+.outcome{font-weight:600;border-top:1px solid var(--ink);padding-top:12px}
+.outcome.no{color:var(--ink)}
+.outcome.yes{color:var(--blue)}
+.cap{margin-top:14px;font-size:.92rem;color:var(--ink-2)}
+
+/* SETUP: a real sequence, drawn as three timetable lines */
+.steps{list-style:none;margin:0;padding:0;counter-reset:s}
+.steps li{display:grid;grid-template-columns:72px minmax(0,1fr);border-bottom:1px solid var(--wren-line);padding:20px 0;counter-increment:s}
+.steps li::before{content:counter(s);font:500 2.4rem/1 var(--display);color:var(--wren)}
+.steps h3{font-size:1.35rem;margin-bottom:6px}
+.steps .path{display:inline-block;margin-top:8px;font-weight:600;color:var(--blue);background:var(--blue-wash);padding:4px 10px;border-radius:2px;font-size:.95rem}
+.after{margin-top:20px}
+
+/* DASHBOARD: the only dark block on the page besides footer */
+.dark{background:var(--ink);color:#fff}
+.dark .sec>h2{border-top-color:var(--tan)}
+.dark .sec>.body{border-top-color:#3a4052}
+.dark .prose{color:#E4E7EE}
+.dark .sample-tag{color:var(--tan);border-color:var(--tan)}
+.dash{margin-top:28px;border:1px solid #4a5166}
+.dash-top{display:flex;flex-wrap:wrap;gap:8px 28px;padding:14px 18px;border-bottom:1px solid #4a5166;align-items:baseline;justify-content:space-between}
+.dash-top b{font:800 1.1rem var(--display)}
+.dash-top span{color:#C9CEDA;font-size:.95rem}
+.dt{width:100%;border-collapse:collapse}
+.dt th{text-align:left;font-weight:600;font-size:.88rem;color:#C9CEDA;padding:10px 18px;border-bottom:1px solid #4a5166}
+.dt td{padding:14px 18px;border-bottom:1px solid #343a4c;vertical-align:top}
+.dt tr:last-child td{border-bottom:0}
+.st{font-weight:600;white-space:nowrap}
+.st::before{content:"";display:inline-block;width:10px;height:10px;margin-right:8px;border:2px solid #fff;background:#fff}
+.st.off::before{background:transparent;border-style:dashed}
+.st.warn::before{background:var(--tan);border-color:var(--tan)}
+.need{color:var(--tan);font-weight:600}
+.quiet{color:#C9CEDA}
+@media (max-width:700px){
+  .dt thead{position:absolute;left:-9999px}
+  .dt,.dt tbody,.dt tr,.dt td{display:block;width:100%}
+  .dt tr{padding:12px 0;border-bottom:1px solid #343a4c}
+  .dt tr:last-child{border-bottom:0}
+  .dt td{border:0;padding:3px 18px}
+  .dt td[data-l]::before{content:attr(data-l) ": ";color:#C9CEDA}
+  .dt td:first-child{font-weight:600}
+}
+
+/* SAFETY: three rules, set as wide ruled entries */
+.rules{display:grid;gap:0}
+.rule{display:grid;grid-template-columns:minmax(0,200px) minmax(0,1fr);gap:8px 32px;padding:20px 0;border-bottom:1px solid var(--wren-line)}
+.rule:first-child{padding-top:6px}
+.rule h3{font-size:1.25rem;color:var(--blue)}
+.rule p{max-width:36em}
+
+/* DISCLOSURES */
+.disc{border:1.5px solid var(--ink);border-left:10px solid var(--wren);padding:clamp(20px,3vw,36px)}
+.disc h2{font-size:clamp(1.6rem,2.6vw,2.2rem);margin-bottom:18px}
+.disc ul{margin:0;padding:0;list-style:none;display:grid;gap:12px;max-width:44em}
+.disc li{padding-left:18px;position:relative}
+.disc li::before{content:"";position:absolute;left:0;top:.8em;width:8px;height:2px;background:var(--wren)}
+
+/* FAQ */
+.faq details{border-bottom:1px solid var(--wren-line)}
+.faq details:first-child{border-top:1px solid var(--wren-line)}
+.faq summary{list-style:none;cursor:pointer;min-height:56px;display:flex;align-items:center;gap:14px;padding:12px 0;font:800 1.15rem/1.25 var(--display);letter-spacing:-.01em}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::before{content:"";flex:none;width:10px;height:10px;border-right:2.5px solid var(--wren);border-bottom:2.5px solid var(--wren);transform:rotate(-45deg);transition:transform .2s}
+.faq details[open] summary::before{transform:rotate(45deg)}
+.faq summary:hover{color:var(--wren)}
+.faq details>div{padding:0 0 20px 24px;max-width:40em}
+@media (prefers-reduced-motion:reduce){.faq summary::before{transition:none}}
+
+/* PRICE STRIP */
+.price{border-top:3px solid var(--wren);border-bottom:1px solid var(--wren-line);padding:0}
+.price .wrap{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px 40px;align-items:center;padding-top:32px;padding-bottom:32px}
+.price p.big{font:800 clamp(1.5rem,3vw,2.4rem)/1.1 var(--display);letter-spacing:-.02em}
+.price p.big em{font-style:normal;color:var(--wren)}
+.price p.sm{margin-top:8px;color:var(--ink-2);font-size:.95rem;max-width:40em}
+
+/* FOOTER */
+footer{padding:48px 0 56px}
+footer .wrap{display:grid;grid-template-columns:minmax(0,230px) minmax(0,1fr);gap:clamp(24px,5vw,72px)}
+footer img{height:34px;width:auto}
+footer p{max-width:44em;color:#E4E7EE;font-size:.95rem}
+footer nav{display:flex;flex-wrap:wrap;gap:0 20px;margin-top:14px}
+footer nav a{color:#fff;display:inline-flex;min-height:44px;align-items:center}
+
+/* responsive */
+@media (max-width:960px){
+  .hero .wrap{grid-template-columns:1fr}
+  .book{max-width:560px}
+  .sec,footer .wrap{grid-template-columns:1fr;gap:16px}
+  .sec>h2{padding-top:12px}
+  .sec>.body{border-top:0;padding-top:0}
+}
+@media (max-width:640px){
+  body{font-size:1rem}
+  .pair{grid-template-columns:1fr}
+  .entry+.entry{border-left:0;border-top:1.5px solid var(--ink)}
+  .rule{grid-template-columns:1fr}
+  .price .wrap{grid-template-columns:1fr}
+  .price .btn{width:100%}
+  .hero .cta .btn{width:100%}
+  .book{box-shadow:6px 6px 0 var(--wren-line);margin-right:6px}
+  .row{grid-template-columns:62px minmax(0,1fr)}
+  .time{padding-left:12px;font-size:1rem}
+  .steps li{grid-template-columns:48px minmax(0,1fr)}
+  .msg.reply-msg{margin-left:12px}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a href="#" aria-label="PingWren home"><img src="../../../public/brand/pingwren-logo.svg" alt="PingWren" width="150" height="34"></a>
+    <nav aria-label="Main">
+      <a class="hide-s" href="#setup">Setup</a>
+      <a class="hide-s" href="#faq">Questions</a>
+      <a class="btn btn-primary" href="#trial">Start 7-day free trial</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero" aria-labelledby="h1">
+  <div class="wrap">
+    <div>
+      <h1 id="h1">About half of booked clients used to turn up. With WhatsApp reminders, it’s 85%+<sup><a href="#own-average" aria-label="Footnote: our own average" style="color:inherit">*</a></sup></h1>
+      <p class="lede">PingWren takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.</p>
+      <div class="cta" id="trial">
+        <a class="btn btn-primary" href="#">Start 7-day free trial</a>
+        <a class="btn btn-ghost" href="#setup">Read the setup guide</a>
+      </div>
+      <p class="fine">We take a card up front. The trial covers up to 3 numbers, and you can cancel from the billing portal whenever you like.</p>
+
+      <div class="slots" id="own-average">
+        <dl>
+          <dt>Before</dt>
+          <dd aria-label="About 5 in 10 booked clients turn up"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i><i></i><i></i><i></i></dd>
+          <dt>With WhatsApp</dt>
+          <dd aria-label="85 percent or more turn up"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="h"></i><i></i></dd>
+        </dl>
+        <p class="foot">Our own average, from before PingWren, not a study. Results vary.</p>
+      </div>
+    </div>
+
+    <figure class="book-fig" style="margin:0">
+      <div class="book" role="group" aria-label="Sample appointment book for a Tuesday at a physio clinic">
+        <div class="book-head">
+          <h2>Tuesday</h2>
+          <span>Sample: Riverside Physio</span>
+        </div>
+        <ol class="rows">
+          <li class="row">
+            <div class="time">09:00</div>
+            <div class="what">
+              <div class="who"><b>Maya Okafor</b><small>Knee follow-up</small></div>
+              <div class="state"><span class="chan">WhatsApp</span><span class="tag ok" style="--i:0">Confirmed</span><span class="reply ok" style="--i:0">“Yes, see you then”</span></div>
+            </div>
+          </li>
+          <li class="row">
+            <div class="time">10:00</div>
+            <div class="what">
+              <div class="who"><b>Daniel Price</b><small>First assessment</small></div>
+              <div class="state"><span class="chan">WhatsApp</span><span class="tag ok" style="--i:1">Confirmed</span><span class="reply ok" style="--i:1">“Yes thanks, I’ll be there”</span></div>
+            </div>
+          </li>
+          <li class="row open">
+            <div class="time">11:00</div>
+            <div class="what"><div class="who"><b>Open</b><small>Nobody booked</small></div></div>
+          </li>
+          <li class="row lunch">
+            <div class="time">12:00</div>
+            <div class="what"><div class="who"><b>Lunch</b></div></div>
+          </li>
+          <li class="row">
+            <div class="time">13:00</div>
+            <div class="what">
+              <div class="who"><b>Aisha Rahman</b><small>Lower back</small></div>
+              <div class="state"><span class="chan">WhatsApp</span><span class="tag wait">Delivered</span><span class="chan">Waiting for a reply</span></div>
+            </div>
+          </li>
+          <li class="row">
+            <div class="time">14:00</div>
+            <div class="what">
+              <div class="who"><b>Sam Taylor</b><small>Shoulder review</small></div>
+              <div class="state"><span class="chan">WhatsApp</span><span class="tag ok" style="--i:2">Confirmed</span><span class="reply ok" style="--i:2">“Yes, see you at 2”</span></div>
+            </div>
+          </li>
+          <li class="row">
+            <div class="time">15:00</div>
+            <div class="what">
+              <div class="who"><b>Priya Nair</b><small>Hip mobility</small></div>
+              <div class="state"><span class="chan">SMS, yesterday 14:02</span><span class="tag none">No reply</span></div>
+            </div>
+          </li>
+          <li class="row">
+            <div class="time">16:00</div>
+            <div class="what">
+              <div class="who"><b>Tom Hale</b><small>Ankle, week 3</small></div>
+              <div class="state"><span class="chan">WhatsApp</span><span class="tag ok" style="--i:3">Confirmed</span><span class="reply ok" style="--i:3">“Yes, see you at 4”</span></div>
+            </div>
+          </li>
+        </ol>
+        <div class="book-foot">Sample day. The clinic and the people in it are made up.</div>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<section class="why" aria-labelledby="why-h">
+  <div class="wrap sec">
+    <h2 id="why-h">Why we made it</h2>
+    <div class="body">
+      <p class="pull">Your clients answer WhatsApp. Text messages mostly sit there.</p>
+      <div class="prose">
+        <p>We run reminders for clinics, coaches and gyms, and we kept seeing the same thing. The SMS went out, nobody replied, and the slot stayed empty.</p>
+        <p>Your GoHighLevel workflows were already doing the hard part. So we built the piece that sends those same messages from your own WhatsApp number, and brings replies back where your team already works.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="twice" aria-labelledby="twice-h">
+  <div class="wrap">
+    <h2 id="twice-h">The same reminder, sent twice</h2>
+    <div class="pair">
+      <article class="entry">
+        <h3>As an SMS</h3>
+        <p class="meta">Yesterday 14:02</p>
+        <p class="msg">Hi Sam, your appointment is at 2pm tomorrow. Reply YES to confirm.</p>
+        <p class="outcome no">No reply</p>
+      </article>
+      <article class="entry">
+        <h3>On WhatsApp</h3>
+        <p class="meta">Delivered</p>
+        <p class="msg">Hi Sam, your appointment is at 2pm tomorrow. Reply YES to confirm.</p>
+        <p class="msg reply-msg">Yes, see you at 2</p>
+        <p class="outcome yes">Back in Conversations</p>
+      </article>
+    </div>
+    <p class="cap">Sample messages. Sam is made up.</p>
+  </div>
+</section>
+
+<section id="setup" aria-labelledby="setup-h">
+  <div class="wrap sec">
+    <h2 id="setup-h">How you set it up</h2>
+    <div class="body">
+      <ol class="steps">
+        <li><div><h3>Install the app</h3><p>Add PingWren to your GoHighLevel account from the Marketplace.</p></div></li>
+        <li><div><h3>Set the Telephony Provider</h3><p>Choose PingWren as the provider, so “Send SMS” steps go out on WhatsApp.</p><span class="path">Settings → Phone System → Advanced Settings → Telephony Provider</span></div></li>
+        <li><div><h3>Scan the QR code</h3><p>Open WhatsApp on the phone with your business number and link it as a device, the same way you would link WhatsApp Web.</p></div></li>
+      </ol>
+      <p class="after prose"><a href="#">Read the full setup guide</a></p>
+    </div>
+  </div>
+</section>
+
+<section class="dark" aria-labelledby="dash-h">
+  <div class="wrap sec">
+    <h2 id="dash-h">What you look at afterwards</h2>
+    <div class="body">
+      <div class="prose"><p>One screen for every sub-account: whether the number is connected, how much has gone out today, and the few that need you.</p></div>
+      <div class="dash" role="group" aria-label="Sample PingWren dashboard">
+        <div class="dash-top"><b>Sub-accounts</b><span>Sample data. Account names are made up.</span></div>
+        <table class="dt">
+          <thead><tr><th scope="col">Sub-account</th><th scope="col">WhatsApp</th><th scope="col">Sent today</th><th scope="col">Needs attention</th></tr></thead>
+          <tbody>
+            <tr><td>Riverside Physio</td><td data-l="WhatsApp"><span class="st">Connected</span></td><td data-l="Sent today">64 / 150</td><td data-l="Needs attention" class="quiet">Nothing</td></tr>
+            <tr><td>Northside Vets</td><td data-l="WhatsApp"><span class="st">Connected</span></td><td data-l="Sent today">112 / 150</td><td data-l="Needs attention" class="quiet">Nothing</td></tr>
+            <tr><td>Harbour Gym</td><td data-l="WhatsApp"><span class="st off">Disconnected</span></td><td data-l="Sent today">0 / 150</td><td data-l="Needs attention" class="need">Scan the QR code again</td></tr>
+            <tr><td>Ellis Coaching</td><td data-l="WhatsApp"><span class="st warn">Paused</span></td><td data-l="Sent today">150 / 150</td><td data-l="Needs attention" class="need">Daily cap reached</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="safe-h">
+  <div class="wrap sec">
+    <h2 id="safe-h">How it treats your number</h2>
+    <div class="body rules">
+      <div class="rule"><h3>Paced sending</h3><p>Messages go out a few at a time with gaps between them, with a daily cap of 150 per number, instead of all at once.</p></div>
+      <div class="rule"><h3>Held while disconnected</h3><p>If the phone drops the link, nothing is sent from that number. Messages wait, and you see it on the dashboard.</p></div>
+      <div class="rule"><h3>STOP opt-outs</h3><p>When someone replies STOP, we stop messaging them from that number and note it against their contact.</p></div>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="disc-h" style="padding-top:0">
+  <div class="wrap">
+    <div class="disc">
+      <h2 id="disc-h">Read this before you sign up</h2>
+      <ul>
+        <li>PingWren connects to WhatsApp as a linked device, the way WhatsApp Web does. It is not the official WhatsApp Business API.</li>
+        <li>WhatsApp can restrict or ban a number. Pacing, the daily cap and STOP handling lower that risk. They can’t remove it.</li>
+        <li>The 85%+ figure is our own average across businesses we’ve run WhatsApp appointment reminders for, compared with before PingWren. It is not a study, and your results will vary.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="faq" aria-labelledby="faq-h" style="padding-top:clamp(24px,4vw,56px)">
+  <div class="wrap sec">
+    <h2 id="faq-h">Questions we get</h2>
+    <div class="body faq">
+      <details><summary>Do I need the WhatsApp Business app or API?</summary><div><p>No. You scan a QR code with the phone that already has your number, and PingWren links to it as a device.</p></div></details>
+      <details><summary>Do I have to rebuild my workflows?</summary><div><p>No. Once PingWren is the Telephony Provider, the “Send SMS” steps you already have go out on WhatsApp.</p></div></details>
+      <details><summary>Where do replies go?</summary><div><p>Back into GoHighLevel Conversations, on the same contact, so your team answers where they already work.</p></div></details>
+      <details><summary>What happens if the phone goes offline?</summary><div><p>Sending from that number is held until it reconnects, and the dashboard shows it as disconnected.</p></div></details>
+      <details><summary>How does the trial work?</summary><div><p>It runs for 7 days and covers up to 3 numbers. We take a card up front, and you can cancel from the billing portal whenever you like.</p></div></details>
+    </div>
+  </div>
+</section>
+
+<section class="price" aria-label="Price" style="padding:0">
+  <div class="wrap">
+    <div>
+      <p class="big"><em>£29</em> per WhatsApp number, per month</p>
+      <p class="sm">Start with 7 days free on up to 3 numbers.</p>
+    </div>
+    <a class="btn btn-primary" href="#">Start 7-day free trial</a>
+  </div>
+</section>
+
+</main>
+
+<footer class="dark">
+  <div class="wrap">
+    <div><img src="../../../public/brand/pingwren-logo-reverse.svg" alt="PingWren" width="150" height="34"></div>
+    <div>
+      <p>PingWren connects to WhatsApp as a linked device, not through the official WhatsApp Business API. PingWren is not affiliated with or endorsed by Meta, WhatsApp or HighLevel.</p>
+      <nav aria-label="Footer"><a href="#setup">Setup guide</a><a href="#faq">Questions</a><a href="#">Privacy</a><a href="#">Terms</a></nav>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

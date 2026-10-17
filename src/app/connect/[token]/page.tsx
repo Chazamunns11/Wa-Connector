@@ -218,7 +218,7 @@ function StateCard({ title, description }: { title: string; description: string 
         <span className="flex h-12 w-12 items-center justify-center rounded-full border border-border bg-raised text-xl">
           🔗
         </span>
-        <h1 className="font-display text-xl font-bold uppercase italic text-ink">{title}</h1>
+        <h1 className="font-display text-xl font-bold text-ink">{title}</h1>
         <p className="text-sm text-ink-faint">{description}</p>
       </div>
     </Card>
