@@ -1560,6 +1560,13 @@ export class SessionManager {
                 await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "session disconnected before sending — not dispatched", false));
                 continue;
               }
+              // The owner may also have switched the group off while ffmpeg
+              // ran ("disabling stops outbound at once") — re-check it here.
+              if (record.groupJid !== null && !session.enabledGroups.has(record.groupJid)) {
+                this.log.warn({ coachId: session.coachId, messageId: record.id }, "group no longer enabled — not dispatched");
+                await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, GROUP_SYNC_OFF_REASON, false));
+                continue;
+              }
               content = prepared.content;
             }
             // A transcode candidate's fallback is named by the bridge

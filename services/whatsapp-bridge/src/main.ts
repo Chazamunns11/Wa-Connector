@@ -11,6 +11,9 @@
  *
  * Boot order matters:
  *   1. loadConfig() — fail fast on missing secrets (see src/config.ts).
+ *      With WA_VOICE_TRANSCODE_ENABLED on, one optional ffmpeg probe (<= 10 s,
+ *      flag on only) also runs here, before listen; a missing ffmpeg only
+ *      logs a warning and voice notes degrade to plain audio sends.
  *   2. HTTP server up FIRST, so Railway's healthcheck passes while sessions
  *      resume (a slow resume must not fail a deploy).
  *   3. SIGTERM/SIGINT registered — BEFORE `resumeAll()` is even awaited. See

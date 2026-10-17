@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pino } from "pino";
 import { SessionManager } from "../src/sessions.js";
+import { GROUP_SYNC_OFF_REASON } from "../src/groups.js";
 import { SessionPacer } from "../src/pacing.js";
 import { PendingWrites } from "../src/pending-writes.js";
 import { mapMimeToBaileysShape, sniffMime, type SniffedMime } from "../src/media.js";
@@ -64,13 +65,15 @@ function makeConfig(): BridgeConfig {
   } as BridgeConfig;
 }
 
-function makeRecord(idempotencyKey: string): MessageRecord {
+const GROUP_JID = "120363418570879210@g.us";
+
+function makeRecord(idempotencyKey: string, groupJid: string | null = null): MessageRecord {
   return {
     id: `id-${idempotencyKey}`,
     coachId: TENANT,
     idempotencyKey,
-    toPhone: TO,
-    groupJid: null,
+    toPhone: groupJid === null ? TO : null,
+    groupJid,
     status: "accepted",
     waMessageId: null,
     error: null,
@@ -83,13 +86,13 @@ function makeRecord(idempotencyKey: string): MessageRecord {
 
 type TranscodeFn = (buf: Buffer, mime: SniffedMime) => Promise<TranscodeResult>;
 
-function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leaseHeld?: boolean }) {
+function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leaseHeld?: boolean; group?: boolean }) {
   const calls: { method: string; args: unknown[] }[] = [];
   let resolveTerminal!: () => void;
   const terminal = new Promise<void>((resolve) => (resolveTerminal = resolve));
   const store = {
     getMessage: async () => null,
-    acceptMessage: async (_coachId: string, key: string) => ({ record: makeRecord(key), fresh: true }),
+    acceptMessage: async (_coachId: string, key: string) => ({ record: makeRecord(key, opts.group ? GROUP_JID : null), fresh: true }),
     claimMessage: async () => true,
     markMessageFailed: async (...args: unknown[]) => {
       calls.push({ method: "markMessageFailed", args });
@@ -111,6 +114,7 @@ function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leas
     user: { id: "447700900001:12@s.whatsapp.net" },
     onWhatsApp: async (phone: string) => [{ exists: true, jid: `${phone.slice(1)}@s.whatsapp.net` }],
     sendPresenceUpdate: async () => {},
+    groupMetadata: async () => ({ participants: [{ id: "447700900001@s.whatsapp.net" }] }),
     sendMessage: async (jid: string, content: Record<string, unknown>) => {
       sent.push({ jid, content });
       return { key: { id: "WAID1" } };
@@ -127,13 +131,13 @@ function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leas
     return { ok: true, kind: mapped.kind, mimetype: mime, buffer: opts.bytes, ptt: mapped.ptt, ...(mapped.transcodeCandidate ? { transcodeCandidate: true } : {}) };
   }) as unknown as typeof resolveOutboundAttachment;
 
-  const transcodeCalls: { mime: SniffedMime; sentTodayAtCall: number }[] = [];
-  let session!: Record<string, unknown> & { pacer: SessionPacer; status: string; draining: boolean; queue: unknown[] };
+  const transcodeCalls: { mime: SniffedMime; sentTodayAtCall: number; inFlightAtCall: number }[] = [];
+  let session!: Record<string, unknown> & { enabledGroups: Set<string>; pacer: SessionPacer; status: string; draining: boolean; queue: unknown[] };
   const wrapped: TranscodeFn | null =
     opts.transcode === undefined || opts.transcode === null
       ? null
       : async (buf, mime) => {
-          transcodeCalls.push({ mime, sentTodayAtCall: session.pacer.sentTodayCount() });
+          transcodeCalls.push({ mime, sentTodayAtCall: session.pacer.sentTodayCount(), inFlightAtCall: session.inFlightUnits as number });
           return opts.transcode!(buf, mime);
         };
 
@@ -154,7 +158,7 @@ function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leas
     stopping: false,
     pendingWrites: new PendingWrites(),
     mediaAbuseGate: null,
-    enabledGroups: new Set<string>(),
+    enabledGroups: new Set<string>(opts.group ? [GROUP_JID] : []),
     enabledGroupsLoad: 0,
     inFlightUnits: 0,
   };
@@ -201,6 +205,7 @@ test("drain: transcode is called before recordSend", async () => {
   await sendAndSettle(h);
   assert.equal(h.transcodeCalls.length, 1);
   assert.equal(h.transcodeCalls[0].sentTodayAtCall, 0);
+  assert.equal(h.transcodeCalls[0].inFlightAtCall, 1, "the item's units are in flight while ffmpeg runs");
 });
 
 test("drain: a transcode timeout sends the original as an audio file", async () => {
@@ -284,4 +289,36 @@ test("drain: a held message released by the app reaches the same branch", async 
   await h.terminal;
   assert.equal(h.transcodeCalls.length, 1);
   assert.equal(h.sent[0].content.ptt, true);
+});
+
+test("drain: a group voice note is transcoded and sent to the group, counting 5 units", async () => {
+  const h = makeHarness({ bytes: MP3, transcode: ok(), group: true });
+  const outcome = await h.manager.sendAttachmentToGroup(TENANT, GROUP_JID, { url: "https://example.com/a" }, "k-1");
+  assert.equal(outcome.kind, "accepted");
+  await h.terminal;
+  assert.equal(h.sent[0].jid, GROUP_JID);
+  assert.equal(h.sent[0].content.ptt, true);
+  assert.equal(h.session.pacer.sentTodayCount(), 5);
+  assert.equal(h.transcodeCalls.length, 1);
+  assert.equal(h.transcodeCalls[0].inFlightAtCall, 5);
+});
+
+test("drain: a group switched off during the transcode fails not dispatched", async () => {
+  let h!: ReturnType<typeof makeHarness>;
+  h = makeHarness({
+    bytes: MP3,
+    group: true,
+    transcode: async () => {
+      h.session.enabledGroups.delete(GROUP_JID);
+      return { ok: true, buffer: TRANSCODED, seconds: 3, waveform: WAVEFORM };
+    },
+  });
+  const outcome = await h.manager.sendAttachmentToGroup(TENANT, GROUP_JID, { url: "https://example.com/a" }, "k-1");
+  assert.equal(outcome.kind, "accepted");
+  await h.terminal;
+  assert.equal(h.sent.length, 0);
+  const failed = h.calls.find((c) => c.method === "markMessageFailed");
+  assert.equal(failed?.args[2], false, "dispatchAttempted=false");
+  assert.equal(failed?.args[1], GROUP_SYNC_OFF_REASON);
+  assert.equal(h.session.pacer.sentTodayCount(), 0);
 });
