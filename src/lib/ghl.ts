@@ -949,6 +949,106 @@ async function postGhlContactUpsert(accessToken: string, payload: Record<string,
   }
 }
 
+/** A GHL contact reduced to what inviting needs. Never logged. */
+export type GhlContactLite = { id: string; firstName: string | null; name: string | null; phone: string | null; tags: string[] };
+
+const GHL_CONTACT_SEARCH_PAGE_SIZE = 100;
+
+function strOrNull(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v : null;
+}
+
+/** Reads one GHL contact object defensively (the response shapes are not confirmed against a live location). `null` when it has no id. */
+function toGhlContactLite(raw: unknown): GhlContactLite | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const c = raw as Record<string, unknown>;
+  const id = strOrNull(c.id);
+  if (!id) return null;
+  const firstName = strOrNull(c.firstName);
+  const fullName = [firstName, strOrNull(c.lastName)].filter((p): p is string => p !== null).join(" ");
+  const name = strOrNull(c.contactName) ?? strOrNull(c.name) ?? (fullName || null);
+  const tags = Array.isArray(c.tags) ? c.tags.filter((t): t is string => typeof t === "string") : [];
+  return { id, firstName, name, phone: strOrNull(c.phone), tags };
+}
+
+/**
+ * `GET /contacts/{id}`. Same headers and version as the upserts. Never throws;
+ * failures are fixed strings (no response body, no contact data in logs).
+ */
+export async function getGhlContact(accessToken: string, contactId: string): Promise<{ ok: true; contact: GhlContactLite } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/contacts/${encodeURIComponent(contactId)}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}`, Version: CONTACTS_API_VERSION },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[ghl] contact read rejected: HTTP ${res.status}`);
+      return { ok: false, error: `GHL contact read rejected (HTTP ${res.status})` };
+    }
+    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    const contact = toGhlContactLite(json?.contact ?? json);
+    if (!contact) return { ok: false, error: "GHL contact read returned no contact" };
+    return { ok: true, contact };
+  } catch {
+    console.error("[ghl] contact read unreachable");
+    return { ok: false, error: "GHL contact read request failed" };
+  }
+}
+
+/**
+ * `POST /contacts/search` for a location, by tag (a `tags` filter, matched
+ * case-insensitively — also re-checked here) and/or free text, paged up to
+ * `limit` contacts. `truncated` is true when more matched than `limit`.
+ * Never throws; failures are fixed strings (no response body, no contact data
+ * in logs).
+ */
+export async function searchGhlContacts(
+  accessToken: string,
+  locationId: string,
+  query: { text?: string; tag?: string },
+  limit: number
+): Promise<{ ok: true; contacts: GhlContactLite[]; truncated: boolean } | { ok: false; error: string }> {
+  const tag = query.tag?.trim().toLowerCase() || null;
+  const text = query.text?.trim() || null;
+  const contacts: GhlContactLite[] = [];
+  let truncated = false;
+  try {
+    for (let page = 1; ; page++) {
+      const body: Record<string, unknown> = { locationId, page, pageLimit: GHL_CONTACT_SEARCH_PAGE_SIZE };
+      if (text) body.query = text;
+      if (tag) body.filters = [{ field: "tags", operator: "contains", value: [tag] }];
+      const res = await fetch(`${API_BASE}/contacts/search`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Version: CONTACTS_API_VERSION },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        console.error(`[ghl] contacts/search rejected: HTTP ${res.status}`);
+        return { ok: false, error: `GHL contact search rejected (HTTP ${res.status})` };
+      }
+      const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+      const rows = Array.isArray(json?.contacts) ? (json.contacts as unknown[]) : [];
+      for (const row of rows) {
+        const c = toGhlContactLite(row);
+        if (!c) continue;
+        if (tag && !c.tags.some((t) => t.toLowerCase() === tag)) continue;
+        if (contacts.length >= limit) {
+          truncated = true;
+          break;
+        }
+        contacts.push(c);
+      }
+      if (truncated || rows.length < GHL_CONTACT_SEARCH_PAGE_SIZE) break;
+    }
+    return { ok: true, contacts, truncated };
+  } catch {
+    console.error("[ghl] contacts/search unreachable");
+    return { ok: false, error: "GHL contact search request failed" };
+  }
+}
+
 /** T10 — opt-in switch for mirroring STOP/START onto the GoHighLevel contact's DND. Off unless exactly "true". */
 export function isGhlDndSyncEnabled(): boolean {
   return process.env.GHL_SYNC_DND === "true";

@@ -23,6 +23,8 @@ import {
   ghlTenantKeyQueryFilters,
   listGhlInstalledLocations,
   ghlGroupContactKey,
+  getGhlContact,
+  searchGhlContacts,
   parseGhlInstalledLocations,
   upsertGhlGroupContact,
   verifyGhlSignature,
@@ -3632,4 +3634,69 @@ test("app-originated: a tenant that is not one of the location's numbers is refu
   assert.equal(rows.size, 0);
   assert.equal(sendCalls.length, 0);
   assert.equal(statusCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Group invites (Task 7) — getGhlContact / searchGhlContacts
+// ---------------------------------------------------------------------------
+
+test("searchGhlContacts: sends the tag filter and maps the GHL response", async () => {
+  const { result, requests } = await withCapturedFetch(
+    async () =>
+      jsonResponse(200, {
+        contacts: [
+          { id: "c1", firstName: "Sam", lastName: "Lee", contactName: "Sam Lee", phone: "+447700900123", tags: ["Cohort", "vip"] },
+          { id: "c2", firstName: null, phone: null, tags: ["other"] },
+          { id: "c3", name: "Pat", tags: ["COHORT"] },
+        ],
+        total: 3,
+      }),
+    () => searchGhlContacts("token", "loc-1", { tag: "Cohort" }, 100)
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://services.leadconnectorhq.com/contacts/search");
+  assert.equal(requests[0].method, "POST");
+  assert.equal(requests[0].headers.authorization, "Bearer token");
+  assert.equal(requests[0].headers.version, "2021-07-28");
+  const body = requests[0].body as { locationId: string; filters: { field: string; value: string[] }[] };
+  assert.equal(body.locationId, "loc-1");
+  assert.equal(body.filters[0].field, "tags");
+  assert.deepEqual(body.filters[0].value, ["cohort"]);
+  assert.deepEqual(result, {
+    ok: true,
+    truncated: false,
+    contacts: [
+      { id: "c1", firstName: "Sam", name: "Sam Lee", phone: "+447700900123", tags: ["Cohort", "vip"] },
+      { id: "c3", firstName: null, name: "Pat", phone: null, tags: ["COHORT"] },
+    ],
+  });
+});
+
+test("searchGhlContacts: more matches than the limit sets truncated", async () => {
+  const { result } = await withCapturedFetch(
+    async () => jsonResponse(200, { contacts: [{ id: "a", tags: [] }, { id: "b", tags: [] }, { id: "c", tags: [] }] }),
+    () => searchGhlContacts("token", "loc-1", { text: "x" }, 2)
+  );
+  assert.ok(result.ok);
+  assert.equal(result.contacts.length, 2);
+  assert.equal(result.truncated, true);
+});
+
+test("searchGhlContacts: a non-2xx is { ok: false } without the response body", async () => {
+  const { result } = await withCapturedFetch(
+    async () => jsonResponse(422, { message: "secret upstream detail" }),
+    () => searchGhlContacts("token", "loc-1", { tag: "t" }, 10)
+  );
+  assert.deepEqual(result, { ok: false, error: "GHL contact search rejected (HTTP 422)" });
+});
+
+test("getGhlContact: maps a contact; a non-2xx is { ok: false } without the body", async () => {
+  const ok = await withCapturedFetch(
+    async () => jsonResponse(200, { contact: { id: "c1", firstName: "Sam", phone: "+447700900123", tags: ["a"] } }),
+    () => getGhlContact("token", "c1")
+  );
+  assert.equal(ok.requests[0].url, "https://services.leadconnectorhq.com/contacts/c1");
+  assert.deepEqual(ok.result, { ok: true, contact: { id: "c1", firstName: "Sam", name: "Sam", phone: "+447700900123", tags: ["a"] } });
+  const bad = await withCapturedFetch(async () => jsonResponse(404, { message: "secret" }), () => getGhlContact("token", "c1"));
+  assert.deepEqual(bad.result, { ok: false, error: "GHL contact read rejected (HTTP 404)" });
 });
