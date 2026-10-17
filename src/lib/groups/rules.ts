@@ -159,3 +159,33 @@ export function reconcileJob(job: WhatsappGroupJob, members: WhatsappGroupMember
   }
   return plan;
 }
+
+export const REASON_NOT_FOUND = "not_found";
+export const REASON_BRIDGE_UNAVAILABLE = "WhatsApp couldn't do that right now. Try again shortly";
+export const REASON_ADD_CAP_REACHED = "This number has reached today's limit for adding people to groups. Try again tomorrow";
+export const REASON_CREATE_CAP_REACHED = "This number has reached today's limit for creating groups. Try again tomorrow";
+export const REASON_SEND_CAP_REACHED = "This number has reached today's sending limit. Try again tomorrow";
+export const REASON_NOT_ADMIN = "This number isn't an admin of the group";
+export const REASON_GHL_UNAVAILABLE = "GoHighLevel contacts couldn't be loaded for this sub-account. Reconnect it and try again";
+export const REASON_INVALID_TOKEN = "That form has expired. Reload the page and try again";
+export const GROUP_POST_TOKEN_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+/** Maps a bridge failure code to a fixed customer-facing reason; never upstream text. */
+export function reasonForBridgeFailure(code: string): string {
+  switch (code) {
+    case "session_not_connected":
+      return REASON_NOT_CONNECTED;
+    case "groups_disabled":
+      return REASON_GROUPS_DISABLED;
+    case "group_add_cap_reached":
+      return REASON_ADD_CAP_REACHED;
+    case "group_create_cap_reached":
+      return REASON_CREATE_CAP_REACHED;
+    case "daily_cap_reached":
+      return REASON_SEND_CAP_REACHED;
+    case "not_admin":
+      return REASON_NOT_ADMIN;
+    default:
+      return REASON_BRIDGE_UNAVAILABLE;
+  }
+}
