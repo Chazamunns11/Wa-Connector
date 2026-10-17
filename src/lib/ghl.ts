@@ -1306,6 +1306,15 @@ const MEDIA_PLACEHOLDERS: Readonly<Record<string, string>> = {
 };
 const MEDIA_PLACEHOLDER_DEFAULT = "[WhatsApp message received — view it on the connected phone]";
 
+/** Fixed text posted to GHL for a missed WhatsApp call (the bridge stores no body for these rows). */
+export const MISSED_VOICE_CALL_TEXT = "📞 Missed WhatsApp call";
+export const MISSED_VIDEO_CALL_TEXT = "📞 Missed WhatsApp video call";
+
+/** `missedVideoCall` -> the video string; any other messageType -> the voice string. */
+export function describeMissedCall(messageType: string): string {
+  return messageType === "missedVideoCall" ? MISSED_VIDEO_CALL_TEXT : MISSED_VOICE_CALL_TEXT;
+}
+
 /**
  * Plan §Q6 — pure, exported, unit-tested map of fixed strings.
  * `whatsapp_inbound_messages.body` is `null` for a non-text reply (0048) —

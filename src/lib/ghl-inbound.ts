@@ -193,6 +193,7 @@
 import {
   addGhlInboundMessage,
   describeInboundMediaPlaceholder,
+  describeMissedCall,
   describeStoredMediaLabel,
   describeTooLargeMediaPlaceholder,
   ghlConversationProviderId,
@@ -455,6 +456,8 @@ export async function applyOptOutKeyword(
   ghlContactId: string | null
 ): Promise<"opt_out" | "opt_in" | null> {
   if (row.groupJid != null) return null;
+  // A missed-call event is not text the contact typed.
+  if (row.eventKind === "missed_call") return null;
   const decision = classifyOptOutMessage(row.body);
   if (!decision) return null;
   if (decision.kind === "opt_out") {
@@ -642,7 +645,13 @@ async function processGhlInboundRow(
   // `null`/`undefined` for EVERY coach-tenant row and every row written
   // while `WA_MEDIA_INBOUND_ENABLED` was off, in which case this collapses
   // to exactly Q6's original placeholder-only behaviour.
-  const { body, attachments } = row.body !== null ? { body: row.body, attachments: undefined } : await resolveMediaAttachment(repo, row);
+  // A missed call carries a fixed string and never touches media resolution.
+  const { body, attachments } =
+    row.eventKind === "missed_call"
+      ? { body: describeMissedCall(row.messageType), attachments: undefined }
+      : row.body !== null
+        ? { body: row.body, attachments: undefined }
+        : await resolveMediaAttachment(repo, row);
   const post = await deps.addInboundMessage(accessToken, {
     contactId,
     conversationProviderId,

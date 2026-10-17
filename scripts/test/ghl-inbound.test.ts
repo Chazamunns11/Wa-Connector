@@ -22,7 +22,7 @@ import test, { beforeEach, afterEach } from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 
-import { describeInboundMediaPlaceholder } from "@/lib/ghl";
+import { describeInboundMediaPlaceholder, describeMissedCall, MISSED_VIDEO_CALL_TEXT, MISSED_VOICE_CALL_TEXT } from "@/lib/ghl";
 import type { AddGhlInboundMessageResult, UpsertGhlContactResult } from "@/lib/ghl";
 import {
   drainGhlInboundReplies,
@@ -120,6 +120,7 @@ function makeRow(overrides: Partial<WhatsappInboundMessage> = {}): WhatsappInbou
     mediaPath: null,
     mediaMime: null,
     mediaSizeBytes: null,
+    eventKind: null,
     ...overrides,
   };
 }
@@ -1316,4 +1317,90 @@ test("merge: START on one number clears the contact's opt-out on every number of
   const result = await drainGhlInboundReplies(repo, deps);
   assert.equal(result.optedIn, 1);
   assert.equal(optOuts.size, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Missed WhatsApp calls — fixed strings, no media path, no STOP handling.
+// ---------------------------------------------------------------------------
+
+test("describeMissedCall: video -> video text, anything else -> voice text", () => {
+  assert.equal(MISSED_VOICE_CALL_TEXT, "📞 Missed WhatsApp call");
+  assert.equal(MISSED_VIDEO_CALL_TEXT, "📞 Missed WhatsApp video call");
+  assert.equal(describeMissedCall("missedVideoCall"), MISSED_VIDEO_CALL_TEXT);
+  assert.equal(describeMissedCall("missedVoiceCall"), MISSED_VOICE_CALL_TEXT);
+  assert.equal(describeMissedCall("something-else"), MISSED_VOICE_CALL_TEXT);
+});
+
+test("missed voice call posts \"📞 Missed WhatsApp call\" (exact body, no attachments)", async () => {
+  const row = makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call" });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(postCalls.length, 1);
+  assert.equal(postCalls[0]?.body, "📞 Missed WhatsApp call");
+  assert.equal((postCalls[0] as unknown as { attachments?: string[] }).attachments, undefined);
+});
+
+test("missed voice call on a multi-number location keeps the number prefix", async () => {
+  const labelled = makeRow({ coachId: SECOND_TENANT_ID, body: null, messageType: "missedVoiceCall", eventKind: "missed_call" });
+  const unlabelled = makeRow({ coachId: TENANT_ID, body: null, messageType: "missedVoiceCall", eventKind: "missed_call" });
+  const { repo } = createFakeRepo([makeAccount()], [labelled, unlabelled], TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.deepEqual(postCalls.map((c) => c.body), ["[Sales] 📞 Missed WhatsApp call", "[Number 1] 📞 Missed WhatsApp call"]);
+});
+
+test("missed video call posts the video string", async () => {
+  const row = makeRow({ body: null, messageType: "missedVideoCall", eventKind: "missed_call" });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "📞 Missed WhatsApp video call");
+});
+
+test("missed call skips media resolution", async () => {
+  const row = makeRow({
+    body: null,
+    messageType: "missedVoiceCall",
+    eventKind: "missed_call",
+    mediaStatus: "stored",
+    mediaPath: "tenant-1/WAMSG1.jpg",
+  });
+  const { repo, calls } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "📞 Missed WhatsApp call");
+  assert.equal(calls.some((c) => c.method === "createWhatsappMediaSignedUrl"), false);
+});
+
+test("missed call is not treated as a STOP keyword", async () => {
+  // Even if a body were somehow present, an event row never reaches the opt-out classifier.
+  const row = makeRow({ body: "STOP", messageType: "missedVoiceCall", eventKind: "missed_call" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(optOuts.size, 0);
+  assert.equal(result.optedOut, 0);
+  assert.equal(postCalls[0]?.body, "📞 Missed WhatsApp call");
+});
+
+test("a row with eventKind null is unchanged", async () => {
+  const row = makeRow({ body: "hello", eventKind: null });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "hello");
 });
