@@ -16,20 +16,16 @@ export function SameReminderTwice() {
   return (
     <figure role="img" aria-label={LABEL} className="phones">
       <PhoneFrame title="Sam" variant="sms" composer="Text Message">
-        <p className="phone-meta">
-          Text Message
-          <br />
-          Yesterday 14:02
-        </p>
-        <div className="flex flex-col items-end">
+        <p className="phone-meta">Text Message · Yesterday 14:02</p>
+        <div className="wa-row wa-row-out">
           <p className="wa-msg wa-sms">{REMINDER}</p>
           <p className="no-reply">No reply</p>
         </div>
       </PhoneFrame>
 
-      <PhoneFrame title="Sam" variant="whatsapp" composer="Message">
+      <PhoneFrame title="Sam" variant="whatsapp" subline="+44 7700 900103" composer="Message">
         <p className="day-chip">Yesterday</p>
-        <div className="flex flex-col items-end">
+        <div className="wa-row wa-row-out">
           <p className="hero-bubble wa-msg wa-out bubble-tail">
             {REMINDER}
             <span className="wa-meta">
@@ -40,12 +36,12 @@ export function SameReminderTwice() {
             </span>
           </p>
         </div>
-        <div className="hero-late mt-2 flex flex-col items-start">
+        <div className="hero-late wa-row wa-row-in">
           <p className="wa-msg wa-in bubble-tail">
             {REPLY}
             <span className="wa-meta">14:09</span>
           </p>
-          <p className="day-chip mt-2">Back in Conversations</p>
+          <p className="phone-system">Back in Conversations</p>
         </div>
       </PhoneFrame>
     </figure>

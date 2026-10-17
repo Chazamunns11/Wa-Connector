@@ -387,183 +387,6 @@ h2 {
   line-height: 1.55;
 }
 
-.phone-island {
-  position: absolute;
-  top: 17px;
-  left: 50%;
-  z-index: 2;
-  width: 64px;
-  height: 18px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  background: #0E1118;
-}
-
-.phone-screen {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  border-radius: 32px;
-  background: #FFFFFF;
-}
-
-.phone-status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 11px 22px 4px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.phone-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 10px 9px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.phone-head-sms {
-  position: relative;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 4px 10px 8px;
-  border-bottom: 1px solid var(--color-border);
-  background: #F6F7F9;
-  font-size: 12px;
-}
-
-.phone-head-sms .phone-back {
-  position: absolute;
-  left: 12px;
-  top: 14px;
-  color: #4A5162;
-}
-
-.phone-head-chat {
-  background: #1F2433;
-  --color-ink: #FFFFFF;
-  color: var(--color-ink);
-}
-
-.phone-who {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  line-height: 1.15;
-}
-
-.phone-sub {
-  font-size: 10px;
-  font-weight: 400;
-  color: #C3C7D1;
-}
-
-.phone-tools {
-  flex: none;
-}
-
-.phone-avatar {
-  display: inline-flex;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: #D9A47A;
-  color: #1B1F2A;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.phone-avatar-sms {
-  width: 26px;
-  height: 26px;
-  background: #C3C7D1;
-  font-size: 12px;
-}
-
-.phone-body {
-  flex: 1;
-  min-height: 0;
-  padding: 12px 10px;
-}
-
-.phone-meta {
-  margin-bottom: 12px;
-  text-align: center;
-  font-size: 10.5px;
-  line-height: 1.35;
-  color: var(--color-ink-faint);
-}
-
-.phone-composer {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 8px 8px;
-  font-size: 13px;
-  color: var(--color-ink-faint);
-}
-
-.phone-composer-sms {
-  padding: 0 4px;
-}
-
-.phone-composer-sms .phone-field {
-  flex: 1;
-  padding: 6px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-}
-
-.phone-plus {
-  display: inline-flex;
-  flex: none;
-  width: 22px;
-  height: 22px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: #EEF0F4;
-  font-size: 16px;
-  line-height: 1;
-}
-
-.phone-composer-chat .phone-field {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: #FFFFFF;
-}
-
-.phone-mic {
-  flex: none;
-}
-
-.phone-home {
-  display: block;
-  width: 96px;
-  height: 4px;
-  margin: 2px auto 8px;
-  border-radius: 999px;
-  background: var(--color-ink);
-  opacity: 0.85;
-}
-
-
 /* Browser-ish chrome around a sample app screen. */
 .sample-chrome {
   border: 3px solid var(--color-outline);
@@ -934,59 +757,6 @@ h3 {
   letter-spacing: -0.05em;
 }
 
-/* ---- phones, restyled for B (class names unchanged) ----
-   Both full height at every width (the SMS crop rules are gone, Task 14B).
-   Hard offset shadow, no soft blur. */
-.phone {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: clamp(158px, 22vw, 300px);
-  max-width: none;
-  height: auto;
-  padding: 9px;
-  border-radius: 34px;
-  background: #0E1118;
-  color: var(--color-ink);
-  --color-ink: #1B1F2A;
-  --color-ink-dim: #4A5162;
-  --color-ink-faint: #4A5162;
-  --color-border: #D5D9E1;
-  --color-well: #EEF0F4;
-  box-shadow: 0 30px 0 -12px rgba(27, 31, 42, 0.18);
-}
-
-.phone-screen {
-  min-height: clamp(340px, 46vw, 580px);
-  border-radius: 26px;
-}
-
-.phones {
-  position: relative;
-  margin: 0;
-  z-index: 3;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  gap: clamp(10px, 2vw, 24px);
-  transform: translateY(clamp(150px, 27vw, 350px));
-}
-
-.phones > .phone:nth-child(1) {
-  transform: rotate(-4deg) translateY(30px);
-}
-
-.phones > .phone:nth-child(2) {
-  transform: rotate(3deg) translateY(-6px);
-}
-
-@media (max-width: 900px) {
-  .phones {
-    margin-top: 24px;
-    transform: translateY(110px);
-  }
-}
-
 /* ---- Task 14B: home page ----
    The one orchestrated moment: both phones rise first (0-600ms), then the
    bubble, Delivered, the ping and the reply follow (750-1900ms). `translate`
@@ -1035,10 +805,6 @@ h3 {
   padding-top: clamp(24px, 5vw, 64px);
 }
 
-.hang-pad {
-  padding-top: clamp(180px, 25vw, 340px);
-}
-
 .price-h2 {
   max-width: 14ch;
   font-size: clamp(2.2rem, 6vw, 5rem);
@@ -1065,40 +831,286 @@ h3 {
     max-width: none;
   }
 
-  .hang-pad {
-    padding-top: 230px;
-  }
 }
 
-/* ---- Task 15: WhatsApp-style chat mock-up (W39) ----
-   No WhatsApp green and no logo. The outgoing bubble is a pale Coral tint, the
-   ticks are grey (blue would mean "read", which we cannot see). */
+/* ---- Task B: phone mock-ups (SITE-PASS section 4) ----
+   .phone is a size container and every inner size is in cqw (1% of the phone
+   width), so the mock-up is the same object at 165px and 300px. Its own box
+   carries no padding, radius or shadow (those would resolve against an
+   ancestor container); the .phone-bezel child draws them. Colours inside the
+   phone are literal on purpose: a phone is a light object on every ground.
+   No WhatsApp green, no logo, grey ticks only. */
+.phone {
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #4A5162;
+  --color-ink-faint: #4A5162;
+  --color-border: #D5D9E1;
+  --color-info: #1D5596;
+  --color-warn: #7A5000;
+  --color-win: #17663F;
+  position: relative;
+  flex: 0 1 auto;
+  width: clamp(165px, 23vw, 300px);
+  aspect-ratio: 9 / 19.4;
+  container-type: inline-size;
+  color: #1B1F2A;
+  font-family: -apple-system, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.phone-bezel {
+  position: absolute;
+  inset: 0;
+  border-radius: 15.5cqw;
+  background: #0E1118;
+  box-shadow: inset 0 0 0 0.6cqw #3A4052, 0 2.5cqw 0 -1cqw rgba(27, 31, 42, 0.18);
+}
+
+/* Side buttons: two on the left (volume), one on the right (power). */
+.phone::before,
+.phone::after {
+  content: "";
+  position: absolute;
+  width: 1cqw;
+  background: #262B38;
+}
+
+.phone::before {
+  left: -0.8cqw;
+  top: 22cqw;
+  height: 28cqw;
+  border-radius: 0.5cqw 0 0 0.5cqw;
+  background: linear-gradient(#262B38 0 9cqw, transparent 9cqw 12cqw, #262B38 12cqw);
+}
+
+.phone::after {
+  right: -0.8cqw;
+  top: 30cqw;
+  height: 24cqw;
+  border-radius: 0 0.5cqw 0.5cqw 0;
+}
+
+.phone-screen {
+  position: absolute;
+  inset: 3.6cqw;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 12cqw;
+  background: #FFFFFF;
+}
+
+.phone-chat .phone-screen {
+  background: #E3E7EE;
+}
+
+.phone-island {
+  position: absolute;
+  top: 3cqw;
+  left: 50%;
+  z-index: 3;
+  width: 26cqw;
+  height: 8cqw;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: #0E1118;
+}
+
+/* The clock ends by 21cqw, the island starts at 33cqw: they never meet. */
+.phone-status {
+  display: flex;
+  flex: none;
+  box-sizing: border-box;
+  height: 17cqw;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-inline: 8cqw;
+  padding-top: 4.4cqw;
+}
+
+.phone-time {
+  font-size: max(8px, 5cqw);
+  font-weight: 600;
+  line-height: 5cqw;
+  letter-spacing: -0.01em;
+}
+
+.phone-signals {
+  width: 15cqw;
+  height: 3.75cqw;
+  margin-top: 0.6cqw;
+}
+
+.phone-head {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.phone-back {
+  flex: none;
+  width: 3cqw;
+  height: 5.2cqw;
+}
+
+.phone-title {
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.phone-head-sms {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.8cqw;
+  height: 20cqw;
+  border-bottom: 1px solid #D5D9E1;
+  background: #F6F7F9;
+  color: #1B1F2A;
+}
+
+.phone-head-sms .phone-back {
+  position: absolute;
+  left: 4cqw;
+  top: 6cqw;
+  color: #2F6FDE;
+}
+
+.phone-head-sms .phone-title {
+  font-size: max(9px, 4.4cqw);
+}
+
+.phone-avatar {
+  display: inline-flex;
+  flex: none;
+  width: 10.5cqw;
+  height: 10.5cqw;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #D5D9E1;
+  color: #1B1F2A;
+  font-size: 4.6cqw;
+  font-weight: 600;
+}
+
+.phone-avatar-sms {
+  width: 11cqw;
+  height: 11cqw;
+  background: #C3C7D1;
+  font-size: 4.8cqw;
+}
+
+.phone-avatar-group {
+  background: #EEF0F4;
+  font-size: 3.8cqw;
+  letter-spacing: 0.02em;
+}
+
+.phone-head-chat {
+  gap: 2.5cqw;
+  height: 17cqw;
+  padding-inline: 3cqw 3.5cqw;
+  background: #1F2433;
+  color: #FFFFFF;
+}
+
+.phone-who {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.4cqw;
+}
+
+.phone-head-chat .phone-title {
+  overflow: hidden;
+  font-size: max(9px, 4.6cqw);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-subline {
+  overflow: hidden;
+  font-size: max(8px, 3.3cqw);
+  line-height: 1.1;
+  color: #C3C7D1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-tools {
+  flex: none;
+  width: 12cqw;
+  height: 4.4cqw;
+}
+
+/* The thread sits at the bottom, like a real one: the empty space is above it. */
+.phone-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 2cqw;
+  padding: 3.5cqw;
+  overflow: hidden;
+}
+
+.phone-meta {
+  margin: 0 auto;
+  font-size: max(8px, 3.2cqw);
+  line-height: 1.3;
+  color: #4A5162;
+  text-align: center;
+}
+
 .chat-wallpaper {
   background-color: #E3E7EE;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='88' height='88' viewBox='0 0 88 88' fill='none' stroke='%231B1F2A' stroke-opacity='.09' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='14' cy='14' r='5'/%3E%3Cpath d='M50 12h10M55 7v10'/%3E%3Cpath d='M70 34c3-4 6 4 9 0s6 4 9 0' transform='translate(-12 4)'/%3E%3Crect x='8' y='46' width='10' height='10' rx='3' transform='rotate(18 13 51)'/%3E%3Cpath d='M44 52l6 10h-12z'/%3E%3Ccircle cx='72' cy='72' r='3'/%3E%3Cpath d='M20 78c2-3 4 3 6 0s4 3 6 0'/%3E%3Cpath d='M70 20l4 4m0-4l-4 4'/%3E%3C/svg%3E");
-  background-size: 88px 88px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='88' height='88' viewBox='0 0 88 88' fill='none' stroke='%231B1F2A' stroke-opacity='.06' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='14' cy='14' r='5'/%3E%3Cpath d='M50 12h10M55 7v10'/%3E%3Cpath d='M58 38c3-4 6 4 9 0s6 4 9 0'/%3E%3Crect x='8' y='46' width='10' height='10' rx='3' transform='rotate(18 13 51)'/%3E%3Cpath d='M44 52l6 10h-12z'/%3E%3Ccircle cx='72' cy='72' r='3'/%3E%3Cpath d='M20 78c2-3 4 3 6 0s4 3 6 0'/%3E%3Cpath d='M70 20l4 4m0-4l-4 4'/%3E%3C/svg%3E");
+  background-size: 32cqw 32cqw;
 }
 
 .day-chip {
   width: fit-content;
-  margin: 0 auto 10px;
-  padding: 3px 10px;
-  border-radius: 8px;
+  margin: 0 auto;
+  padding: 1cqw 3cqw;
+  border-radius: 2cqw;
   background: #FFFFFF;
-  box-shadow: 0 1px 0 rgba(27, 31, 42, 0.12);
-  font-size: 10.5px;
+  box-shadow: 0 0.3cqw 0 rgba(27, 31, 42, 0.1);
+  font-size: max(8px, 3.2cqw);
+  line-height: 1.3;
   color: #4A5162;
+}
+
+.wa-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1cqw;
+}
+
+.wa-row-out {
+  align-items: flex-end;
+}
+
+.wa-row-in {
+  align-items: flex-start;
 }
 
 .wa-msg {
   position: relative;
-  max-width: 88%;
-  padding: 6px 8px 5px;
-  border-radius: 9px;
-  font-size: clamp(11.5px, 1.15vw, 14.5px);
-  line-height: 1.32;
+  max-width: 90%;
+  margin: 0;
+  padding: 2.4cqw 2.8cqw 2cqw;
+  border-radius: 3cqw;
+  font-size: max(11px, 4.1cqw);
+  line-height: 1.3;
   color: #1B1F2A;
-  box-shadow: 0 1px 0 rgba(27, 31, 42, 0.14);
+  box-shadow: 0 0.3cqw 0 rgba(27, 31, 42, 0.13);
 }
 
 .wa-msg::after {
@@ -1108,7 +1120,7 @@ h3 {
 }
 
 .wa-out {
-  background: #FFDDD3;
+  background: #FFE3DA;
   border-top-right-radius: 0;
 }
 
@@ -1119,9 +1131,10 @@ h3 {
 
 .wa-sms {
   max-width: 90%;
-  padding: 7px 10px;
-  border-radius: 16px;
+  padding: 2.6cqw 3.4cqw;
+  border-radius: 5cqw;
   background: #E4E7EE;
+  box-shadow: none;
 }
 
 /* The tail: a small wedge in the bubble's colour, on the square corner. */
@@ -1129,18 +1142,18 @@ h3 {
   content: "";
   position: absolute;
   top: 0;
-  width: 9px;
-  height: 11px;
+  width: 2.6cqw;
+  height: 3.2cqw;
   background: inherit;
 }
 
 .wa-out.bubble-tail::before {
-  right: -8px;
+  right: -2.2cqw;
   clip-path: polygon(0 0, 100% 0, 0 100%);
 }
 
 .wa-in.bubble-tail::before {
-  left: -8px;
+  left: -2.2cqw;
   clip-path: polygon(100% 0, 0 0, 100% 100%);
 }
 
@@ -1148,42 +1161,227 @@ h3 {
   float: right;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  margin: 7px 0 -3px 10px;
-  font-size: 0.72em;
+  gap: 0.8cqw;
+  margin: 1.8cqw 0 -0.8cqw 2.4cqw;
+  font-size: max(8px, 2.9cqw);
+  line-height: 1;
   color: #4A5162;
 }
 
 .wa-ticks {
   display: block;
-  color: #5F6676;
+  width: 5cqw;
+  height: 3cqw;
+  color: #6B7280;
+}
+
+.wa-sender {
+  display: block;
+  margin-bottom: 0.4cqw;
+  font-size: max(9px, 3.4cqw);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.wa-sender-1 {
+  color: var(--color-info);
+}
+
+.wa-sender-2 {
+  color: var(--color-warn);
+}
+
+.wa-sender-3 {
+  color: var(--color-win);
 }
 
 .no-reply {
-  margin-top: 6px;
-  font-size: 11px;
+  margin: 0;
+  font-size: max(9px, 3cqw);
   font-weight: 600;
   color: #4A5162;
 }
 
-.phone-field {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+/* "Back in Conversations": a note from us, not a date. */
+.phone-system {
+  display: flex;
+  align-items: center;
+  gap: 2cqw;
+  align-self: stretch;
+  margin: 1cqw 0 0;
+  font-size: max(8px, 3.2cqw);
+  line-height: 1.3;
+  color: #4A5162;
+  text-align: center;
+}
+
+.phone-system::before,
+.phone-system::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(27, 31, 42, 0.28);
+}
+
+.phone-composer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2cqw;
+  padding: 2cqw 3cqw 1cqw;
+  font-size: max(9px, 3.8cqw);
+  line-height: 1;
+  color: #6B7280;
 }
 
 .phone-composer svg {
   flex: none;
 }
 
-@media (max-width: 600px) {
-  .phone-tools,
-  .phone-sub {
-    display: none;
+.phone-plus {
+  display: inline-flex;
+  flex: none;
+  width: 7.5cqw;
+  height: 7.5cqw;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #EEF0F4;
+  color: #4A5162;
+}
+
+.phone-plus svg {
+  width: 3.4cqw;
+  height: 3.4cqw;
+}
+
+.phone-composer-sms .phone-field {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5cqw;
+  padding: 1.7cqw 3cqw;
+  border: 1px solid #D5D9E1;
+  border-radius: 999px;
+}
+
+.phone-composer-sms .phone-field svg {
+  width: 2.8cqw;
+  height: 3.8cqw;
+}
+
+.phone-composer-chat {
+  padding-bottom: 1.4cqw;
+  background: #E3E7EE;
+}
+
+.phone-composer-chat .phone-field {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 2cqw;
+  padding: 2cqw 3cqw;
+  border-radius: 999px;
+  background: #FFFFFF;
+}
+
+.phone-composer-chat .phone-field svg {
+  width: 4.4cqw;
+  height: 4.4cqw;
+}
+
+.phone-composer-chat .phone-field span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-mic {
+  display: inline-flex;
+  flex: none;
+  width: 9cqw;
+  height: 9cqw;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #1B1F2A;
+}
+
+.phone-mic svg {
+  width: 4.6cqw;
+  height: 4.6cqw;
+}
+
+.phone-home {
+  display: block;
+  flex: none;
+  width: 34cqw;
+  height: 1.3cqw;
+  margin: 1.6cqw auto 2cqw;
+  border-radius: 999px;
+  background: #0E1118;
+  opacity: 0.85;
+}
+
+/* The two phones. Tilt only where there is room for it (a tilted phone at
+   165px clips its own corners). */
+.phones {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: clamp(10px, 2vw, 24px);
+  margin: 0;
+  translate: 0 96px;
+}
+
+.phones > .phone:nth-child(2) {
+  margin-top: -2px;
+}
+
+.phones-single {
+  justify-content: center;
+  translate: none;
+}
+
+@media (min-width: 601px) {
+  .phones > .phone:nth-child(1) {
+    margin-top: 30px;
+    transform: rotate(-4deg);
   }
 
-  .phone-composer {
-    font-size: 11px;
+  .phones > .phone:nth-child(2) {
+    margin-top: 0;
+    transform: rotate(3deg);
+  }
+
+  .phones-single > .phone:nth-child(1) {
+    margin-top: 0;
+    transform: rotate(2deg);
+  }
+}
+
+/* The hang: the pair rides down over the seam into the band below, which
+   reserves the space with .hang-pad. */
+.hang-pad {
+  padding-top: 150px;
+}
+
+@media (min-width: 901px) {
+  .phones {
+    translate: 0 clamp(120px, 22vw, 280px);
+  }
+
+  .phones-single {
+    translate: none;
+  }
+
+  .hang-pad {
+    padding-top: clamp(150px, 22vw, 320px);
   }
 }
 
