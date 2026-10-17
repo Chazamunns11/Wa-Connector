@@ -36,6 +36,20 @@ and the WhatsApp bridge, is in [`docs/GO-LIVE-FOUNDATION.md`](docs/GO-LIVE-FOUND
 which is also the deploy and first-light guide. The bridge (`services/whatsapp-bridge`)
 runs on Node 24, and its tests must be run on Node 24.
 
+## Building without real secrets
+
+`npx next build` needs the three public variables to exist, even for a local
+check. Placeholders are fine. They are not used to reach anything.
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key \
+NEXT_PUBLIC_APP_URL=http://localhost:3000 \
+npx next build
+```
+
+Google Fonts warnings on an offline machine do not fail the build.
+
 ## Public status page
 
 `/status` needs no login. It shows one state per service, "WhatsApp sending"
@@ -60,8 +74,33 @@ enabled group appears in GHL Conversations as one synthetic contact, and
 messages from groups that were never enabled are not stored. Sending to a
 group contact posts to the group and costs 5 daily-cap units.
 
-Apply migrations `0006` to `0008` (in order, after `0001` to `0005`) before
-deploying the new bridge and app. The app build must not go live before
+### Create and manage groups
+
+From the Groups section in GHL, a coach can create a group (name, optional
+description, and who to invite) and manage groups the number created or
+administers: rename, settings, remove members, make or remove admins, invite
+link, and leave. The app routes are `/api/crm/embed/groups/manage` (one POST
+route, switched on `action`) and `/api/crm/embed/groups/invite-template`.
+
+- Invites are normal outbound messages. They go through pacing, the daily cap,
+  STOP and the hold queue, so a held or opted-out invite is not sent. People are
+  added directly only if they have messaged that number in the last 90 days.
+  Everyone else gets the invite link.
+- Only invites that WhatsApp accepted are also posted into the contact's GHL
+  conversation. Held or queued invites are not.
+- The invite message is edited inside GHL and applies to that sub-account only.
+  It must include `{link}`.
+- Limits per number per day: `WA_GROUP_CREATE_DAILY` creates (default 3) and
+  `WA_GROUP_ADD_DAILY` direct adds (default 50). A create or add that reached
+  WhatsApp is never refunded, even if it failed.
+- A repeated create with the same `requestId` within 10 minutes returns the same
+  group and sends no invites again.
+- Run `services/whatsapp-bridge/scripts/group-sandbox.ts` on a spare number
+  before go-live.
+
+Apply migrations `0006` to `0009` (in order, after `0001` to `0005`) before
+deploying the new bridge and app. `0009` adds the group action log and the
+invite message column; the group create and manage screens need it. The app build must not go live before
 them: without them every GHL outbound message fails before it is recorded,
 the inbound drain fails on every pass, and a GHL install (OAuth) errors after
 it has already written the account. The bridge tolerates running before

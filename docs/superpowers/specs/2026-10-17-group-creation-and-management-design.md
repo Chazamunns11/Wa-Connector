@@ -77,17 +77,36 @@ Once the GHL workflow triggers (`docs/superpowers/specs/2026-10-17-ghl-workflow-
 - `New numbers can't create groups during their first 14 days.`
 - `This number isn't an admin of that group.`
 - `You can't remove the group's last admin.`
+- `You can't remove this WhatsApp number from the group. Use Leave instead.`
 
 ## Tests (to be planned)
 
-- Bridge: each route refuses a disabled or malformed group JID; participants go through `onWhatsApp`; a privacy-refused add returns `invite_required`; limits refuse past 3 creates or 20 adds and survive a restart; warm-up refuses creates and adds; nothing logs names, links or numbers.
+- Bridge: each route refuses a disabled or malformed group JID; participants go through `onWhatsApp`; a privacy-refused add returns `invite_required`; limits refuse past 3 creates or 50 adds and survive a restart; warm-up refuses creates and adds; nothing logs names, links or numbers.
 - App: tag → contacts → invites goes through normal outbound with pacing; a created group is enabled and synced; no tenant ids in responses; admin-only actions hidden and refused for non-admin groups; last-admin and self-removal refused.
 
 ## Sandbox test (before planning)
 
 A one-off script, `services/whatsapp-bridge/scripts/group-sandbox.ts`, run by hand against a spare test number (never a client's): link by QR, call `groupCreate('PingWren sandbox', [])`, record whether it succeeds or the exact error, then create with one test participant, add a second by `groupParticipantsUpdate`, fetch the invite link, set announcement mode, and leave and clean up. It prints a pass/fail line per step. Needs a real phone to scan, so it runs on Charlie's machine or a Railway shell, not in CI.
 
+## Member addressing
+
+Members are managed by their WhatsApp `memberId` (a `@s.whatsapp.net` or `@lid` id) taken from the group details, because some members have no phone number we can see. Phone numbers are only used to add people. The embed route's `participants` action takes `memberIds` and only remove, promote and demote. Adds go through `invite`, so the browser never sends a phone.
+
+## App-originated invites
+
+| Case | Result |
+|---|---|
+| Sent through the normal outbound path | Pacing, daily cap, STOP check and the hold queue apply. Sent from the slot's own number, no sticky lookup. |
+| Accepted by WhatsApp | Posted once into the contact's GHL conversation as an outbound message. |
+| Held, queued for retry, refused or skipped | Not posted to GHL. |
+| GHL post fails | Logged with a fixed string. The invite result does not change. |
+| Same `requestId` again within 10 minutes | Same group returned. No invites are sent or posted again. |
+| STOP on any number of the sub-account | No invite and no direct add. |
+
 ## Decisions log
 
 - 17 Oct, Charlie: test the empty-group create (built to handle either result); at least 50 direct adds a day; the invite message is editable.
 - Limits count attempts: a create or add that reached WhatsApp is never refunded, even if it failed.
+- 17 Oct, Charlie: invites sent by WhatsApp are also posted into the contact's GHL conversation, after WhatsApp accepts them. The invite message is per sub-account.
+- 17 Oct, Charlie: 50 direct adds a day (the earlier 20 was out of date). Warm-up refusals follow `WA_WARMUP_ENABLED`. During warm-up, direct adds become invite links.
+- Sandbox result for the empty create (`groupCreate(name, [])`): not run yet. Record the result here after running `services/whatsapp-bridge/scripts/group-sandbox.ts` on a spare number.

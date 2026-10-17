@@ -73,21 +73,23 @@ two are filled in a second pass once both domains exist. That is expected.
    Then run each later file in `supabase/migrations/` in number order
    (`0002_accounts.sql`, `0003_activation_cap.sql`, `0004_reliability.sql`,
    `0005_whatsapp_sessions_phone_linked_at.sql`, `0006_ghl_location_numbers.sql`,
-   `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`, and any
-   after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
+   `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`,
+   `0009_group_management.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
    every logout, so 0005 must be applied before the bridge is deployed.
-   Likewise apply 0001 to 0008 in order before deploying the bridge and the
+   Likewise apply 0001 to 0009 in order before deploying the bridge and the
    app: 0002 to 0004 add accounts, activation and held messages / STOP
    opt-outs (see `docs/GO-LIVE-ACCOUNTS.md`), 0006 the several-numbers
-   tables, 0007 the group tables, and 0008 the `whatsapp_messages.group_jid`
-   column the bridge and app now use.
-   The app build must not go live before 0006 to 0008 are applied. Without
+   tables, 0007 the group tables, 0008 the `whatsapp_messages.group_jid`
+   column the bridge and app now use, and 0009 the group action log and the
+   per-account invite message used by group create and manage.
+   The app build must not go live before 0006 to 0009 are applied. Without
    them every GHL outbound message fails before it is recorded, the GHL
    inbound drain fails on every pass (no replies reach GHL), and a GHL
    install (OAuth) errors after it has already written the account. The
    bridge tolerates running before them: one-to-one sending and receiving
    are unaffected, and groups fail closed (no group traffic in or out until
-   the migrations are in and the enabled-group set loads).
+   the migrations are in and the enabled-group set loads). Group create and add
+   refuse until 0009 is in.
 3. **Project Settings → API**. Note three values for Vercel and Railway:
    - Project URL → `NEXT_PUBLIC_SUPABASE_URL` (Vercel), `SUPABASE_URL` (Railway)
    - `anon` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY` (Vercel)
@@ -458,6 +460,31 @@ and Railway.
 First light passes when all six steps work. Then, and only then, onboard real
 locations.
 
+### Group creation and management: checks before go-live
+
+These need a real phone and a real GHL sub-account, so they cannot run in CI.
+Do them after migration 0009 is applied and before a coach uses the feature.
+
+- [ ] **Sandbox script.** Run `services/whatsapp-bridge/scripts/group-sandbox.ts`
+  on a spare number, never a client's. It prints a pass or fail line per step.
+  Record in the spec's Decisions log whether creating an empty group works.
+- [ ] **Invites in GHL.** Only invites that WhatsApp accepted are posted into the
+  contact's GHL conversation, with `POST /conversations/messages/outbound`.
+  Held or queued invites are not. The request body
+  (`type: "SMS"`, `contactId`, `conversationProviderId`, `message`) is
+  unverified. Send one real invite and check that the message shows once in the
+  conversation, that GHL does not try to deliver it again through our provider,
+  and whether `conversationId` or `altId` is needed.
+- [ ] **Tag filter.** Check the `POST /contacts/search` tag filter shape
+  (`filters`, field `tags`, operator `contains`) returns the right contacts for
+  a tag. The app rechecks tags itself, but a wrong filter returns nothing.
+- [ ] **Inside GHL.** Open **Create group** and **Manage** in a real GHL
+  sub-account, not only in a plain browser. Create a group, invite a contact,
+  rename it, copy and reset the link, and leave.
+- [ ] **Limits.** A create or add that reached WhatsApp is never refunded. A
+  repeated create with the same `requestId` within 10 minutes returns the same
+  group and sends no invites again. Check one repeat by hand.
+
 ---
 
 ## Part 6 — Moving a sub-account from the FitClosers app to this one
@@ -538,6 +565,8 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_SEND_JITTER_MS` | No | `30000` | Random jitter added to the gap |
 | `WA_DAILY_CAP` | No | `150` | Max sends per number per UTC day |
 | `WA_WARMUP_ENABLED` | No | `false` | Ramp a newly linked number's daily cap: 20/day for days 0-2, 50 for 3-6, 100 for 7-13, then `WA_DAILY_CAP`. Leave off while moving established numbers across |
+| `WA_GROUP_CREATE_DAILY` | No | `3` | Groups one number may create per UTC day. Attempts count; failed creates are not refunded |
+| `WA_GROUP_ADD_DAILY` | No | `50` | People one number may add directly per UTC day. Attempts count; not refunded |
 | `WA_TYPING_INDICATOR_ENABLED` | No | `true` | Show "typing…" before each outbound text |
 | `WA_TYPING_MAX_MS` | No | `4000` | Longest typing window per message (ms) |
 | `WA_LOCK_HEARTBEAT_MS` | No | `10000` | Session lease heartbeat |

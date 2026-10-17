@@ -69,13 +69,15 @@ Deploy order for the first live run: apply `supabase/migrations/0001_init.sql`
 then every later migration in number order (`0005_…` adds
 `whatsapp_sessions.phone_linked_at`, which `wipeCreds` writes)
 → deploy bridge → set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
-Migrations `0006` (numbers), `0007` (groups) and `0008`
-(`whatsapp_messages.group_jid`, `to_phone` nullable) should all be applied
+Migrations `0006` (numbers), `0007` (groups), `0008`
+(`whatsapp_messages.group_jid`, `to_phone` nullable) and `0009` (group action
+log, used for the daily create and add limits) should all be applied
 before this version of the bridge is deployed. The bridge tolerates running
 before them: one-to-one sending and receiving are unaffected, and groups fail
 closed (the enabled-group set cannot load, so group traffic is dropped in
-both directions). The app is different: its build must not go live before
-0006 to 0008 are applied, or every GHL outbound message fails before it is
+both directions), and group create and add refuse with "Group limits are
+unavailable right now. Try again shortly." until 0009 is in. The app is
+different: its build must not go live before 0006 to 0009 are applied, or every GHL outbound message fails before it is
 recorded, the GHL inbound drain fails on every pass, and a GHL install
 (OAuth) errors after it has already written the account.
 
@@ -155,6 +157,29 @@ All need the bearer secret, like every route except `/health`.
 | `POST /sessions/:id/groups/:jid/leave` | The number leaves the group. 200 `{ ok }`. |
 
 Errors for the management routes: 400 `invalid_body`, `invalid_group_jid`, `group_not_enabled` or `too_many`; 409 `session_not_connected`; 403 `not_admin`; 422 `create_limit`, `add_limit`, `warmup` or `needs_member` (the fixed text is in `message`); 503 `limits_unavailable`; 502 `group_action_failed`.
+
+### Group management limits and rules
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `WA_GROUP_CREATE_DAILY` | `3` | Groups one number may create per UTC day |
+| `WA_GROUP_ADD_DAILY` | `50` | People one number may add directly per UTC day |
+
+- Limits count attempts. A create or add that reached WhatsApp is never
+  refunded, even if it failed.
+- A create tries an empty group first. If WhatsApp refuses, it retries with one
+  eligible member (someone who messaged the number in the last 90 days). With
+  nobody eligible it refuses with `needs_member`.
+- A repeated create with the same `requestId` within 10 minutes returns the same
+  result and does not create a second group.
+- Direct adds need the person to have messaged the number in the last 90 days.
+  Warm-up refusals follow `WA_WARMUP_ENABLED` (off by default).
+- Members are managed by `memberId` (from the group details). Phone numbers are
+  only used to add. Removing the number's own member id is refused.
+- Invites to a group are not sent by the bridge. The app sends them as normal
+  messages, so pacing, the daily cap, STOP and the hold queue all apply.
+- `scripts/group-sandbox.ts` walks the whole flow on a spare number. Run it by
+  hand before go-live, never on a client's number.
 
 A group send costs **5** daily-cap units (a normal send costs 1), and the
 cap counts in-flight units, so a burst cannot overshoot it. The enabled-group

@@ -15,6 +15,7 @@ Order of work from the design spec (`docs/superpowers/specs/2026-10-12-brand-wha
 | Public status page | `src/app/status/page.tsx`, `src/lib/public-status.ts` | No customer data, 60s cache |
 | B. Several numbers per sub-account | Built on branch `claude/eloquent-mccarthy-m60n6c`. Plan: `docs/superpowers/plans/2026-10-17-multiple-numbers-and-groups.md` | Migration `0006`. Up to 3 numbers by slot, default plus sticky sending number |
 | E. Groups | Built on the same branch, same plan | Migrations `0007` and `0008`. Opt-in groups, 5 cap units per send. Apply 0005 to 0008 before deploying |
+| E2. Group creation and management | Built on the same branch. Spec: `docs/superpowers/specs/2026-10-17-group-creation-and-management-design.md`. Plan: `docs/superpowers/plans/2026-10-17-group-management.md` | Migration `0009`. Create, invite, rename, settings, members, invite link, leave. Pending the sandbox script on a spare number and the live GHL checks in `docs/GO-LIVE-FOUNDATION.md` |
 
 ## Specs written (17 Oct, drafts for review)
 
