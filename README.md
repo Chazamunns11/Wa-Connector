@@ -114,3 +114,24 @@ them: one-to-one sending and receiving are unaffected, and groups fail
 closed (no group traffic in or out). Details are in
 [`docs/GO-LIVE-FOUNDATION.md`](docs/GO-LIVE-FOUNDATION.md) and
 [`services/whatsapp-bridge/README.md`](services/whatsapp-bridge/README.md).
+
+## Checking migrations locally
+
+To check that every file in `supabase/migrations/` applies cleanly, use a
+scratch Postgres 16. The migrations expect pieces Supabase provides, so stub
+them first.
+
+1. Make a cluster and start it on a socket directory:
+   `initdb -D /var/tmp/pwpg`, then
+   `pg_ctl -D /var/tmp/pwpg -o "-k /var/tmp/pwsock -c listen_addresses=''" start`
+   (create `/var/tmp/pwsock` first).
+2. Create the roles: `create role anon; create role authenticated; create role service_role;`
+3. Create a fresh database and stub two schemas in it:
+   - `create schema auth; create table auth.users (id uuid primary key);`
+   - `create schema storage; create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);`
+4. Apply each file in number order, stopping at the first error:
+   `psql -h /var/tmp/pwsock -d <db> -v ON_ERROR_STOP=1 -f supabase/migrations/0001_init.sql`,
+   then 0002 and on.
+
+Stop the cluster and delete `/var/tmp/pwpg` when done. This was last run for
+0001 to 0011.

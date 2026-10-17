@@ -149,12 +149,15 @@ sub-account turns them on).
 - An event is found inside any wrapper (disappearing messages, view-once,
   and the rest) and is never treated as a fresh message. Polls and other
   protocol messages stay dropped. Our own edits, reactions and deletes stay
-  dropped.
-- Quoted reply: the body starts with `↩ "<first 80 characters of the quoted
-  text>"`, or `↩ (photo)`, `↩ (video)`, `↩ (voice note)`, `↩ (audio)`,
+  dropped. A bare `editedMessage` wrapper with no `MESSAGE_EDIT` inside stays
+  dropped: Baileys only emits that shape on `messages.update`. Real edits
+  arrive as a `MESSAGE_EDIT` protocol message, bare or wrapped.
+- Quoted reply (text replies only): the body starts with `↩ "<first 80 characters of the quoted
+  text>"` (line breaks in the quote become one space), or `↩ (photo)`, `↩ (video)`, `↩ (voice note)`, `↩ (audio)`,
   `↩ (document)`, `↩ (sticker)`, otherwise `↩ (message)`, then a newline and
   the reply. The reply text is cut to fit 500 characters, never the prefix. A
-  media reply's body stays empty, as before.
+  media reply keeps today's placeholder: captions were never read into the
+  body, so no prefix is added.
 - Logs carry fixed drop reasons only: no text, emoji, ids, phones or JIDs.
 
 ## Voice notes (ffmpeg)

@@ -74,9 +74,9 @@ two are filled in a second pass once both domains exist. That is expected.
    (`0002_accounts.sql`, `0003_activation_cap.sql`, `0004_reliability.sql`,
    `0005_whatsapp_sessions_phone_linked_at.sql`, `0006_ghl_location_numbers.sql`,
    `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`,
-   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
+   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, `0011_message_events.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
    every logout, so 0005 must be applied before the bridge is deployed.
-   Likewise apply 0001 to 0010 in order before deploying the bridge and the
+   Likewise apply 0001 to 0011 in order before deploying the bridge and the
    app: 0002 to 0004 add accounts, activation and held messages / STOP
    opt-outs (see `docs/GO-LIVE-ACCOUNTS.md`), 0006 the several-numbers
    tables, 0007 the group tables, 0008 the `whatsapp_messages.group_jid`
@@ -85,8 +85,10 @@ two are filled in a second pass once both domains exist. That is expected.
    missed-call and read-receipt columns plus the SQL function
    `ghl_outbound_awaiting_read` (service_role only). The bridge and app flags
    that use 0010 are off by default; see "Missed calls and read receipts" in
-   Part 5.
-   The app build must not go live before 0006 to 0010 are applied. Without
+   Part 5. 0011 adds the event columns on `whatsapp_inbound_messages` and the two
+   per-sub-account switches on `ghl_accounts` (see "Edits, reactions, deletes
+   and quoted replies" in Part 5).
+   The app build must not go live before 0006 to 0011 are applied. Without
    them every GHL outbound message fails before it is recorded, the GHL
    inbound drain fails on every pass (no replies reach GHL), and a GHL
    install (OAuth) errors after it has already written the account. The
@@ -528,6 +530,33 @@ live sessions fight over one WhatsApp account.
    the old app's panel). Do not leave both linked "until later".
 4. Re-run the send/reply checks from Part 5 on that location.
 
+
+---
+
+### Edits, reactions, deletes and quoted replies: checks before go-live
+
+Apply migration 0011 first (the bridge's drain query reads its new columns, so
+the bridge fails without it). One flag, off by default:
+
+- `WA_INBOUND_EVENTS_ENABLED` (Railway, bridge)
+
+Leave it off until the event checks in
+`docs/superpowers/specs/2026-10-17-voice-notes-real-device-check.md` pass.
+
+Rules to know once it is on:
+
+- Edits are posted to GHL. Reactions and deletes are not, unless the
+  sub-account switches them on. The two switches are in the GHL embed
+  ("Show reactions", "Show deletes"), apply to that sub-account only, and are
+  off by default. Anything posted as a message fires GHL's "Customer
+  replied" workflows.
+- An edit goes through the same STOP and START keyword check as a new
+  message, so an edit to STOP opts the contact out and an edit to START opts
+  them back in.
+- Event rows never count as the contact having messaged the number, so they
+  never make them eligible for a direct group add.
+- A quoted text reply starts with the quote on its own line. A quoted media
+  reply is unchanged.
 ---
 
 ## Environment variable reference

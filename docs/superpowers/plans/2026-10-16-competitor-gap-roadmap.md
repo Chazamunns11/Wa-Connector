@@ -25,7 +25,7 @@ Order of work from the design spec (`docs/superpowers/specs/2026-10-12-brand-wha
 | B. Several numbers per sub-account | `docs/superpowers/specs/2026-10-17-multiple-numbers-per-sub-account-design.md` |
 | D. Triggers and actions in GHL workflows | `docs/superpowers/specs/2026-10-17-ghl-workflow-triggers-actions-design.md`. GHL charges $0.01 per custom execution and needs LC Premium, so this builds triggers (disconnected, reconnected, message received), not a "Send WhatsApp" action. Firing a trigger is undocumented and needs a sandbox prototype first. |
 | E. Groups | `docs/superpowers/specs/2026-10-17-whatsapp-groups-design.md`. Opt-in per group, one synthetic contact per group, no sender contacts. |
-| F. Voice notes and message events | `docs/superpowers/specs/2026-10-17-voice-notes-and-message-events-design.md`. Reactions and deletes are off by default, because anything posted as inbound fires GHL's "Customer replied". |
+| F. Voice notes and message events | `docs/superpowers/specs/2026-10-17-voice-notes-and-message-events-design.md`. Built behind `WA_INBOUND_EVENTS_ENABLED`, pending the real-device check. Reactions and deletes are off by default, per sub-account, because anything posted as inbound fires GHL's "Customer replied". |
 
 **Build order (Charlie, 17 Oct): B (several numbers) and E (groups) first.** Each spec ends with its open questions. Once Charlie signs one off, the next step is its implementation plan (`superpowers:writing-plans`).
 

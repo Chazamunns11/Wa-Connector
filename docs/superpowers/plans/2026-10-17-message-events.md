@@ -129,3 +129,14 @@
 - Modify: `README.md` (add a short "Checking migrations locally" section: stub `auth.users` and `storage.buckets`, roles `anon`, `authenticated` and `service_role`, then apply every file with `ON_ERROR_STOP=1`), `services/whatsapp-bridge/README.md`, `docs/GO-LIVE-FOUNDATION.md` (migration 0011, the flag), the spec (mark it built; answer open question 3 "no" as implemented; note open question 1 is still open), `docs/superpowers/plans/2026-10-16-competitor-gap-roadmap.md`, `docs/superpowers/specs/2026-10-17-voice-notes-real-device-check.md` (add event checks)
 - [ ] **Step 1:** Add to the real-device check, with `WA_INBOUND_EVENTS_ENABLED=true`: from the contact's phone, quote one of our messages; edit a message; react; remove the reaction; delete for everyone; do each inside a disappearing-messages chat too. Record what GHL shows.
 - [ ] **Step 2: Commit** `docs: message events`.
+
+## Decisions during the build
+
+- Quote prefixes apply to text replies only. A media reply keeps today's placeholder, because captions were never read into the body.
+- Newlines in quoted text are collapsed to one space.
+- A bare `editedMessage` wrapper without a `MESSAGE_EDIT` inside stays dropped. Baileys only emits that shape on `messages.update`. Real edits arrive as a `MESSAGE_EDIT` protocolMessage, bare or wrapped.
+- Edits run the full keyword classifier: STOP opts out and START opts back in.
+- Event rows (and missed calls) never count as "has messaged this number" for direct group adds.
+- Settings are per sub-account, in the GHL embed, and off by default.
+- Migration 0011 applies cleanly with 0001 to 0010 on Postgres 16.
+- Open question 1 (a GHL internal comment that doesn't fire triggers) is still open. Reactions and deletes are therefore posted as messages only when switched on.

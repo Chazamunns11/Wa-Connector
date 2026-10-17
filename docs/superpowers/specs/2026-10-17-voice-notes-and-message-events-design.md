@@ -1,6 +1,6 @@
 # Voice notes, quoted replies, edits, reactions and deletes: design
 
-17 Oct 2026. Roadmap item F (`docs/superpowers/plans/2026-10-16-competitor-gap-roadmap.md`). Draft for Charlie's review.
+17 Oct 2026. Roadmap item F (`docs/superpowers/plans/2026-10-16-competitor-gap-roadmap.md`). Built 17 Oct 2026 (plan: `docs/superpowers/plans/2026-10-17-message-events.md`), off by default behind `WA_INBOUND_EVENTS_ENABLED` until the real-device check passes.
 
 No GHL WhatsApp rival claims to sync reactions, quoted replies, edits or deletes into GHL Conversations, so this is a differentiator. Voice notes are expected (GoGHL, Wazzap, WAGHL all advertise them).
 
@@ -59,6 +59,6 @@ If GHL's API can add an **internal note or comment** to a conversation without f
 
 ## Open questions for planning
 
-1. Can GHL's Conversations API post an internal comment that doesn't fire reply triggers?
+1. Can GHL's Conversations API post an internal comment that doesn't fire reply triggers? **Still open.** Until it is answered, reactions and deletes are posted as messages, and only when the sub-account switches them on.
 2. What format does GHL's in-app voice recorder produce? **Open until the real-device check is run** (`docs/superpowers/specs/2026-10-17-voice-notes-real-device-check.md`). Record the `mime` from the bridge's `outbound voice note prepared` log line (or `sniffedMime` from the `outbound attachment` line every attachment gets, which also shows an mp4's `ftypBrand`) for Chrome and for Safari/iPhone here. Expected: webm from Chrome, mp4/m4a from Safari.
-3. Do edits of our own outbound messages (made on the phone) need syncing? Proposed: no. `fromMe` stays dropped.
+3. Do edits of our own outbound messages (made on the phone) need syncing? Answer, as built: no. `fromMe` stays dropped.
