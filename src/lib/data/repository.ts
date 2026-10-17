@@ -23,9 +23,16 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  GroupMemberState,
   LocationStats,
   Role,
   Scope,
+  WhatsappGroup,
+  WhatsappGroupDraft,
+  WhatsappGroupJob,
+  WhatsappGroupMember,
+  WhatsappGroupMemberDraft,
+  WhatsappGroupPost,
   WhatsappInboundMessage,
   WhatsappSessionSummary,
 } from "@/lib/types";
@@ -655,4 +662,28 @@ export interface GhlRepository {
   recordStripeEvent(eventId: string, type: string): Promise<boolean>;
   /** Releases a recorded Stripe event id after a processing failure so Stripe's retry is handled, not dropped as a duplicate. */
   deleteStripeEvent(eventId: string): Promise<void>;
+
+  // -------------------------------------------------------------------------
+  // WhatsApp groups (migration 0005). Portal-owned tables: whatsapp_groups,
+  // whatsapp_group_members. Bridge-owned (read-only here): whatsapp_group_jobs,
+  // whatsapp_group_posts. Callers authorise the account before calling.
+  // -------------------------------------------------------------------------
+  createWhatsappGroup(draft: WhatsappGroupDraft): Promise<WhatsappGroup>;
+  getWhatsappGroup(id: string): Promise<WhatsappGroup | null>;
+  listWhatsappGroupsForAccount(accountId: string): Promise<WhatsappGroup[]>;
+  updateWhatsappGroup(
+    id: string,
+    patch: { inviteCode?: string | null; participantCount?: number; weAreAdmin?: boolean; subject?: string; description?: string | null }
+  ): Promise<void>;
+  /** On conflict (group_id, phone) do nothing; returns only the rows actually inserted. */
+  insertWhatsappGroupMembers(drafts: WhatsappGroupMemberDraft[]): Promise<WhatsappGroupMember[]>;
+  listWhatsappGroupMembers(groupId: string): Promise<WhatsappGroupMember[]>;
+  updateWhatsappGroupMember(id: string, patch: { state: GroupMemberState; lastReason: string | null; inviteIdempotencyKey?: string; jobId?: string | null }): Promise<void>;
+  /** Distinct job ids of members still 'pending' in this account's groups. */
+  listPendingGroupJobIds(accountId: string): Promise<{ jobId: string; groupId: string }[]>;
+  /** Account ids with at least one 'pending' member or held 'invite_needed' member (invite not yet sent), for the cron/poke reconcile (bounded). */
+  listAccountsWithPendingGroupMembers(limit?: number): Promise<string[]>;
+  /** Reads the bridge-owned whatsapp_group_jobs table. */
+  getWhatsappGroupJob(id: string): Promise<WhatsappGroupJob | null>;
+  listWhatsappGroupPosts(tenantId: string, groupJid: string, limit?: number): Promise<WhatsappGroupPost[]>;
 }

@@ -94,17 +94,19 @@ import makeWASocket, {
   DisconnectReason,
   downloadContentFromMessage,
   fetchLatestBaileysVersion,
+  jidNormalizedUser,
   makeCacheableSignalKeyStore,
 } from "@whiskeysockets/baileys";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { Boom } from "@hapi/boom";
 import type { Logger } from "pino";
 import type { BridgeConfig } from "./config.js";
-import type { BridgeStore, MessageRecord, SessionStatus } from "./store.js";
+import type { BridgeStore, GroupJobRecord, GroupPostRecord, MessageRecord, SessionStatus } from "./store.js";
 import { useSupabaseAuthState } from "./auth-state.js";
 import { SessionLock } from "./lock.js";
 import { PendingWrites } from "./pending-writes.js";
 import { SessionPacer } from "./pacing.js";
+import { GroupLimiter, outcomeForParticipantStatus, resolvePhones, runAddJob, type AddJobResult } from "./groups.js";
 import { isE164 } from "./phone.js";
 import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
@@ -160,9 +162,63 @@ export interface OutboundAttachment {
 /** Media plan (docs/MEDIA-PLAN.md §5.1/§5.3) — a queued send is EITHER a text part or an attachment part, never both (mirrors the bridge API's own xor contract). */
 type QueuePayload = { kind: "text"; text: string } | { kind: "attachment"; attachment: OutboundAttachment };
 
-interface QueueItem {
-  record: MessageRecord;
-  payload: QueuePayload;
+type QueueItem = { kind: "message"; record: MessageRecord; payload: QueuePayload } | { kind: "group_post"; post: GroupPostRecord; text: string };
+
+/** Content for a queued group post: plain text, link previews off (same decision as 1:1 text). */
+export function contentForQueueItem(item: Extract<QueueItem, { kind: "group_post" }>): { text: string; linkPreview: null } {
+  return buildOutboundTextContent(item.text);
+}
+
+export type GroupCreateOutcome =
+  | { kind: "created"; group: { jid: string; subject: string; inviteCode: string | null; participantCount: number; weAreAdmin: boolean }; results: AddJobResult[] }
+  | { kind: "session_not_connected"; status: SessionStatus }
+  | { kind: "group_create_cap_reached"; cap: number }
+  | { kind: "lease_unavailable" }
+  | { kind: "invalid_participants" }
+  | { kind: "whatsapp_refused" };
+export type GroupAddOutcome =
+  | { kind: "queued"; job: GroupJobRecord }
+  | { kind: "session_not_connected"; status: SessionStatus }
+  | { kind: "group_add_cap_reached"; remaining: number }
+  | { kind: "lease_unavailable" };
+export type GroupPostOutcome =
+  | { kind: "accepted"; post: GroupPostRecord; fresh: boolean }
+  | { kind: "idempotency_conflict"; existing: GroupPostRecord }
+  | { kind: "session_not_connected"; status: SessionStatus }
+  | { kind: "daily_cap_reached"; cap: number }
+  | { kind: "lease_unavailable" };
+export interface GroupInfo {
+  jid: string;
+  subject: string;
+  participantCount: number;
+  weAreAdmin: boolean;
+  inviteCode: string | null;
+}
+export type GroupInfoOutcome = { kind: "ok"; group: GroupInfo } | { kind: "session_not_connected"; status: SessionStatus } | { kind: "group_not_found" };
+export type GroupRevokeOutcome = { kind: "ok"; inviteCode: string } | { kind: "session_not_connected"; status: SessionStatus } | { kind: "group_not_found" };
+
+/** True iff one of our own jids (device suffix stripped) is an admin/superadmin in the group metadata. */
+export function weAreAdminIn(meta: { participants: { id: string; admin?: string | null }[] }, ourJids: string[]): boolean {
+  const ours = new Set(ourJids.map((j) => jidNormalizedUser(j)));
+  return meta.participants.some((p) => (p.admin === "admin" || p.admin === "superadmin") && ours.has(jidNormalizedUser(p.id)));
+}
+
+/** Per-phone outcomes of a group creation: in the returned metadata -> added; never resolved -> not_on_whatsapp; resolved but absent -> invite_needed. */
+export function participantResultsFromCreate(
+  meta: { participants: { id: string; phoneNumber?: string }[] },
+  requested: { phone: string; jid: string | null }[]
+): AddJobResult[] {
+  // LID-addressed groups list a participant by @lid with the phone in phoneNumber; accept either form.
+  const present = new Set<string>();
+  for (const p of meta.participants) {
+    present.add(jidNormalizedUser(p.id));
+    if (p.phoneNumber) present.add(jidNormalizedUser(p.phoneNumber));
+  }
+  return requested.map(({ phone, jid }) => {
+    if (!jid) return { phone, code: "404", outcome: outcomeForParticipantStatus("404") };
+    if (present.has(jidNormalizedUser(jid))) return { phone, code: "200", outcome: outcomeForParticipantStatus("200") };
+    return { phone, code: "403", outcome: outcomeForParticipantStatus("403") };
+  });
 }
 
 interface Session {
@@ -204,6 +260,11 @@ interface Session {
    * (docs/MEDIA-PLAN.md §2 rule 4/§8).
    */
   mediaAbuseGate: MediaAbuseGate;
+  /** Group add/create budget; built once in `doStartSession` and survives socket bounces, like `pacer`. */
+  groupLimiter: GroupLimiter;
+  /** True while an add job is executing; further jobs chain behind `groupJobChain`. */
+  groupJobRunning: boolean;
+  groupJobChain: Promise<void>;
 }
 
 export type SendOutcome =
@@ -714,6 +775,14 @@ export class SessionManager {
     await this.store.ensureSessionRow(coachId);
 
     const activity = await this.store.getDailyActivity(coachId);
+    // Fail closed: if today's group activity can't be read, treat the group caps as spent rather than hand out a fresh budget.
+    let groupActivity: { addsToday: number; createsToday: number };
+    try {
+      groupActivity = await this.store.countGroupActivityToday(coachId);
+    } catch (err) {
+      this.log.error({ coachId, err: (err as Error).message }, "group activity read failed — group caps treated as spent until restart");
+      groupActivity = { addsToday: this.config.groupAddsDailyCap, createsToday: this.config.groupCreatesDailyCap };
+    }
 
     // Two-step construction: the lease's onLost callback must close over
     // THIS session object (not the coachId), so that teardown can check
@@ -750,6 +819,18 @@ export class SessionManager {
       reconnectAttempts: 0,
       stopping: false,
       pendingWrites: new PendingWrites(),
+      groupLimiter: new GroupLimiter(
+        {
+          addBatch: this.config.groupAddBatch,
+          addGapMs: this.config.groupAddGapMs,
+          addJitterMs: this.config.groupAddJitterMs,
+          addsDailyCap: this.config.groupAddsDailyCap,
+          createsDailyCap: this.config.groupCreatesDailyCap,
+        },
+        groupActivity
+      ),
+      groupJobRunning: false,
+      groupJobChain: Promise.resolve(),
       mediaAbuseGate: new MediaAbuseGate(this.config.inboundMediaPerSenderDaily, this.config.inboundMediaPerTenantDaily, {
         countSenderToday: (tenantId, senderPhone) => this.store.countInboundMediaAttemptsForSenderToday(tenantId, senderPhone),
         countTenantToday: (tenantId) => this.store.countInboundMediaAttemptsForTenantToday(tenantId),
@@ -825,6 +906,13 @@ export class SessionManager {
         }
       } catch (err) {
         this.log.error({ coachId, err: (err as Error).message }, "interrupted-message sweep failed (non-fatal)");
+      }
+
+      // Group add jobs left running by a dead process are marked interrupted and never resumed (the portal reports the remainder as failed).
+      try {
+        await this.store.sweepInterruptedGroupJobs(coachId);
+      } catch (err) {
+        this.log.error({ coachId, err: (err as Error).message }, "interrupted-group-job sweep failed (non-fatal)");
       }
 
       // THE CHECKPOINT THAT ACTUALLY GUARANTEES NO ORPHANED LEASE — see
@@ -1276,7 +1364,7 @@ export class SessionManager {
       return { kind: "accepted", record, fresh: false };
     }
 
-    session.queue.push({ record, payload });
+    session.queue.push({ kind: "message", record, payload });
     void this.drainQueue(session);
     return { kind: "accepted", record, fresh: true };
   }
@@ -1309,6 +1397,10 @@ export class SessionManager {
 
         const item = session.queue.shift();
         if (!item) break;
+        if (item.kind === "group_post") {
+          await this.dispatchGroupPost(session, session.sock, item);
+          continue;
+        }
         const { record, payload } = item;
         const sock = session.sock;
 
@@ -1388,6 +1480,191 @@ export class SessionManager {
       }
     } finally {
       session.draining = false;
+    }
+  }
+
+  /**
+   * Group post dispatch: no onWhatsApp existence check (a group JID is not a
+   * phone), same pacer slot as a 1:1 send. Failure reasons are fixed strings.
+   */
+  private async dispatchGroupPost(session: Session, sock: WASocket, item: Extract<QueueItem, { kind: "group_post" }>): Promise<void> {
+    const { post } = item;
+    let claimed: boolean;
+    try {
+      claimed = await this.store.claimGroupPost(post.id);
+    } catch (err) {
+      this.log.error({ coachId: session.coachId, postId: post.id, err: (err as Error).message }, "group post claim failed before dispatch");
+      await this.safely(session.coachId, () => this.store.markGroupPostFailed(post.id, "internal error before dispatch — not sent", false));
+      return;
+    }
+    if (!claimed) return;
+    session.pacer.recordSend();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same Baileys content-union note as the 1:1 path.
+      const sent = await sock.sendMessage(post.groupJid, contentForQueueItem(item) as any);
+      await this.safely(session.coachId, () => this.store.markGroupPostSent(post.id, sent?.key?.id ?? null));
+    } catch (err) {
+      this.log.error({ coachId: session.coachId, postId: post.id, err: (err as Error).message }, "group post send attempt failed");
+      await this.safely(session.coachId, () => this.store.markGroupPostFailed(post.id, mapSendErrorReason("send"), true));
+    }
+  }
+
+  private connectedSession(coachId: string): (Session & { sock: WASocket }) | { notConnected: SessionStatus } {
+    const session = this.sessions.get(coachId);
+    if (!session || session.status !== "connected" || !session.sock) return { notConnected: session?.status ?? "disconnected" };
+    return session as Session & { sock: WASocket };
+  }
+
+  private ourJids(sock: WASocket): string[] {
+    return [sock.user?.id, (sock.user as { lid?: string } | undefined)?.lid].filter((j): j is string => typeof j === "string" && j.length > 0);
+  }
+
+  /**
+   * Creates a group from the customer's number. Counts one against the create
+   * cap. Logs coach id and Baileys' message only: never the subject or phones.
+   */
+  async createGroup(
+    coachId: string,
+    input: { subject: string; description?: string; participants: string[]; announceOnly: boolean; adminAddOnly: boolean }
+  ): Promise<GroupCreateOutcome> {
+    const s = this.connectedSession(coachId);
+    if ("notConnected" in s) return { kind: "session_not_connected", status: s.notConnected };
+    if (s.groupLimiter.remainingCreatesToday() < 1) return { kind: "group_create_cap_reached", cap: this.config.groupCreatesDailyCap };
+    const sock = s.sock;
+    try {
+      const resolved = resolvePhones(input.participants, await sock.onWhatsApp(...input.participants));
+      const requested = input.participants.map((phone) => ({ phone, jid: resolved.get(phone) ?? null }));
+      const jids = requested.map((r) => r.jid).filter((j): j is string => j !== null);
+      // Nothing to create with: answer before spending one of the day's creates.
+      if (jids.length === 0) return { kind: "invalid_participants" };
+      if (!s.groupLimiter.reserveCreate()) return { kind: "group_create_cap_reached", cap: this.config.groupCreatesDailyCap };
+      const meta = await sock.groupCreate(input.subject, jids);
+      const jid = meta.id;
+      // The group exists from here on; best-effort settings never fail the create.
+      if (input.description) await this.bestEffort(coachId, () => sock.groupUpdateDescription(jid, input.description));
+      if (input.announceOnly) await this.bestEffort(coachId, () => sock.groupSettingUpdate(jid, "announcement"));
+      if (input.adminAddOnly) await this.bestEffort(coachId, () => sock.groupMemberAddMode(jid, "admin_add"));
+      let inviteCode: string | null = null;
+      try {
+        inviteCode = (await sock.groupInviteCode(jid)) ?? null;
+      } catch (err) {
+        this.log.warn({ coachId, err: (err as Error).message }, "group invite code fetch failed");
+      }
+      const results = participantResultsFromCreate(meta, requested);
+      await this.store.createGroupJob(coachId, jid, input.participants.length, "create", { results, status: "done" });
+      return {
+        kind: "created",
+        group: { jid, subject: meta.subject ?? input.subject, inviteCode, participantCount: meta.participants.length, weAreAdmin: weAreAdminIn(meta, this.ourJids(sock)) },
+        results,
+      };
+    } catch (err) {
+      this.log.error({ coachId, err: (err as Error).message }, "group create failed");
+      return { kind: "whatsapp_refused" };
+    }
+  }
+
+  private async bestEffort(coachId: string, fn: () => Promise<unknown>): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      this.log.warn({ coachId, err: (err as Error).message }, "group setting update failed (non-fatal)");
+    }
+  }
+
+  /** Queues a paced add job. Jobs for one session run one at a time. */
+  async startAddJob(coachId: string, groupJid: string, phones: string[]): Promise<GroupAddOutcome> {
+    const s = this.connectedSession(coachId);
+    if ("notConnected" in s) return { kind: "session_not_connected", status: s.notConnected };
+    if (!s.groupLimiter.reserveAdds(phones.length)) return { kind: "group_add_cap_reached", remaining: s.groupLimiter.remainingAddsToday() };
+    const job = await this.store.createGroupJob(coachId, groupJid, phones.length, "add");
+    s.groupJobChain = s.groupJobChain.then(() => this.runGroupJob(s, job, phones));
+    return { kind: "queued", job };
+  }
+
+  private async runGroupJob(session: Session, job: GroupJobRecord, phones: string[]): Promise<void> {
+    const sock = session.sock;
+    try {
+      if (!(await this.store.markGroupJobRunning(job.id))) return; // swept or resolved elsewhere.
+      if (!sock || session.status !== "connected") {
+        await this.store.finishGroupJob(job.id, [], "interrupted");
+        return;
+      }
+      session.groupJobRunning = true;
+      let results: AddJobResult[] = [];
+      let interrupted = false;
+      try {
+        const ran = await runAddJob(sock, session.groupLimiter, job.groupJid, phones, sleep, () => session.status === "connected" && session.sock === sock,
+          () => this.log.info({ coachId: session.coachId, jobId: job.id }, "group add result matched via phone_number/lid fallback"));
+        results = ran.results;
+        interrupted = ran.interrupted;
+      } catch (err) {
+        // Anything attempted before the throw is lost with it; the portal reports the rest as interrupted.
+        this.log.error({ coachId: session.coachId, jobId: job.id, err: (err as Error).message }, "group add job failed");
+        interrupted = true;
+      }
+      await this.store.finishGroupJob(job.id, results, interrupted ? "interrupted" : "done");
+      this.outboundPoke?.schedule();
+    } catch (err) {
+      this.log.error({ coachId: session.coachId, jobId: job.id, err: (err as Error).message }, "group add job bookkeeping failed");
+    } finally {
+      session.groupJobRunning = false;
+    }
+  }
+
+  /** Posts text into a group through the same queue, pacer slot and daily cap as 1:1 sends. */
+  async postToGroup(coachId: string, groupJid: string, text: string, idempotencyKey: string): Promise<GroupPostOutcome> {
+    const existing = await this.store.getGroupPost(coachId, idempotencyKey);
+    if (existing) {
+      if (existing.groupJid !== groupJid) return { kind: "idempotency_conflict", existing };
+      return { kind: "accepted", post: existing, fresh: false };
+    }
+    const s = this.connectedSession(coachId);
+    if ("notConnected" in s) return { kind: "session_not_connected", status: s.notConnected };
+    if (s.pacer.atDailyCap() || s.pacer.sentTodayCount() + s.queue.length >= this.config.dailyCap) {
+      return { kind: "daily_cap_reached", cap: this.config.dailyCap };
+    }
+    const { record, fresh } = await this.store.acceptGroupPost(coachId, idempotencyKey, groupJid);
+    if (!fresh) {
+      if (record.groupJid !== groupJid) return { kind: "idempotency_conflict", existing: record };
+      return { kind: "accepted", post: record, fresh: false };
+    }
+    s.queue.push({ kind: "group_post", post: record, text });
+    void this.drainQueue(s);
+    return { kind: "accepted", post: record, fresh: true };
+  }
+
+  /** Group facts for the portal: never participant phones. */
+  async getGroup(coachId: string, groupJid: string): Promise<GroupInfoOutcome> {
+    const s = this.connectedSession(coachId);
+    if ("notConnected" in s) return { kind: "session_not_connected", status: s.notConnected };
+    try {
+      const meta = await s.sock.groupMetadata(groupJid);
+      let inviteCode: string | null = null;
+      try {
+        inviteCode = meta.inviteCode ?? (await s.sock.groupInviteCode(groupJid)) ?? null;
+      } catch {
+        inviteCode = null;
+      }
+      return {
+        kind: "ok",
+        group: { jid: groupJid, subject: meta.subject, participantCount: meta.participants.length, weAreAdmin: weAreAdminIn(meta, this.ourJids(s.sock)), inviteCode },
+      };
+    } catch (err) {
+      this.log.warn({ coachId, err: (err as Error).message }, "group metadata fetch failed");
+      return { kind: "group_not_found" };
+    }
+  }
+
+  async revokeGroupInvite(coachId: string, groupJid: string): Promise<GroupRevokeOutcome> {
+    const s = this.connectedSession(coachId);
+    if ("notConnected" in s) return { kind: "session_not_connected", status: s.notConnected };
+    try {
+      const code = await s.sock.groupRevokeInvite(groupJid);
+      if (!code) return { kind: "group_not_found" };
+      return { kind: "ok", inviteCode: code };
+    } catch (err) {
+      this.log.warn({ coachId, err: (err as Error).message }, "group invite revoke failed");
+      return { kind: "group_not_found" };
     }
   }
 

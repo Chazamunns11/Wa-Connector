@@ -10,6 +10,7 @@ const LINK = "inline-flex min-h-11 items-center whitespace-nowrap px-1.5 text-sm
 
 /** Account screens: the same header as the site, with the signed-in links in place of the marketing nav. */
 export default function AppLayout({ children }: { children: ReactNode }) {
+  const groupsOn = process.env.GROUPS_ENABLED === "true";
   return (
     <div style={brandCssVars(brandConfig())} className="flex min-h-screen flex-col">
       <a href="#main" className="skip-link">
@@ -21,6 +22,11 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             <Link href={SITE_ROUTES.dashboard} className={LINK}>
               Dashboard
             </Link>
+            {groupsOn && (
+              <Link href={SITE_ROUTES.groups} className={LINK}>
+                Groups
+              </Link>
+            )}
             <Link href={SITE_ROUTES.billing} className={LINK}>
               Billing
             </Link>

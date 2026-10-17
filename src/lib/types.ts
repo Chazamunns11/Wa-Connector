@@ -368,6 +368,16 @@ export interface OptOut {
   ghlContactId: string | null;
 }
 
+export type GroupMemberState = "pending" | "added" | "invite_needed" | "invite_sent" | "recently_left" | "already_member" | "not_on_whatsapp" | "group_full" | "opted_out" | "failed";
+export type GroupJobOutcome = Exclude<GroupMemberState, "pending" | "invite_sent" | "opted_out">;
+export type GroupJobStatus = "queued" | "running" | "done" | "interrupted";
+export interface WhatsappGroup { id: string; tenantId: string; locationId: string; accountId: string; waGroupJid: string; subject: string; description: string | null; inviteCode: string | null; announceOnly: boolean; adminAddOnly: boolean; participantCount: number; weAreAdmin: boolean; createdByProfileId: string | null; createdAt: string; updatedAt: string }
+export interface WhatsappGroupDraft { tenantId: string; locationId: string; accountId: string; waGroupJid: string; subject: string; description: string | null; inviteCode: string | null; announceOnly: boolean; adminAddOnly: boolean; participantCount: number; weAreAdmin: boolean; createdByProfileId: string | null }
+export interface WhatsappGroupMember { id: string; groupId: string; phone: string; ghlContactId: string | null; displayName: string | null; state: GroupMemberState; jobId: string | null; inviteIdempotencyKey: string | null; consentConfirmedAt: string; addedByProfileId: string | null; lastReason: string | null; createdAt: string; updatedAt: string }
+export interface WhatsappGroupMemberDraft { groupId: string; phone: string; ghlContactId: string | null; displayName: string | null; state: GroupMemberState; jobId: string | null; consentConfirmedAt: string; addedByProfileId: string | null; lastReason: string | null }
+export interface WhatsappGroupJob { id: string; coachId: string; groupJid: string; status: GroupJobStatus; requestedCount: number; results: { phone: string; code: string; outcome: GroupJobOutcome }[]; createdAt: string; finishedAt: string | null }
+export interface WhatsappGroupPost { id: string; coachId: string; groupJid: string; idempotencyKey: string; status: "accepted" | "sending" | "sent" | "failed"; waMessageId: string | null; error: string | null; createdAt: string; sentAt: string | null }
+
 /**
  * One prospect-authored WhatsApp reply, as read back for a single call's
  * "WhatsApp replies" drawer section (`Repository.getWhatsappInboundMessagesForCall`,

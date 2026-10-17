@@ -440,6 +440,57 @@ and Railway.
 First light passes when all six steps work. Then, and only then, onboard real
 locations.
 
+### Groups first light
+
+Do this after the six steps above pass, and only on the spare sub-account with
+your own number. Groups ship switched off.
+
+**Deploy order.** Each step needs the one before it:
+
+1. Apply `supabase/migrations/0005_groups.sql` (the apply order is 0001 to
+   0005).
+2. Set `WA_GROUPS_ENABLED=true` on the bridge and redeploy it.
+3. Set `GROUPS_ENABLED=true` on Vercel and redeploy the portal.
+4. Set the site flag so the marketing page stops saying "Coming soon". It is
+   the code constant `FEATURES.groupsLive` in `src/lib/site/features.ts` (on
+   the site branch), not an environment variable: change it to `true` and
+   redeploy.
+
+Rolling back is the reverse: site flag, then portal, then bridge. Leave the
+migration in place.
+
+**What customers see.** A Groups page in the dashboard. They pick a connected
+number, name the group, add up to five people to start it (WhatsApp needs at
+least one), and tick a box to say those people agreed to be in it. They can add
+up to 50 people at a time, up to 256 in a group, post a message, copy the invite
+link and make a new one. Members who can't be added directly are sent the invite
+link as a normal WhatsApp message from the same number.
+
+**Known limit.** Numbers WhatsApp rewrites (Argentina "+54 9", older Mexico
+"+52 1", some Brazil numbers) may show as "not on WhatsApp". UK numbers are
+unaffected.
+
+**Rehearsal in test mode.** Stripe in test mode, spare sub-account, your own
+number plus one or two friendly numbers that expect the messages:
+
+1. Check `GET <bridge>/health` still passes after the bridge redeploy.
+2. On the dashboard, open Groups and create a group with your second phone as
+   the one member. The group should appear on both phones, with your number as
+   admin.
+3. Add a second person whose WhatsApp privacy is set to "My Contacts". They
+   should show as "invite link sent" and receive the link as a message. Wait for
+   the pacing gap; it is not instant.
+4. Post a message to the group. It should arrive on the phones. The post shows
+   as sent, with no message text kept.
+5. Press "Make a new link". The old link should stop working.
+6. Reply in the group from a phone. Nothing should appear in GoHighLevel. That
+   is expected.
+7. Check Railway logs for the bridge. They should show no phone numbers, group
+   names or invite codes.
+
+Stop here if any step fails. Set `GROUPS_ENABLED=false` on Vercel before you
+investigate.
+
 ---
 
 ## Part 6 — Moving a sub-account from the FitClosers app to this one
@@ -489,6 +540,7 @@ live sessions fight over one WhatsApp account.
 | `GHL_EMBED_FRAME_ANCESTORS` | No | unset (GHL's own hosts only) | Extra `frame-ancestors` origins for whitelabel domains |
 | `GHL_SYNC_DND` | No | `false` | Exactly `true` mirrors STOP/START onto the GHL contact's WhatsApp and SMS DND (`PUT /contacts/{id}` `dndSettings`; verify at first go-live). Failures are logged and never block the opt-out |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Supabase Storage bucket for inbound media; must match the bridge |
+| `GROUPS_ENABLED` | No | `false` | Switches WhatsApp groups on in the portal. Turn it on after the bridge's `WA_GROUPS_ENABLED`; see the groups order below |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | Web-app side media switch; see the flip order below |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | Lifetime of signed media URLs |
 | `NODE_ENV` | Set by Vercel | n/a | Not an operator setting |
@@ -538,8 +590,14 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_INBOUND_MEDIA_PER_SENDER_DAILY` | No | `20` | Inbound media per sender per tenant per day |
 | `WA_INBOUND_MEDIA_PER_TENANT_DAILY` | No | `300` | Inbound media per tenant per day |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Storage bucket for inbound media |
+| `WA_GROUPS_ENABLED` | No | `false` | Master switch, exactly `true` or `false`. Off, every group route answers 404 `groups_disabled` |
+| `WA_GROUP_ADD_BATCH` | No | `5` | People per add call, 1 to 10 |
+| `WA_GROUP_ADD_GAP_MS` | No | `8000` | Minimum gap between add batches, at least 2000 |
+| `WA_GROUP_ADD_JITTER_MS` | No | `4000` | Random jitter added to the add gap |
+| `WA_GROUP_ADDS_DAILY_CAP` | No | `50` | People added to groups per number per UTC day, 1 to 500 |
+| `WA_GROUP_CREATES_DAILY_CAP` | No | `3` | Groups created per number per UTC day, 1 to 20 |
 
-That is 28 variables, all read in `config.ts`.
+That is 34 variables, all read in `config.ts`.
 
 ---
 

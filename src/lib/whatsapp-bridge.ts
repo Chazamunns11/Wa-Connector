@@ -64,6 +64,8 @@
  * commits to Baileys-specific shapes leaking past this module.
  */
 
+import type { GroupJobOutcome, GroupJobStatus } from "@/lib/types";
+
 const BRIDGE_TIMEOUT_MS = 5000;
 
 /** Mirrors the bridge's `SessionSnapshot` (services/whatsapp-bridge/src/sessions.ts). */
@@ -405,6 +407,171 @@ export function sendWhatsappAttachment(input: SendWhatsappAttachmentInput): Prom
 /** Post-hoc status of a previously accepted send, by the same idempotency key. */
 export function getWhatsappMessageStatus(coachId: string, idempotencyKey: string): Promise<BridgeMessageResult> {
   return activeTransport.getMessageStatus(coachId, idempotencyKey);
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp groups. Deliberately NOT part of `WhatsappTransport`: a Cloud API
+// transport has no linked-device groups, so these live behind their own
+// `WhatsappGroupsTransport` interface, implemented by the same bridge module.
+// ---------------------------------------------------------------------------
+
+export interface BridgeGroup {
+  jid: string;
+  subject: string;
+  inviteCode: string | null;
+  participantCount: number;
+  weAreAdmin: boolean;
+}
+export interface BridgeGroupJob {
+  id: string;
+  status: GroupJobStatus;
+  requestedCount: number;
+  results: { phone: string; code: string; outcome: GroupJobOutcome }[];
+  createdAt: string;
+  finishedAt: string | null;
+}
+export interface BridgeGroupPost {
+  id: string;
+  idempotencyKey: string;
+  status: "accepted" | "sending" | "sent" | "failed";
+  waMessageId: string | null;
+  error: string | null;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+export type BridgeGroupCreateResult = { ok: true; group: BridgeGroup; results: BridgeGroupJob["results"] } | BridgeFailure;
+export type BridgeGroupAddResult = { ok: true; job: { id: string; status: GroupJobStatus; requestedCount: number } } | BridgeFailure;
+export type BridgeGroupJobResult = { ok: true; job: BridgeGroupJob } | BridgeFailure;
+export type BridgeGroupPostResult = { ok: true; replay: boolean; post: BridgeGroupPost } | BridgeFailure;
+export type BridgeGroupResult = { ok: true; group: BridgeGroup } | BridgeFailure;
+export type BridgeGroupInviteResult = { ok: true; inviteCode: string } | BridgeFailure;
+
+export interface CreateWhatsappGroupInput {
+  subject: string;
+  description?: string;
+  participants: string[];
+  announceOnly: boolean;
+  adminAddOnly: boolean;
+}
+
+export interface WhatsappGroupsTransport {
+  createGroup(coachId: string, input: CreateWhatsappGroupInput): Promise<BridgeGroupCreateResult>;
+  addParticipants(coachId: string, groupJid: string, phones: string[]): Promise<BridgeGroupAddResult>;
+  getJob(coachId: string, jobId: string): Promise<BridgeGroupJobResult>;
+  postMessage(coachId: string, groupJid: string, text: string, idempotencyKey: string): Promise<BridgeGroupPostResult>;
+  getGroup(coachId: string, groupJid: string): Promise<BridgeGroupResult>;
+  revokeInvite(coachId: string, groupJid: string): Promise<BridgeGroupInviteResult>;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const strOrNull = (v: unknown): boolean => v === null || isStr(v);
+
+function isValidGroup(v: unknown): v is BridgeGroup {
+  return isObj(v) && isStr(v.jid) && isStr(v.subject) && strOrNull(v.inviteCode) && isNum(v.participantCount) && typeof v.weAreAdmin === "boolean";
+}
+function isValidGroupResults(v: unknown): v is BridgeGroupJob["results"] {
+  return Array.isArray(v) && v.every((r) => isObj(r) && isStr(r.phone) && isStr(r.code) && isStr(r.outcome));
+}
+function isValidGroupJob(v: unknown): v is BridgeGroupJob {
+  return (
+    isObj(v) && isStr(v.id) && isStr(v.status) && isNum(v.requestedCount) && isValidGroupResults(v.results) && isStr(v.createdAt) && strOrNull(v.finishedAt)
+  );
+}
+function isValidGroupPost(v: unknown): v is BridgeGroupPost {
+  return (
+    isObj(v) && isStr(v.id) && isStr(v.idempotencyKey) && isStr(v.status) && strOrNull(v.waMessageId) && strOrNull(v.error) && isStr(v.createdAt) && strOrNull(v.sentAt)
+  );
+}
+
+const MALFORMED = (what: string): BridgeFailure => ({ ok: false, code: "internal", message: `bridge returned a malformed ${what} body` });
+const groupPath = (coachId: string) => `/sessions/${encodeURIComponent(coachId)}/groups`;
+
+const bridgeGroupsTransport: WhatsappGroupsTransport = {
+  async createGroup(coachId, input) {
+    const res = await bridgeFetch(groupPath(coachId), { method: "POST", body: input });
+    if ("ok" in res) return res;
+    if (res.status === 200 || res.status === 201) {
+      if (!isValidGroup(res.body.group) || !isValidGroupResults(res.body.results)) return MALFORMED("group");
+      return { ok: true, group: res.body.group, results: res.body.results };
+    }
+    return toFailure(res.status, res.body);
+  },
+
+  async addParticipants(coachId, groupJid, phones) {
+    const res = await bridgeFetch(`${groupPath(coachId)}/${encodeURIComponent(groupJid)}/participants`, { method: "POST", body: { add: phones } });
+    if ("ok" in res) return res;
+    if (res.status === 200 || res.status === 202) {
+      const job = res.body.job;
+      if (!isObj(job) || !isStr(job.id) || !isStr(job.status) || !isNum(job.requestedCount)) return MALFORMED("job");
+      return { ok: true, job: { id: job.id, status: job.status as GroupJobStatus, requestedCount: job.requestedCount } };
+    }
+    return toFailure(res.status, res.body);
+  },
+
+  async getJob(coachId, jobId) {
+    const res = await bridgeFetch(`${groupPath(coachId)}/jobs/${encodeURIComponent(jobId)}`, { method: "GET" });
+    if ("ok" in res) return res;
+    if (res.status === 200) {
+      if (!isValidGroupJob(res.body.job)) return MALFORMED("job");
+      return { ok: true, job: res.body.job };
+    }
+    return toFailure(res.status, res.body);
+  },
+
+  async postMessage(coachId, groupJid, text, idempotencyKey) {
+    const res = await bridgeFetch(`${groupPath(coachId)}/${encodeURIComponent(groupJid)}/messages`, { method: "POST", body: { text, idempotencyKey } });
+    if ("ok" in res) return res;
+    if (res.status === 200 || res.status === 202) {
+      if (!isValidGroupPost(res.body.post)) return MALFORMED("post");
+      return { ok: true, replay: Boolean(res.body.replay), post: res.body.post };
+    }
+    return toFailure(res.status, res.body);
+  },
+
+  async getGroup(coachId, groupJid) {
+    const res = await bridgeFetch(`${groupPath(coachId)}/${encodeURIComponent(groupJid)}`, { method: "GET" });
+    if ("ok" in res) return res;
+    if (res.status === 200) {
+      if (!isValidGroup(res.body.group)) return MALFORMED("group");
+      return { ok: true, group: res.body.group };
+    }
+    return toFailure(res.status, res.body);
+  },
+
+  async revokeInvite(coachId, groupJid) {
+    const res = await bridgeFetch(`${groupPath(coachId)}/${encodeURIComponent(groupJid)}/invite/revoke`, { method: "POST" });
+    if ("ok" in res) return res;
+    if (res.status === 200) {
+      if (!isStr(res.body.inviteCode)) return MALFORMED("invite");
+      return { ok: true, inviteCode: res.body.inviteCode };
+    }
+    return toFailure(res.status, res.body);
+  },
+};
+
+/** The one line a groups-transport swap would change (see `activeTransport`). */
+const activeGroupsTransport: WhatsappGroupsTransport = bridgeGroupsTransport;
+
+export function createWhatsappGroup(coachId: string, input: CreateWhatsappGroupInput): Promise<BridgeGroupCreateResult> {
+  return activeGroupsTransport.createGroup(coachId, input);
+}
+export function addWhatsappGroupParticipants(coachId: string, groupJid: string, phones: string[]): Promise<BridgeGroupAddResult> {
+  return activeGroupsTransport.addParticipants(coachId, groupJid, phones);
+}
+export function getWhatsappGroupJob(coachId: string, jobId: string): Promise<BridgeGroupJobResult> {
+  return activeGroupsTransport.getJob(coachId, jobId);
+}
+export function postToWhatsappGroup(coachId: string, groupJid: string, text: string, idempotencyKey: string): Promise<BridgeGroupPostResult> {
+  return activeGroupsTransport.postMessage(coachId, groupJid, text, idempotencyKey);
+}
+export function getWhatsappGroup(coachId: string, groupJid: string): Promise<BridgeGroupResult> {
+  return activeGroupsTransport.getGroup(coachId, groupJid);
+}
+export function revokeWhatsappGroupInvite(coachId: string, groupJid: string): Promise<BridgeGroupInviteResult> {
+  return activeGroupsTransport.revokeInvite(coachId, groupJid);
 }
 
 /**

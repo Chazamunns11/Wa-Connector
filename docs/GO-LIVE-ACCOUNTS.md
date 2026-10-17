@@ -34,10 +34,13 @@ same organisation**.
 2. **SQL Editor.** Run `supabase/migrations/0001_init.sql` once. Then run
    `supabase/migrations/0002_accounts.sql` once. Then run
    `supabase/migrations/0003_activation_cap.sql` once. Then run
-   `supabase/migrations/0004_reliability.sql` once. Always in that order.
+   `supabase/migrations/0004_reliability.sql` once. Then run
+   `supabase/migrations/0005_groups.sql` once. Always in that order
+   (0001 to 0005).
    Without 0003 every Activate button fails, because activation calls the
    `activate_ghl_location` function that 0003 creates. Without 0004 held
-   messages and STOP opt-outs fail.
+   messages and STOP opt-outs fail. Without 0005 the groups pages and the
+   bridge's group routes fail.
 3. Before 0002, if you ever ran 0001 on a project that already has people in
    `profiles`, check for emails that differ only by case. 0002 lower-cases
    every email and then adds a unique index. Two rows like `Sam@x.com` and
@@ -215,7 +218,7 @@ things to check:
   connect link and the cleanup all go through that one link.
 
 Bridge variables are listed in the foundation doc. Nothing new was added for
-accounts.
+accounts. Groups add six `WA_GROUP*` variables, covered in the foundation doc.
 
 ---
 
@@ -388,6 +391,7 @@ Railway. Never put a real value in this file.
 | `WA_MEDIA_BUCKET` | No | `wa-media` | `src/lib/data/supabase.ts` |
 | `OUTBOUND_HOLD_MAX_HOURS` | No | `24` (1 to 168) | `src/lib/ghl-held-rules.ts` |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | `src/lib/ghl.ts` |
+| `GROUPS_ENABLED` | No | `false` | Groups switch for the portal. Set it only after the bridge has `WA_GROUPS_ENABLED=true` |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | `src/lib/data/supabase.ts` |
 
 `NODE_ENV` is set by Vercel. `BRAND_PRICE_PER_NUMBER` and `BRAND_CURRENCY` no
@@ -430,3 +434,23 @@ line for that one run. Do not add them to Vercel.
 - **Quantity 0 is unconfirmed** until you do the check in Part 7.
 - **Cleanup runs hourly, not exactly at day 14.** It can land up to an hour
   after the 14-day mark. If the bridge is down it retries on the next run.
+- **Groups are included in the per-number price.** There is no new Stripe
+  object and no new pricing variable. Group posts and invite links count
+  toward the number's 150 messages a day.
+- **Group replies do not appear in GoHighLevel.** Customers read and answer
+  them on the phone.
+- **Privacy-blocked adds get an invite link.** Someone with "who can add me to
+  groups" set to My Contacts gets an invite link by WhatsApp message instead of
+  being added. The link is live until "Make a new link" is pressed.
+- **STOP after joining does not remove anyone.** A person who replies STOP
+  after joining stays in the group (the bridge never removes people in v1).
+- **Add status codes are observed, not published.** Status codes from WhatsApp
+  for adds are observed behaviour, not a published API. An unknown code shows
+  as "WhatsApp refused this add".
+- **Rewritten numbers may show as "not on WhatsApp".** WhatsApp rewrites some
+  numbers (Argentina "+54 9", older Mexico "+52 1", some Brazil numbers), so
+  they can look up as not on WhatsApp. UK numbers are unaffected.
+- **Daily caps per number.** 3 groups created, 50 people added, and group posts
+  and invite links count toward the 150 messages.
+- **No workflow action yet.** Groups are managed from the PingWren dashboard
+  only. A GoHighLevel workflow action is not part of v1.
