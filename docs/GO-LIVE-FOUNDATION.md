@@ -584,7 +584,7 @@ Two app settings (Vercel):
 - `GHL_WORKFLOW_TRIGGERS_ENABLED`: off by default. Only `true` turns firing on.
   With it off, subscriptions are still stored and nothing is sent to GHL.
 
-Add the `workflows.readonly` scope to the app (existing installs re-authorise).
+Add the `workflows.readonly` scope to the app in the developer portal first, then set `GHL_WORKFLOW_TRIGGERS_ENABLED=true` (the install only asks for the scope once the flag is on). Existing installs re-authorise.
 Portal entries, the Subscription URL and the sample JSON are in
 `docs/GHL-WORKFLOW-TRIGGERS-SETUP.md`. Each trigger execution costs the
 customer $0.01 and needs LC Premium Triggers & Actions.

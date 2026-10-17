@@ -107,6 +107,17 @@ const SCOPES = [
   "conversations/message.readonly",
 ];
 
+/**
+ * `workflows.readonly` lets GHL show PingWren's workflow triggers. It is only
+ * requested once `GHL_WORKFLOW_TRIGGERS_ENABLED` is on, because asking for a
+ * scope the marketplace app hasn't enabled in the developer portal breaks the
+ * install. Turn the scope on in the portal first, then the flag
+ * (docs/GHL-WORKFLOW-TRIGGERS-SETUP.md). Existing installs re-authorise to get it.
+ */
+export function ghlOAuthScopes(): string[] {
+  return process.env.GHL_WORKFLOW_TRIGGERS_ENABLED === "true" ? [...SCOPES, "workflows.readonly"] : [...SCOPES];
+}
+
 /** GHL is a hard dependency of nothing here — bound every call so a hung request can't hold an OAuth route or a status report open. Matches `whatsapp-bridge.ts`'s own `BRIDGE_TIMEOUT_MS`. */
 const TIMEOUT_MS = 5000;
 
@@ -199,7 +210,7 @@ export function ghlAuthUrl(state: string): string | null {
     response_type: "code",
     redirect_uri: ghlRedirectUri(),
     client_id: env.clientId,
-    scope: SCOPES.join(" "),
+    scope: ghlOAuthScopes().join(" "),
     // GHL resolves an app VERSION, not just an app. Omit this and the
     // install dies on `error.noAppVersionIdFound` before the operator ever
     // sees a location picker. Derived rather than configured: GHL's client

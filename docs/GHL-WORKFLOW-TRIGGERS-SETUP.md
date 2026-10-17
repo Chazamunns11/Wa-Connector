@@ -9,7 +9,7 @@ Changes to Modules ship as a new app version and go through GHL review. Do all s
 - [ ] Migrations 0001 to 0013 are applied (they apply cleanly on Postgres 16).
 - [ ] `GHL_WORKFLOW_WEBHOOK_SECRET` is set on Vercel to a long random value. Without it the subscription route answers 503. Keep a copy: you paste the same value into the portal below.
 - [ ] `GHL_WORKFLOW_TRIGGERS_ENABLED` stays unset (off) until the sandbox check passes. With it off, subscriptions are stored but nothing is ever sent to GHL.
-- [ ] Scopes (Advanced Settings → Auth): add `workflows.readonly` to the six already ticked. Existing installs must re-authorise to pick it up.
+- [ ] Scopes (Advanced Settings → Auth): add `workflows.readonly` to the six already ticked. Do this **before** setting `GHL_WORKFLOW_TRIGGERS_ENABLED=true`: the app only asks for the scope once that flag is on, and asking for a scope the portal hasn't enabled breaks the install. Existing installs must re-authorise to pick it up.
 
 ## What it costs the customer
 
