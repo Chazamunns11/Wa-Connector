@@ -33,9 +33,11 @@ same organisation**.
    values (URL, anon key, service-role key).
 2. **SQL Editor.** Run `supabase/migrations/0001_init.sql` once. Then run
    `supabase/migrations/0002_accounts.sql` once. Then run
-   `supabase/migrations/0003_activation_cap.sql` once. Always in that order.
+   `supabase/migrations/0003_activation_cap.sql` once. Then run
+   `supabase/migrations/0004_reliability.sql` once. Always in that order.
    Without 0003 every Activate button fails, because activation calls the
-   `activate_ghl_location` function that 0003 creates.
+   `activate_ghl_location` function that 0003 creates. Without 0004 held
+   messages and STOP opt-outs fail.
 3. Before 0002, if you ever ran 0001 on a project that already has people in
    `profiles`, check for emails that differ only by case. 0002 lower-cases
    every email and then adds a unique index. Two rows like `Sam@x.com` and
