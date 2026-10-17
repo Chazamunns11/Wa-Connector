@@ -6,12 +6,14 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isOggOpus } from "../src/media.js";
 import {
   MAX_CONCURRENT_TRANSCODES,
+  MAX_VOICE_NOTE_SECONDS,
+  PCM_RATE,
   VOICE_TRANSCODE_TIMEOUT_MS,
   ffmpegArgs,
   probeFfmpeg,
@@ -32,10 +34,19 @@ function oggOpusFixture(): Buffer {
 const WEBM_INPUT = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(64)]);
 const MP3_BYTES = Buffer.concat([Buffer.from("ID3", "ascii"), Buffer.alloc(64)]);
 
+/** One second of silent PCM at PCM_RATE. */
+const ONE_SECOND_PCM = 2 * 2000;
+
+/** ffmpegArgs passes paths as `file:` URLs; the fake writes to the bare path. */
+function fromFileUrl(arg: string): string {
+  assert.ok(arg.startsWith("file:"), arg);
+  return arg.slice("file:".length);
+}
+
 /** Paths ffmpegArgs puts in the args: the ogg output follows `-f ogg`, the pcm output is last. */
 function outputPaths(args: readonly string[]): { ogg: string; pcm: string } {
   const oggFlag = args.findIndex((a, i) => a === "-f" && args[i + 1] === "ogg");
-  return { ogg: args[oggFlag + 2]!, pcm: args[args.length - 1]! };
+  return { ogg: fromFileUrl(args[oggFlag + 2]!), pcm: fromFileUrl(args[args.length - 1]!) };
 }
 
 interface FakeRunner {
@@ -47,7 +58,7 @@ function fakeRunner(
   behave: (args: readonly string[]) => Promise<FfmpegRunResult> = async (args) => {
     const { ogg, pcm } = outputPaths(args);
     await writeFile(ogg, oggOpusFixture());
-    await writeFile(pcm, Buffer.alloc(16_000));
+    await writeFile(pcm, Buffer.alloc(ONE_SECOND_PCM));
     return { kind: "exited", code: 0 };
   }
 ): FakeRunner {
@@ -70,9 +81,12 @@ async function withTmpRoot(fn: (root: string) => Promise<void>): Promise<void> {
   }
 }
 
-test("constants: 10s hard timeout, two concurrent transcodes", () => {
+test("constants: 10s hard timeout, two concurrent transcodes, 15 minute cap, 2 kHz pcm", () => {
   assert.equal(VOICE_TRANSCODE_TIMEOUT_MS, 10_000);
   assert.equal(MAX_CONCURRENT_TRANSCODES, 2);
+  assert.equal(MAX_VOICE_NOTE_SECONDS, 900);
+  assert.equal(PCM_RATE, 2000);
+  assert.equal(ONE_SECOND_PCM, PCM_RATE * 2);
 });
 
 test("transcode: oversized input is refused before ffmpeg runs", async () => {
@@ -112,12 +126,11 @@ test("transcode: the runner gets the hard timeout", async () => {
 
 test("transcode: the input file is written privately and is the bytes we were given", async () => {
   await withTmpRoot(async (root) => {
-    const { readFile, stat } = await import("node:fs/promises");
     let inMode = 0;
     let dirMode = 0;
     let inBytes: Buffer | null = null;
     const fake = fakeRunner(async (args) => {
-      const inPath = args[args.indexOf("-i") + 1]!;
+      const inPath = fromFileUrl(args[args.indexOf("-i") + 1]!);
       inMode = (await stat(inPath)).mode & 0o777;
       dirMode = (await stat(path.dirname(inPath))).mode & 0o777;
       inBytes = await readFile(inPath);
@@ -162,7 +175,7 @@ test("transcode: output that isn't ogg/opus is rejected", async () => {
     const fake = fakeRunner(async (args) => {
       const { ogg, pcm } = outputPaths(args);
       await writeFile(ogg, MP3_BYTES);
-      await writeFile(pcm, Buffer.alloc(16_000));
+      await writeFile(pcm, Buffer.alloc(ONE_SECOND_PCM));
       return { kind: "exited", code: 0 };
     });
     const result = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run: fake.run, tmpRoot: root });
@@ -180,11 +193,63 @@ test("transcode: missing or oversized output is rejected", async () => {
     const tooBig = fakeRunner(async (args) => {
       const { ogg, pcm } = outputPaths(args);
       await writeFile(ogg, Buffer.concat([oggOpusFixture(), Buffer.alloc(WEBM_INPUT.length)]));
-      await writeFile(pcm, Buffer.alloc(16_000));
+      await writeFile(pcm, Buffer.alloc(ONE_SECOND_PCM));
       return { kind: "exited", code: 0 };
     });
     const r2 = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: WEBM_INPUT.length, run: tooBig.run, tmpRoot: root });
     assert.deepEqual(r2, { ok: false, reason: "bad_output" });
+    assert.deepEqual(await readdir(root), []);
+  });
+});
+
+test("transcode: an oversized pcm output is refused without ever being read", async () => {
+  await withTmpRoot(async (root) => {
+    const fake = fakeRunner(async (args) => {
+      const { ogg, pcm } = outputPaths(args);
+      await writeFile(ogg, oggOpusFixture());
+      await writeFile(pcm, Buffer.alloc(MAX_VOICE_NOTE_SECONDS * PCM_RATE * 2 + 1));
+      return { kind: "exited", code: 0 };
+    });
+    const read: string[] = [];
+    const result = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", {
+      maxInputBytes: 1024 * 1024,
+      run: fake.run,
+      tmpRoot: root,
+      readOutput: async (p) => {
+        read.push(p);
+        return readFile(p);
+      },
+    });
+    assert.deepEqual(result, { ok: false, reason: "bad_output" });
+    assert.deepEqual(read, [], "no output is read once a size check fails");
+    assert.deepEqual(await readdir(root), []);
+  });
+});
+
+test("transcode: a pcm output at exactly the 15 minute cap is accepted", async () => {
+  await withTmpRoot(async (root) => {
+    const fake = fakeRunner(async (args) => {
+      const { ogg, pcm } = outputPaths(args);
+      await writeFile(ogg, oggOpusFixture());
+      await writeFile(pcm, Buffer.alloc(MAX_VOICE_NOTE_SECONDS * PCM_RATE * 2));
+      return { kind: "exited", code: 0 };
+    });
+    const result = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run: fake.run, tmpRoot: root });
+    assert.equal(result.ok, true);
+    if (result.ok) assert.equal(result.seconds, MAX_VOICE_NOTE_SECONDS);
+  });
+});
+
+test("transcode: an empty pcm output is rejected", async () => {
+  await withTmpRoot(async (root) => {
+    const fake = fakeRunner(async (args) => {
+      const { ogg, pcm } = outputPaths(args);
+      await writeFile(ogg, oggOpusFixture());
+      await writeFile(pcm, Buffer.alloc(0));
+      return { kind: "exited", code: 0 };
+    });
+    const result = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run: fake.run, tmpRoot: root });
+    assert.deepEqual(result, { ok: false, reason: "bad_output" });
     assert.deepEqual(await readdir(root), []);
   });
 });
@@ -209,7 +274,7 @@ test("transcode: a third concurrent call is busy, not queued", async () => {
       await gate;
       const { ogg, pcm } = outputPaths(args);
       await writeFile(ogg, oggOpusFixture());
-      await writeFile(pcm, Buffer.alloc(16_000));
+      await writeFile(pcm, Buffer.alloc(ONE_SECOND_PCM));
       return { kind: "exited", code: 0 };
     });
     const opts = { maxInputBytes: 1024 * 1024, run: fake.run, tmpRoot: root };
@@ -236,6 +301,9 @@ test("ffmpegArgs: input is a named demuxer on a local file, protocols limited to
   const whitelist = args.indexOf("-protocol_whitelist");
   assert.ok(whitelist >= 0 && whitelist < i);
   assert.equal(args[whitelist + 1], "file");
+  const cap = args.indexOf("-t");
+  assert.ok(cap >= 0 && cap < i, "-t is an input option, before -i");
+  assert.equal(args[cap + 1], "900");
   assert.equal(args[i - 2], "-f");
   assert.equal(args[i - 1], "matroska");
   assert.ok(args.includes("-nostdin"));
@@ -243,19 +311,19 @@ test("ffmpegArgs: input is a named demuxer on a local file, protocols limited to
   for (const arg of args) assert.doesNotMatch(arg, /^[a-z]+:\/\//);
   assert.deepEqual(args, [
     "-hide_banner", "-nostdin", "-loglevel", "error", "-protocol_whitelist", "file",
-    "-f", "matroska", "-i", "/tmp/x/in",
+    "-t", "900", "-f", "matroska", "-i", "file:/tmp/x/in",
     "-map", "0:a:0", "-vn", "-map_metadata", "-1", "-ac", "1", "-ar", "48000",
-    "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", "/tmp/x/out.ogg",
-    "-map", "0:a:0", "-ac", "1", "-ar", "8000", "-f", "s16le", "/tmp/x/out.pcm",
+    "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", "file:/tmp/x/out.ogg",
+    "-map", "0:a:0", "-ac", "1", "-ar", "2000", "-f", "s16le", "file:/tmp/x/out.pcm",
   ]);
 });
 
 test("waveformFromPcm: silence is all 0, a full-scale square wave is all 100", () => {
-  const silence = waveformFromPcm(Buffer.alloc(16_000));
+  const silence = waveformFromPcm(Buffer.alloc(ONE_SECOND_PCM));
   assert.equal(silence.length, 64);
   assert.ok(silence.every((v) => v === 0));
 
-  const square = Buffer.alloc(16_000);
+  const square = Buffer.alloc(ONE_SECOND_PCM);
   for (let s = 0; s < square.length / 2; s++) square.writeInt16LE(s % 2 === 0 ? 32767 : -32768, s * 2);
   const loud = waveformFromPcm(square);
   assert.equal(loud.length, 64);

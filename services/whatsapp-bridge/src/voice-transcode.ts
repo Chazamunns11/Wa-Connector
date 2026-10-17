@@ -9,8 +9,11 @@
  * file), with the demuxer named explicitly and `-protocol_whitelist file`, so
  * neither probing nor a playlist-style input can reach anywhere else. Files
  * rather than pipes because the mp4/mov demuxer needs to seek and there are
- * two outputs (the ogg and the 8 kHz PCM for duration + waveform, both from
+ * two outputs (the ogg and the 2 kHz PCM for duration + waveform, both from
  * the same run). The directory is removed in `finally` on every path.
+ *
+ * Output is bounded: `-t 900` (before `-i`) caps a note at 15 minutes, and
+ * both outputs are `stat`ed against their caps before either is read.
  *
  * `-map 0:a:0` makes ffmpeg fail when the input has no audio stream, and
  * `-vn` drops any video, so a WebM video can never become a "voice note".
@@ -20,13 +23,19 @@
  * drained and discarded (it can echo file metadata).
  */
 import { spawn } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isOggOpus, type SniffedMime } from "./media.js";
 
 export const VOICE_TRANSCODE_TIMEOUT_MS = 10_000;
 export const MAX_CONCURRENT_TRANSCODES = 2;
+/** Longest voice note we make: ffmpeg stops reading input after this (`-t` before `-i`). */
+export const MAX_VOICE_NOTE_SECONDS = 900;
+/** Sample rate of the mono s16le side output used for duration + waveform. */
+export const PCM_RATE = 2000;
+/** Largest PCM side output a capped run can produce; anything bigger is refused before it is read. */
+const MAX_PCM_BYTES = MAX_VOICE_NOTE_SECONDS * PCM_RATE * 2;
 
 export type FfmpegRunResult = { kind: "exited"; code: number } | { kind: "timeout" } | { kind: "spawn_failed" };
 export type FfmpegRunner = (args: readonly string[], opts: { timeoutMs: number }) => Promise<FfmpegRunResult>;
@@ -55,13 +64,14 @@ export const realFfmpegRunner: FfmpegRunner = (args, { timeoutMs }) =>
 
 export type InputDemuxer = "matroska" | "mp3" | "mov" | "wav" | "ogg";
 
+/** Paths go to ffmpeg as `file:` URLs so a name can never be read as another protocol or an option. */
 export function ffmpegArgs(inputFormat: InputDemuxer, inPath: string, oggPath: string, pcmPath: string): string[] {
   return [
     "-hide_banner", "-nostdin", "-loglevel", "error", "-protocol_whitelist", "file",
-    "-f", inputFormat, "-i", inPath,
+    "-t", String(MAX_VOICE_NOTE_SECONDS), "-f", inputFormat, "-i", `file:${inPath}`,
     "-map", "0:a:0", "-vn", "-map_metadata", "-1", "-ac", "1", "-ar", "48000",
-    "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", oggPath,
-    "-map", "0:a:0", "-ac", "1", "-ar", "8000", "-f", "s16le", pcmPath,
+    "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", `file:${oggPath}`,
+    "-map", "0:a:0", "-ac", "1", "-ar", String(PCM_RATE), "-f", "s16le", `file:${pcmPath}`,
   ];
 }
 
@@ -111,7 +121,14 @@ let activeTranscodes = 0;
 export async function transcodeToVoiceNote(
   input: Buffer,
   mime: SniffedMime,
-  opts: { maxInputBytes: number; run: FfmpegRunner; timeoutMs?: number; tmpRoot?: string }
+  opts: {
+    maxInputBytes: number;
+    run: FfmpegRunner;
+    timeoutMs?: number;
+    tmpRoot?: string;
+    /** Test seam: how outputs are read once their size has been checked. */
+    readOutput?: (filePath: string) => Promise<Buffer>;
+  }
 ): Promise<TranscodeResult> {
   if (input.length > opts.maxInputBytes) return { ok: false, reason: "too_large" };
   const demuxer = demuxerFor(mime);
@@ -135,19 +152,32 @@ export async function transcodeToVoiceNote(
     if (ran.kind === "timeout") return { ok: false, reason: "timeout" };
     if (ran.code !== 0) return { ok: false, reason: "ffmpeg_failed" };
 
-    let ogg: Buffer;
-    let pcm: Buffer;
+    // Sizes first, so an oversized output is never pulled into memory.
+    let oggSize: number;
+    let pcmSize: number;
     try {
-      [ogg, pcm] = await Promise.all([readFile(oggPath), readFile(pcmPath)]);
+      [oggSize, pcmSize] = await Promise.all([stat(oggPath).then((st) => st.size), stat(pcmPath).then((st) => st.size)]);
     } catch {
       return { ok: false, reason: "bad_output" };
     }
-    if (ogg.length === 0 || ogg.length > opts.maxInputBytes || !isOggOpus(ogg)) return { ok: false, reason: "bad_output" };
+    if (oggSize === 0 || oggSize > opts.maxInputBytes || pcmSize === 0 || pcmSize > MAX_PCM_BYTES) {
+      return { ok: false, reason: "bad_output" };
+    }
+
+    const read = opts.readOutput ?? readFile;
+    let ogg: Buffer;
+    let pcm: Buffer;
+    try {
+      [ogg, pcm] = await Promise.all([read(oggPath), read(pcmPath)]);
+    } catch {
+      return { ok: false, reason: "bad_output" };
+    }
+    if (!isOggOpus(ogg)) return { ok: false, reason: "bad_output" };
 
     return {
       ok: true,
       buffer: ogg,
-      seconds: Math.max(1, Math.ceil(pcm.length / 2 / 8000)),
+      seconds: Math.max(1, Math.ceil(pcmSize / 2 / PCM_RATE)),
       waveform: waveformFromPcm(pcm),
     };
   } finally {

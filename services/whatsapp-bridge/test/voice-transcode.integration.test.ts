@@ -47,7 +47,17 @@ if (!hasFfmpeg) {
     });
   }
 
-  test("integration: a video-only webm never becomes a voice note", async () => {
+  test("integration: realFfmpegRunner kills ffmpeg at the timeout", async () => {
+    const started = Date.now();
+    const result = await realFfmpegRunner(
+      ["-hide_banner", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "sine=frequency=440:duration=60", "-f", "null", "-"],
+      { timeoutMs: 50 }
+    );
+    assert.deepEqual(result, { kind: "timeout" });
+    assert.ok(Date.now() - started < 5_000, "killed, not run to completion");
+  });
+
+  test("integration: a video-only webm never becomes a voice note", async (t) => {
     const dir = await mkdtemp(path.join(tmpdir(), "voice-transcode-it-"));
     try {
       const src = path.join(dir, "video.webm");
@@ -55,7 +65,10 @@ if (!hasFfmpeg) {
         "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x64:rate=5",
         "-c:v", "libvpx", "-f", "webm", src,
       ]);
-      if (gen.status !== 0) return; // no libvpx in this ffmpeg build — nothing to check
+      if (gen.status !== 0) {
+        t.skip("no libvpx");
+        return;
+      }
       const input = await readFile(src);
       const result = await transcodeToVoiceNote(input, "audio/webm", { maxInputBytes: 16 * 1024 * 1024, run: realFfmpegRunner });
       assert.deepEqual(result, { ok: false, reason: "ffmpeg_failed" });
