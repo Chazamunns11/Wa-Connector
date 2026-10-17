@@ -89,6 +89,6 @@ test("walkthrough fixes: menu item named after the brand, no triple negative, pr
   assert.ok(!/The WhatsApp page lives in the left menu/.test(read("src/lib/site/setup-steps.ts")));
   assert.ok(!/no verified badge, no template approval/.test(read("src/lib/site/faq.ts")));
   assert.match(read("src/app/(site)/pricing/page.tsx"), /There is no setup fee, and \{brand\.name\} does not charge per message\./);
-  const shell = read("src/components/auth/AuthShell.tsx");
-  assert.match(shell, /<Link[^>]*href="\/"[^>]*aria-label=\{`\$\{brandConfig\(\)\.name\} home`\}/s);
+  // The auth pages sit under the site header, whose logo is the home link (owner, 2026-10-17: Ink tops everywhere).
+  assert.match(read("src/components/site/SiteHeader.tsx"), /`\$\{brand\.name\} home`/);
 });

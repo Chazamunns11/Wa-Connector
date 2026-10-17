@@ -98,6 +98,30 @@
   color: var(--color-ink);
 }
 
+/* Light objects on an Ink band (the auth card): the light tokens again, scoped. */
+.light-card {
+  --color-bg: #FFFFFF;
+  --color-card: #FFFFFF;
+  --color-raised: #EEF0F4;
+  --color-well: #EEF0F4;
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #4A5162;
+  --color-ink-faint: #4A5162;
+  --color-accent: #FF5A36;
+  --color-accent-ink: #1B1F2A;
+  --color-accent-text: #1B1F2A;
+  --color-rule: #1B1F2A;
+  --color-outline: #1B1F2A;
+  --color-border: #D5D9E1;
+  --color-divider: #D5D9E1;
+  --color-border-strong: #1B1F2A;
+  --color-chip: #EEF0F4;
+  --color-chip-ink: #1B1F2A;
+  --color-focus: #1B1F2A;
+  background-color: var(--color-card);
+  color: var(--color-ink);
+}
+
 /* Coral scope: every text token is Ink because nothing lighter passes on Coral
    (#4A5162 is 2.9:1). The primary button here is an Ink pill. */
 .surface-coral {
@@ -1576,4 +1600,9 @@ h3 {
   opacity: 0.45;
   cursor: not-allowed;
   transform: none;
+}
+
+/* Short pages that are one Ink band (sign-in, sign-up, not found): the band runs down to the footer, no white gap. */
+main:has(> .fill-band) {
+  background-color: #1B1F2A;
 }

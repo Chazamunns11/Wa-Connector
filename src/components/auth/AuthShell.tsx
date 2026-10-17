@@ -1,10 +1,10 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
-import { brandConfig } from "@/lib/brand-config";
-import { BrandMark } from "@/components/site/BrandMark";
+import { Container } from "@/components/site/Container";
 
 /**
- * Centred card for sign-up and sign-in.
+ * Sign-up and sign-in on the Ink band, like the top of every other page: the heading and
+ * intro in white on the left, the form in a white card with the coral lift on the right.
+ * Below 900px they stack. The site header above already carries the logo and the home link.
  */
 export function AuthShell({
   title,
@@ -16,21 +16,20 @@ export function AuthShell({
   children: ReactNode;
 }) {
   return (
-    <div className="mx-auto w-full max-w-md px-4 py-10 md:py-16">
-      <div className="slab p-5 sm:p-8">
-        <header className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Link
-            href="/"
-            aria-label={`${brandConfig().name} home`}
-            className="rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4"
-          >
-            <BrandMark size={40} />
-          </Link>
-        </header>
-        <h1 className="mt-6 h-app font-display">{title}</h1>
-        {intro ? <div className="mt-3 text-ink-dim">{intro}</div> : null}
-        <div className="mt-6">{children}</div>
-      </div>
-    </div>
+    <section className="fill-band surface-dark pb-[clamp(56px,8vw,112px)] pt-[clamp(32px,5vw,72px)]">
+      <Container>
+        <div className="grid items-start gap-x-[clamp(32px,6vw,96px)] gap-y-8 min-[901px]:grid-cols-[minmax(0,1fr)_minmax(0,28rem)]">
+          <header className="min-[901px]:pt-4">
+            <h1 className="h-page font-display max-w-[14ch]">{title}</h1>
+            {intro ? (
+              <div className="mt-5 max-w-[46ch] text-[clamp(1.05rem,1.5vw,1.25rem)] font-medium leading-[1.5] text-ink-dim">
+                {intro}
+              </div>
+            ) : null}
+          </header>
+          <div className="light-card slab slab-lift p-5 sm:p-8">{children}</div>
+        </div>
+      </Container>
+    </section>
   );
 }
