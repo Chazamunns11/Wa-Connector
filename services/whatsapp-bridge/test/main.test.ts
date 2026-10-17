@@ -25,7 +25,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { wireGracefulShutdown, type SignalTarget } from "../src/main.js";
+import { FFMPEG_MISSING_LOG, voiceTranscodeFor, wireGracefulShutdown, type SignalTarget } from "../src/main.js";
+import type { FfmpegRunner } from "../src/voice-transcode.js";
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } {
   let resolve!: (v: T) => void;
@@ -107,4 +108,40 @@ test("wireGracefulShutdown: resolves only once resumeAll itself resolves", async
   resume.resolve();
   await wired;
   assert.equal(settled, true);
+});
+
+// Voice notes (Task 3): the boot probe decides whether SessionManager gets a transcoder.
+function probeRunner(result: Awaited<ReturnType<FfmpegRunner>>): { run: FfmpegRunner; calls: number } {
+  const state = { calls: 0, run: (async () => { state.calls++; return result; }) as FfmpegRunner };
+  return state;
+}
+
+test("voiceTranscodeFor: flag off -> null, ffmpeg never probed, nothing logged", async () => {
+  const runner = probeRunner({ kind: "exited", code: 0 });
+  const warnings: string[] = [];
+  const t = await voiceTranscodeFor({ voiceTranscodeEnabled: false, mediaMaxAudioBytes: 100 }, runner.run, { warn: (m) => warnings.push(m) });
+  assert.equal(t, null);
+  assert.equal(runner.calls, 0);
+  assert.deepEqual(warnings, []);
+});
+
+test("voiceTranscodeFor: flag on but ffmpeg missing -> null (plain sends) and one warning", async () => {
+  for (const result of [{ kind: "spawn_failed" as const }, { kind: "exited" as const, code: 1 }]) {
+    const runner = probeRunner(result);
+    const warnings: string[] = [];
+    const t = await voiceTranscodeFor({ voiceTranscodeEnabled: true, mediaMaxAudioBytes: 100 }, runner.run, { warn: (m) => warnings.push(m) });
+    assert.equal(t, null);
+    assert.deepEqual(warnings, [FFMPEG_MISSING_LOG]);
+    assert.equal(FFMPEG_MISSING_LOG, "voice transcode enabled but ffmpeg with libopus was not found — voice notes will send as audio files");
+  }
+});
+
+test("voiceTranscodeFor: flag on and ffmpeg found -> a transcoder capped at WA_MEDIA_MAX_AUDIO_BYTES", async () => {
+  const runner = probeRunner({ kind: "exited", code: 0 });
+  const warnings: string[] = [];
+  const t = await voiceTranscodeFor({ voiceTranscodeEnabled: true, mediaMaxAudioBytes: 100 }, runner.run, { warn: (m) => warnings.push(m) });
+  assert.ok(t);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(await t(Buffer.alloc(101), "audio/mpeg"), { ok: false, reason: "too_large" });
+  assert.equal(runner.calls, 1, "the oversized input never reached ffmpeg");
 });

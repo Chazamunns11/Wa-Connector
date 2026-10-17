@@ -131,8 +131,9 @@ import {
 import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
 import { runMediaCapture } from "./media-capture.js";
-import { resolveOutboundAttachment } from "./media-fetch.js";
-import { buildBaileysMediaContent } from "./media.js";
+import { prepareOutboundAudio, resolveOutboundAttachment } from "./media-fetch.js";
+import { buildBaileysMediaContent, type SniffedMime } from "./media.js";
+import type { TranscodeResult } from "./voice-transcode.js";
 import type { PortalPoke } from "./poke.js";
 
 /** How long a boot-interrupted 'accepted' message may wait before it is failed instead of re-enqueued — see store.sweepInterruptedMessages. */
@@ -177,6 +178,18 @@ const SHUTDOWN_TEARDOWN_MAX_PASSES = 3;
 export interface OutboundAttachment {
   url: string;
   fileName?: string;
+}
+
+/**
+ * Outbound media seams (voice notes plan, Task 3). `resolveAttachment`
+ * defaults to the real SSRF-guarded fetch (tests inject a fake). `transcode`
+ * null or absent = voice transcoding off: main.ts passes it only when
+ * WA_VOICE_TRANSCODE_ENABLED is on AND the boot probe found ffmpeg with
+ * libopus, so with it off outbound audio behaves exactly as before.
+ */
+export interface SessionMediaDeps {
+  resolveAttachment?: typeof resolveOutboundAttachment;
+  transcode?: ((buf: Buffer, mime: SniffedMime) => Promise<TranscodeResult>) | null;
 }
 
 /** Media plan (docs/MEDIA-PLAN.md §5.1/§5.3) — a queued send is EITHER a text part or an attachment part, never both (mirrors the bridge API's own xor contract). */
@@ -671,7 +684,9 @@ export class SessionManager {
      * `whatsapp_messages` either way; only the "tell the portal within
      * seconds" latency optimisation is gated on this.
      */
-    private readonly outboundPoke: PortalPoke | null = null
+    private readonly outboundPoke: PortalPoke | null = null,
+    /** Outbound media seams — see `SessionMediaDeps`. */
+    private readonly mediaDeps: SessionMediaDeps = {}
   ) {}
 
   /**
@@ -1504,8 +1519,11 @@ export class SessionManager {
           if (payload.kind === "text") {
             messageContent = buildOutboundTextContent(payload.text);
           } else {
-            const resolved = await resolveOutboundAttachment(payload.attachment.url, {
+            const transcode = this.mediaDeps.transcode ?? null;
+            const resolveAttachment = this.mediaDeps.resolveAttachment ?? resolveOutboundAttachment;
+            const resolved = await resolveAttachment(payload.attachment.url, {
               timeoutMs: this.config.mediaFetchTimeoutMs,
+              voiceTranscode: transcode !== null,
               caps: {
                 image: this.config.mediaMaxImageBytes,
                 video: this.config.mediaMaxVideoBytes,
@@ -1524,7 +1542,29 @@ export class SessionManager {
               await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, reason, false));
               continue;
             }
-            messageContent = buildBaileysMediaContent(resolved, payload.attachment.fileName);
+            let content: Parameters<typeof buildBaileysMediaContent>[0] = resolved;
+            if (resolved.transcodeCandidate && transcode !== null) {
+              // Voice note (voice notes plan, Task 3): non-opus audio becomes
+              // an ogg/opus voice note. Any failure, whatever its reason, sends
+              // the original file instead (prepareOutboundAudio's fallback) —
+              // never a failed row. Like the typing window below, the socket
+              // can drop while ffmpeg runs: nothing is dispatched yet, so a
+              // drop fails the row as NOT attempted (safe to reissue).
+              const startedAt = Date.now();
+              const prepared = await prepareOutboundAudio(resolved, { transcode });
+              this.log.info(
+                { coachId: session.coachId, messageId: record.id, mime: resolved.mimetype, outcome: prepared.outcome, ms: Date.now() - startedAt },
+                "outbound voice note prepared"
+              );
+              if (session.sock !== sock || session.status !== "connected") {
+                await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "session disconnected before sending — not dispatched", false));
+                continue;
+              }
+              content = prepared.content;
+            }
+            // A transcode candidate's fallback is named by the bridge
+            // (`voice-note.<ext>` for a webm/wav document), never by GHL.
+            messageContent = buildBaileysMediaContent(content, resolved.transcodeCandidate ? undefined : payload.attachment.fileName);
           }
 
           // Typing simulation (src/typing.ts) — "typing…" before a TEXT part,

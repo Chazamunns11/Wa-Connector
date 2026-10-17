@@ -13,7 +13,8 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { LookupAddress } from "node:dns";
-import { buildGuardedLookup, fetchAttachment, resolveOutboundAttachment } from "../src/media-fetch.js";
+import { buildGuardedLookup, fetchAttachment, prepareOutboundAudio, resolveOutboundAttachment, type ResolvedOutboundAttachment } from "../src/media-fetch.js";
+import type { TranscodeResult } from "../src/voice-transcode.js";
 
 async function withServer(handler: Parameters<typeof createServer>[0], fn: (port: number) => Promise<void>): Promise<void> {
   const server: Server = createServer(handler);
@@ -400,6 +401,92 @@ test("resolveOutboundAttachment: an unrecognised/denylisted type is refused as u
       assert.deepEqual(result, { ok: false, reason: "unsupported_type" });
     }
   );
+});
+
+// Voice notes (Task 3): transcode candidates, capped at caps.audio.
+const WEBM_200 = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(196, 1)]);
+
+async function resolveServed(body: Buffer, extra: { caps?: { image: number; video: number; audio: number; document: number }; voiceTranscode?: boolean }) {
+  let result: Awaited<ReturnType<typeof resolveOutboundAttachment>> | undefined;
+  await withServer(
+    (req, res) => {
+      res.writeHead(200);
+      res.end(body);
+    },
+    async (port) => {
+      result = await resolveOutboundAttachment(`http://127.0.0.1:${port}/x`, {
+        timeoutMs: 2000,
+        caps: extra.caps ?? { image: 1000, video: 1000, audio: 1000, document: 1000 },
+        ...(extra.voiceTranscode === undefined ? {} : { voiceTranscode: extra.voiceTranscode }),
+        ...PERMISSIVE,
+      });
+    }
+  );
+  return result!;
+}
+
+test("resolveOutboundAttachment: webm with voiceTranscode on is a document-fallback transcode candidate", async () => {
+  const result = await resolveServed(WEBM_200, { voiceTranscode: true });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.deepEqual({ kind: result.kind, mimetype: result.mimetype, transcodeCandidate: result.transcodeCandidate }, { kind: "document", mimetype: "audio/webm", transcodeCandidate: true });
+});
+
+test("resolveOutboundAttachment: webm without voiceTranscode is refused as unsupported (today's behaviour)", async () => {
+  assert.deepEqual(await resolveServed(WEBM_200, {}), { ok: false, reason: "unsupported_type" });
+});
+
+test("resolveOutboundAttachment: a transcode candidate is capped at caps.audio even when its fallback kind is document", async () => {
+  const result = await resolveServed(WEBM_200, { voiceTranscode: true, caps: { image: 10, video: 10, audio: 100, document: 1000 } });
+  assert.deepEqual(result, { ok: false, reason: "too_large_for_type" });
+});
+
+test("resolveOutboundAttachment: ogg vorbis is never sent as ptt — the sniffed bytes reach the mapping", async () => {
+  const vorbis = Buffer.concat([Buffer.from("OggS"), Buffer.alloc(24), Buffer.from("\x01vorbis", "latin1"), Buffer.alloc(20)]);
+  const off = await resolveServed(vorbis, {});
+  assert.equal(off.ok, true);
+  if (off.ok) assert.deepEqual({ kind: off.kind, ptt: off.ptt, transcodeCandidate: off.transcodeCandidate }, { kind: "audio", ptt: false, transcodeCandidate: undefined });
+  const on = await resolveServed(vorbis, { voiceTranscode: true });
+  assert.equal(on.ok, true);
+  if (on.ok) assert.deepEqual({ kind: on.kind, ptt: on.ptt, transcodeCandidate: on.transcodeCandidate }, { kind: "audio", ptt: false, transcodeCandidate: true });
+});
+
+const MP3_CANDIDATE: ResolvedOutboundAttachment = { ok: true, kind: "audio", mimetype: "audio/mpeg", buffer: Buffer.from("ID3-mp3"), ptt: false, transcodeCandidate: true };
+
+test("prepareOutboundAudio: a successful transcode becomes an ogg/opus voice note with seconds and waveform", async () => {
+  const ogg = Buffer.from("ogg-opus");
+  const waveform = new Uint8Array([1, 2, 3]);
+  const seen: string[] = [];
+  const prepared = await prepareOutboundAudio(MP3_CANDIDATE, {
+    transcode: async (buf, mime) => {
+      seen.push(`${buf.toString()}|${mime}`);
+      return { ok: true, buffer: ogg, seconds: 7, waveform };
+    },
+  });
+  assert.deepEqual(seen, ["ID3-mp3|audio/mpeg"]);
+  assert.equal(prepared.outcome, "transcoded");
+  assert.deepEqual(prepared.content, { ok: true, kind: "audio", mimetype: "audio/ogg", ptt: true, buffer: ogg, seconds: 7, waveform });
+});
+
+test("prepareOutboundAudio: every failure reason returns the original unchanged (the generic fallback)", async () => {
+  const reasons: Extract<TranscodeResult, { ok: false }>["reason"][] = ["too_large", "too_long", "unsupported", "busy", "unavailable", "timeout", "ffmpeg_failed", "bad_output"];
+  for (const reason of reasons) {
+    const prepared = await prepareOutboundAudio(MP3_CANDIDATE, { transcode: async () => ({ ok: false, reason }) });
+    assert.equal(prepared.outcome, reason);
+    assert.equal(prepared.content, MP3_CANDIDATE, reason);
+  }
+});
+
+test("prepareOutboundAudio: a transcode that throws falls back to the original as ffmpeg_failed", async () => {
+  const prepared = await prepareOutboundAudio(MP3_CANDIDATE, { transcode: async () => { throw new Error("EACCES"); } });
+  assert.deepEqual(prepared, { content: MP3_CANDIDATE, outcome: "ffmpeg_failed" });
+});
+
+test("prepareOutboundAudio: not a candidate -> not_needed, transcode never called", async () => {
+  const opus: ResolvedOutboundAttachment = { ok: true, kind: "audio", mimetype: "audio/ogg", buffer: Buffer.from("x"), ptt: true };
+  let calls = 0;
+  const prepared = await prepareOutboundAudio(opus, { transcode: async () => { calls++; return { ok: false, reason: "busy" }; } });
+  assert.deepEqual(prepared, { content: opus, outcome: "not_needed" });
+  assert.equal(calls, 0);
 });
 
 function bytes(...hex: number[]): Buffer {
