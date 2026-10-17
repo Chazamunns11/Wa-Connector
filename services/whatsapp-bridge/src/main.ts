@@ -124,7 +124,7 @@ export async function main(): Promise<void> {
     ? new PortalPoke({ url: config.portalOutboundUrl, secret: config.waInboundPokeSecret }, log.child({ module: "outbound-poke" }))
     : null;
   const manager = new SessionManager(store, config, log, poke, outboundPoke);
-  const server = createBridgeServer({ manager, store, bridgeSecret: config.bridgeSecret, log, mediaOutboundEnabled: config.mediaOutboundEnabled });
+  const server = createBridgeServer({ manager, store, bridgeSecret: config.bridgeSecret, log, mediaOutboundEnabled: config.mediaOutboundEnabled, groupsEnabled: config.groupsEnabled });
 
   server.listen(config.port, () => {
     log.info({ port: config.port, instanceId: manager.instanceId }, "whatsapp-bridge listening");

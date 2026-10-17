@@ -34,6 +34,14 @@
  *   POST /sessions/:coachId/logout
  *   POST /sessions/:coachId/send                        {to, text, idempotencyKey}
  *   GET  /sessions/:coachId/messages/:idempotencyKey
+ *   Groups (404 groups_disabled unless WA_GROUPS_ENABLED; see the README):
+ *   POST /sessions/:coachId/groups
+ *   POST /sessions/:coachId/groups/:jid/participants    {add}
+ *   POST /sessions/:coachId/groups/:jid/messages        {text, idempotencyKey}
+ *   GET  /sessions/:coachId/groups/jobs/:jobId
+ *   GET  /sessions/:coachId/groups/:jid
+ *   POST /sessions/:coachId/groups/:jid/invite/revoke
+ * Group routes never log phones, subjects, invite codes or secrets.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
@@ -41,6 +49,7 @@ import type { Logger } from "pino";
 import type { BridgeStore } from "./store.js";
 import { LeaseUnavailableError, ShuttingDownError, type SessionManager } from "./sessions.js";
 import { isE164 } from "./phone.js";
+import { GROUP_JID_RE } from "./groups.js";
 
 /** Mirrors src/app/api/cron/reminders/route.ts's `constantTimeEqualStr` — length check first, then timingSafeEqual. */
 export function constantTimeEqualStr(a: string, b: string): boolean {
@@ -59,6 +68,12 @@ const MAX_BODY_BYTES = 64 * 1024;
 const MAX_ATTACHMENT_URL_LENGTH = 2048;
 /** Media plan (docs/MEDIA-PLAN.md §5.3) — display name for documents. */
 const MAX_ATTACHMENT_FILENAME_LENGTH = 128;
+
+/** WhatsApp's own group limits (subject 100, description 2048); create takes at most one batch, adds at most one portal batch. */
+const MAX_GROUP_SUBJECT_LENGTH = 100;
+const MAX_GROUP_DESCRIPTION_LENGTH = 2048;
+const MAX_GROUP_CREATE_PARTICIPANTS = 5;
+const MAX_GROUP_ADD_PARTICIPANTS = 50;
 
 type Json = Record<string, unknown>;
 
@@ -96,11 +111,30 @@ export interface ServerDeps {
   log: Logger;
   /** Media plan (docs/MEDIA-PLAN.md §5.3) — `WA_MEDIA_OUTBOUND_ENABLED`. Defaults `false`: the `attachment` body shape is refused (422) regardless of anything else while this is off, exactly as if the shape didn't exist — see the send route below. */
   mediaOutboundEnabled?: boolean;
+  /** `WA_GROUPS_ENABLED`. Defaults `false`: every /groups route answers 404 `groups_disabled`. */
+  groupsEnabled?: boolean;
+}
+
+/** 1..max distinct strict-E.164 strings, or null. Duplicates are refused, never merged. */
+function parsePhones(value: unknown, max: number): string[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > max) return null;
+  if (!value.every((p) => typeof p === "string" && isE164(p))) return null;
+  return new Set(value).size === value.length ? (value as string[]) : null;
+}
+
+function decodeJid(raw: string): string | null {
+  try {
+    const jid = decodeURIComponent(raw);
+    return GROUP_JID_RE.test(jid) ? jid : null;
+  } catch {
+    return null;
+  }
 }
 
 export function createBridgeServer(deps: ServerDeps): Server {
   const { manager, store, bridgeSecret, log } = deps;
   const mediaOutboundEnabled = deps.mediaOutboundEnabled ?? false;
+  const groupsEnabled = deps.groupsEnabled ?? false;
   const bootedAt = Date.now();
 
   return createServer((req, res) => {
@@ -369,6 +403,184 @@ export function createBridgeServer(deps: ServerDeps): Server {
       return;
     }
 
+    // --- /sessions/:coachId/groups/… ---------------------------------------
+    // The flag check runs before any body parsing, so a disabled bridge
+    // answers the same way whatever the request looks like.
+    if (parts[2] === "groups") {
+      if (!groupsEnabled) {
+        sendError(res, 404, "groups_disabled", "groups are not enabled on this bridge");
+        return;
+      }
+      if (await handleGroups(req, res, coachId, parts)) return;
+    }
+
     sendError(res, 404, "not_found", "unknown route");
+  }
+
+  /** Returns true when the request matched a group route and a response was sent. */
+  async function handleGroups(req: IncomingMessage, res: ServerResponse, coachId: string, parts: string[]): Promise<boolean> {
+    const notConnected = (status: string) => sendError(res, 409, "session_not_connected", `session status is '${status}' — connect and link a device first`);
+    const leaseUnavailable = () => sendError(res, 503, "lease_unavailable", "session held by another bridge instance — retry shortly");
+    const badJid = () => sendError(res, 422, "invalid_group_jid", "group id must look like 1234567890@g.us");
+    const badBody = () => sendError(res, 400, "invalid_body", "body must be a JSON object under 64KB");
+
+    // POST /groups
+    if (req.method === "POST" && parts.length === 3) {
+      const body = await readJsonBody(req);
+      if (!body) return badBody(), true;
+      const subject = typeof body.subject === "string" ? body.subject.trim() : "";
+      if (subject.length < 1 || subject.length > MAX_GROUP_SUBJECT_LENGTH) {
+        sendError(res, 422, "invalid_subject", `'subject' must be 1 to ${MAX_GROUP_SUBJECT_LENGTH} characters`);
+        return true;
+      }
+      const description = body.description;
+      if (description !== undefined && (typeof description !== "string" || description.length > MAX_GROUP_DESCRIPTION_LENGTH)) {
+        sendError(res, 422, "invalid_description", `'description' must be a string of at most ${MAX_GROUP_DESCRIPTION_LENGTH} characters`);
+        return true;
+      }
+      const participants = parsePhones(body.participants, MAX_GROUP_CREATE_PARTICIPANTS);
+      if (!participants) {
+        sendError(res, 422, "invalid_participants", `'participants' must be 1 to ${MAX_GROUP_CREATE_PARTICIPANTS} distinct strict E.164 numbers`);
+        return true;
+      }
+      const { announceOnly = false, adminAddOnly = false } = body;
+      if (typeof announceOnly !== "boolean" || typeof adminAddOnly !== "boolean") {
+        sendError(res, 422, "invalid_body", "'announceOnly' and 'adminAddOnly' must be booleans when present");
+        return true;
+      }
+      const outcome = await manager.createGroup(coachId, { subject, description: description as string | undefined, participants, announceOnly, adminAddOnly });
+      switch (outcome.kind) {
+        case "created":
+          sendJson(res, 201, { ok: true, group: outcome.group, results: outcome.results });
+          return true;
+        case "session_not_connected":
+          return notConnected(outcome.status), true;
+        case "group_create_cap_reached":
+          sendError(res, 429, "group_create_cap_reached", `daily cap of ${outcome.cap} group creations reached for this session — resumes at UTC midnight`);
+          return true;
+        case "lease_unavailable":
+          return leaseUnavailable(), true;
+        case "whatsapp_refused":
+          sendError(res, 502, "whatsapp_refused", "WhatsApp refused to create the group");
+          return true;
+      }
+    }
+
+    // GET /groups/jobs/:jobId
+    if (req.method === "GET" && parts[3] === "jobs" && parts[4] && parts.length === 5) {
+      if (!UUID_RE.test(parts[4])) {
+        sendError(res, 400, "invalid_job_id", "job id must be a UUID");
+        return true;
+      }
+      const job = await store.getGroupJob(coachId, parts[4]);
+      if (!job) {
+        sendError(res, 404, "not_found", "no such group job for this coach");
+        return true;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        job: { id: job.id, status: job.status, requestedCount: job.requestedCount, results: job.results, createdAt: job.createdAt, finishedAt: job.finishedAt },
+      });
+      return true;
+    }
+
+    if (!parts[3]) return false;
+    const rest = parts.slice(4);
+
+    // GET /groups/:jid
+    if (req.method === "GET" && rest.length === 0) {
+      const jid = decodeJid(parts[3]);
+      if (!jid) return badJid(), true;
+      const outcome = await manager.getGroup(coachId, jid);
+      if (outcome.kind === "session_not_connected") return notConnected(outcome.status), true;
+      if (outcome.kind === "group_not_found") {
+        sendError(res, 404, "group_not_found", "group not found or its details could not be read");
+        return true;
+      }
+      const { jid: gJid, subject, participantCount, weAreAdmin, inviteCode } = outcome.group;
+      sendJson(res, 200, { ok: true, group: { jid: gJid, subject, participantCount, weAreAdmin, inviteCode } });
+      return true;
+    }
+
+    // POST /groups/:jid/invite/revoke
+    if (req.method === "POST" && rest.length === 2 && rest[0] === "invite" && rest[1] === "revoke") {
+      const jid = decodeJid(parts[3]);
+      if (!jid) return badJid(), true;
+      const outcome = await manager.revokeGroupInvite(coachId, jid);
+      if (outcome.kind === "session_not_connected") return notConnected(outcome.status), true;
+      if (outcome.kind === "group_not_found") {
+        sendError(res, 404, "group_not_found", "group not found or its details could not be read");
+        return true;
+      }
+      sendJson(res, 200, { ok: true, inviteCode: outcome.inviteCode });
+      return true;
+    }
+
+    // POST /groups/:jid/participants
+    if (req.method === "POST" && rest.length === 1 && rest[0] === "participants") {
+      const jid = decodeJid(parts[3]);
+      if (!jid) return badJid(), true;
+      const body = await readJsonBody(req);
+      if (!body) return badBody(), true;
+      const add = parsePhones(body.add, MAX_GROUP_ADD_PARTICIPANTS);
+      if (!add) {
+        sendError(res, 422, "invalid_participants", `'add' must be 1 to ${MAX_GROUP_ADD_PARTICIPANTS} distinct strict E.164 numbers`);
+        return true;
+      }
+      const outcome = await manager.startAddJob(coachId, jid, add);
+      switch (outcome.kind) {
+        case "queued":
+          sendJson(res, 202, { ok: true, job: { id: outcome.job.id, status: "queued", requestedCount: outcome.job.requestedCount } });
+          return true;
+        case "session_not_connected":
+          return notConnected(outcome.status), true;
+        case "group_add_cap_reached":
+          sendError(res, 429, "group_add_cap_reached", "daily limit of group additions reached for this session — resumes at UTC midnight");
+          return true;
+        case "lease_unavailable":
+          return leaseUnavailable(), true;
+      }
+    }
+
+    // POST /groups/:jid/messages
+    if (req.method === "POST" && rest.length === 1 && rest[0] === "messages") {
+      const jid = decodeJid(parts[3]);
+      if (!jid) return badJid(), true;
+      const body = await readJsonBody(req);
+      if (!body) return badBody(), true;
+      const { text, idempotencyKey } = body;
+      if (typeof idempotencyKey !== "string" || !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
+        sendError(res, 422, "invalid_idempotency_key", "'idempotencyKey' must match [A-Za-z0-9_-]{1,128}");
+        return true;
+      }
+      if (typeof text !== "string" || text.length === 0 || text.length > MAX_TEXT_LENGTH) {
+        sendError(res, 422, "invalid_text", `'text' must be a non-empty string of at most ${MAX_TEXT_LENGTH} characters`);
+        return true;
+      }
+      const outcome = await manager.postToGroup(coachId, jid, text, idempotencyKey);
+      switch (outcome.kind) {
+        case "accepted": {
+          const { post, fresh } = outcome;
+          sendJson(res, fresh ? 202 : 200, {
+            ok: true,
+            replay: !fresh,
+            post: { id: post.id, idempotencyKey: post.idempotencyKey, status: post.status, waMessageId: post.waMessageId, error: post.error, createdAt: post.createdAt, sentAt: post.sentAt },
+          });
+          return true;
+        }
+        case "idempotency_conflict":
+          sendError(res, 422, "idempotency_conflict", "idempotencyKey already used for a different group — choose a new idempotencyKey");
+          return true;
+        case "session_not_connected":
+          return notConnected(outcome.status), true;
+        case "daily_cap_reached":
+          sendError(res, 429, "daily_cap_reached", `daily cap of ${outcome.cap} sends reached for this session — resumes at UTC midnight`);
+          return true;
+        case "lease_unavailable":
+          return leaseUnavailable(), true;
+      }
+    }
+
+    return false;
   }
 }

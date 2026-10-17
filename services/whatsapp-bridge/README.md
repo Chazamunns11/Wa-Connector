@@ -140,6 +140,28 @@ its own try/catch, so a `recordInboundMessage` write failing (transient
 Supabase error, whatever) is logged and dropped, never a crash. The message
 still exists on the linked phone regardless.
 
+## Group routes (`WA_GROUPS_ENABLED`)
+
+Off by default. While off, every route below answers `404 groups_disabled`
+(checked after the bearer gate, before the body is read). Same bearer auth and
+strict-UUID `:coachId` as the other routes; group ids (`:jid`, URL-encoded)
+must match `^[0-9]{5,20}(-[0-9]{5,20})?@g\.us$`.
+
+| Route | Body | Success |
+| --- | --- | --- |
+| `POST /sessions/:coachId/groups` | `{ subject (1..100), description? (0..2048), participants (1..5 E.164), announceOnly?, adminAddOnly? }` | `201 { group, results }` |
+| `POST /sessions/:coachId/groups/:jid/participants` | `{ add (1..50 E.164) }` | `202 { job: { id, status, requestedCount } }`; `429 group_add_cap_reached` |
+| `GET /sessions/:coachId/groups/jobs/:jobId` | none | `200 { job }` with per-phone results |
+| `POST /sessions/:coachId/groups/:jid/messages` | `{ text (1..4096), idempotencyKey }` | `202` fresh, `200` replay, `{ post }`; same pacer slot and daily cap as `/send` |
+| `GET /sessions/:coachId/groups/:jid` | none | `200 { group }` (never participant phones) |
+| `POST /sessions/:coachId/groups/:jid/invite/revoke` | none | `200 { inviteCode }` |
+
+Errors use the uniform `{ ok: false, error: { code, message } }` shape:
+`groups_disabled`, `invalid_group_jid`, `invalid_subject`, `invalid_description`,
+`invalid_participants`, `group_create_cap_reached`, `group_add_cap_reached`,
+`group_not_found`, `whatsapp_refused`, `session_not_connected`,
+`daily_cap_reached`, `lease_unavailable`, `idempotency_conflict`.
+
 ## Safety invariants (do not weaken)
 
 - Send targets must already be strict E.164 — the bridge refuses, it never
@@ -176,6 +198,10 @@ still exists on the linked phone regardless.
 - Credentials: AES-256-GCM, key only in this service's env, AAD-bound per row.
   Nothing credential-adjacent is ever logged (`LOG_LEVEL` floor for the
   Baileys child logger is `warn` for this reason).
+- Group adds are batched (`WA_GROUP_ADD_BATCH`) with a paced gap, capped per
+  day, and the bridge never sends private group invites; the portal sends
+  invite links as ordinary paced 1:1 texts. Group routes never log phones,
+  subjects, invite codes or secrets.
 
 ## Why outbound messages never render link previews
 
