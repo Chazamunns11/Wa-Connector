@@ -447,6 +447,9 @@ line for that one run. Do not add them to Vercel.
 - **Add status codes are observed, not published.** Status codes from WhatsApp
   for adds are observed behaviour, not a published API. An unknown code shows
   as "WhatsApp refused this add".
+- **Rewritten numbers may show as "not on WhatsApp".** WhatsApp rewrites some
+  numbers (Argentina "+54 9", older Mexico "+52 1", some Brazil numbers), so
+  they can look up as not on WhatsApp. UK numbers are unaffected.
 - **Daily caps per number.** 3 groups created, 50 people added, and group posts
   and invite links count toward the 150 messages.
 - **No workflow action yet.** Groups are managed from the PingWren dashboard

@@ -7,6 +7,8 @@
  * Phone numbers are NEVER logged here; this module does not log at all.
  */
 
+import { jidNormalizedUser } from "@whiskeysockets/baileys";
+
 export const GROUP_JID_RE = /^[0-9]{5,20}(-[0-9]{5,20})?@g\.us$/;
 
 export function isGroupJid(value: string): boolean {
@@ -193,8 +195,9 @@ export async function runAddJob(
     // LID-addressed groups answer with an @lid jid; the phone is mirrored in the node's attrs.
     const fallback = new Set<string>();
     for (const row of response) {
-      if (row.jid) byJid.set(row.jid, row.status);
-      for (const alt of [row.content?.attrs?.phone_number, row.content?.attrs?.lid]) {
+      if (row.jid) byJid.set(jidNormalizedUser(row.jid), row.status);
+      for (const raw of [row.content?.attrs?.phone_number, row.content?.attrs?.lid]) {
+        const alt = raw ? jidNormalizedUser(raw) : "";
         if (alt && !byJid.has(alt)) {
           byJid.set(alt, row.status);
           fallback.add(alt);
@@ -202,8 +205,9 @@ export async function runAddJob(
       }
     }
     for (const { phone, jid } of batch) {
-      const code = byJid.get(jid);
-      if (code !== undefined && !response.some((r) => r.jid === jid)) onFallbackMatch?.();
+      const key = jidNormalizedUser(jid);
+      const code = byJid.get(key);
+      if (code !== undefined && !response.some((r) => r.jid && jidNormalizedUser(r.jid) === key)) onFallbackMatch?.();
       outcome.set(phone, code === undefined ? { phone, code: "missing", outcome: "failed" } : { phone, code, outcome: outcomeForParticipantStatus(code) });
     }
     flush();

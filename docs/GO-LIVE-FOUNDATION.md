@@ -466,6 +466,10 @@ up to 50 people at a time, up to 256 in a group, post a message, copy the invite
 link and make a new one. Members who can't be added directly are sent the invite
 link as a normal WhatsApp message from the same number.
 
+**Known limit.** Numbers WhatsApp rewrites (Argentina "+54 9", older Mexico
+"+52 1", some Brazil numbers) may show as "not on WhatsApp". UK numbers are
+unaffected.
+
 **Rehearsal in test mode.** Stripe in test mode, spare sub-account, your own
 number plus one or two friendly numbers that expect the messages:
 

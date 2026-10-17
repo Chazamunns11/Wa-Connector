@@ -108,3 +108,18 @@ test("runAddJob: LID-addressed responses match through the phone_number / lid at
   assert.deepEqual(r.results.map((x) => x.outcome), ["added", "invite_needed", "failed"]);
   assert.equal(fallbacks.length, 2);
 });
+
+test("runAddJob: device-suffixed jids in the response still match the plain jid and phone_number attr", async () => {
+  const fallbacks: number[] = [];
+  const sock = {
+    onWhatsApp: async (...p: string[]) => p.map((ph) => ({ jid: `${ph.slice(1)}@s.whatsapp.net`, exists: true })),
+    groupParticipantsUpdate: async () => [
+      { status: "200", jid: "447700900101:12@s.whatsapp.net" },
+      { status: "403", jid: "222@lid", content: { attrs: { jid: "222@lid", phone_number: "447700900102:7@s.whatsapp.net" } } },
+    ],
+  };
+  const l = new GroupLimiter({ addBatch: 5, addGapMs: 1000, addJitterMs: 0, addsDailyCap: 50, createsDailyCap: 3 }, { addsToday: 0, createsToday: 0 }, () => 0, () => 0);
+  const r = await runAddJob(sock, l, "1@g.us", ["+447700900101", "+447700900102"], async () => {}, () => true, () => fallbacks.push(1));
+  assert.deepEqual(r.results.map((x) => x.outcome), ["added", "invite_needed"]);
+  assert.equal(fallbacks.length, 1);
+});

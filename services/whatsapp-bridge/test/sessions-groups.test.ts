@@ -56,3 +56,21 @@ test("createGroup: no resolvable participant answers invalid_participants and do
   assert.equal(created, 0);
   assert.equal(limiter.remainingCreatesToday(), 3);
 });
+
+test("createGroup: a successful create spends exactly one create", async () => {
+  const limiter = new GroupLimiter({ addBatch: 5, addGapMs: 1, addJitterMs: 0, addsDailyCap: 50, createsDailyCap: 3 }, { addsToday: 0, createsToday: 0 });
+  const sock = {
+    onWhatsApp: async (...p: string[]) => p.map((ph) => ({ jid: `${ph.slice(1)}@s.whatsapp.net`, exists: true })),
+    groupCreate: async () => ({ id: "120363401234567890@g.us", subject: "S", participants: [{ id: "447700900101@s.whatsapp.net" }] }),
+    groupInviteCode: async () => "Code1",
+    user: { id: "447700900100:1@s.whatsapp.net" },
+  };
+  const mgr = Object.create(SessionManager.prototype) as Record<string, unknown>;
+  mgr.sessions = new Map([["c1", { status: "connected", sock, groupLimiter: limiter }]]);
+  mgr.config = { groupCreatesDailyCap: 3 };
+  mgr.store = { createGroupJob: async () => ({}) };
+  mgr.log = { warn: () => {} };
+  const out = await (mgr as unknown as SessionManager).createGroup("c1", { subject: "S", participants: ["+447700900101"], announceOnly: false, adminAddOnly: false });
+  assert.equal(out.kind, "created");
+  assert.equal(limiter.remainingCreatesToday(), 2);
+});
