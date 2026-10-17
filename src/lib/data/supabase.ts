@@ -140,6 +140,8 @@ interface WhatsappInboundMessageRow {
   /** Opt-in groups (0007) — see `WhatsappInboundMessage.groupJid`/`senderName`. */
   group_jid?: string | null;
   sender_name?: string | null;
+  /** Missed calls (0010) — see `WhatsappInboundMessage.eventKind`. Absent on a row read before 0010. */
+  event_kind?: string | null;
 }
 
 function mapWhatsappInboundMessage(row: WhatsappInboundMessageRow): WhatsappInboundMessage {
@@ -161,6 +163,8 @@ function mapWhatsappInboundMessage(row: WhatsappInboundMessageRow): WhatsappInbo
     mediaSizeBytes: row.media_size_bytes ?? null,
     groupJid: row.group_jid ?? null,
     senderName: row.sender_name ?? null,
+    // 0010 reserves 'edit' | 'reaction' | 'delete' too; only 'missed_call' is surfaced until those ship.
+    eventKind: row.event_kind === "missed_call" ? "missed_call" : null,
   };
 }
 
@@ -175,11 +179,13 @@ function isFreshPendingMedia(row: WhatsappInboundMessageRow): boolean {
 /** Media plan (docs/MEDIA-PLAN.md §7d/§8) — same bucket name the bridge's own `WA_MEDIA_BUCKET` config defaults to (`services/whatsapp-bridge/src/config.ts`); read from the SAME env var name here so the two never silently drift onto different buckets. */
 const MEDIA_BUCKET = process.env.WA_MEDIA_BUCKET?.trim() || "wa-media";
 
+// `event_kind` (0010) sits in the BASE list too, for the same reason: a missed
+// call read without it would be pushed to GHL as an empty message.
 // `group_jid, sender_name` (0007) sit in the BASE list: 0007's deploy order
 // is "apply before the portal build that reads these", and a group row read
 // without `group_jid` would be pushed as a one-to-one reply from its sender.
 const WHATSAPP_INBOUND_BASE_COLUMNS =
-  "id, coach_id, from_phone, body, message_type, received_at, processed_at, resolution, push_attempts, push_error, created_at, group_jid, sender_name";
+  "id, coach_id, from_phone, body, message_type, received_at, processed_at, resolution, push_attempts, push_error, created_at, group_jid, sender_name, event_kind";
 const WHATSAPP_INBOUND_MEDIA_COLUMNS = "media_status, media_path, media_mime, media_size_bytes";
 
 /**

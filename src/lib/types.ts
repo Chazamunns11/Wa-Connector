@@ -459,6 +459,14 @@ export interface WhatsappInboundMessage {
   groupJid?: string | null;
   /** Opt-in groups (0007) — the group member's WhatsApp display name (≤60 chars), or `null` when WhatsApp gave none. Always `null` for a one-to-one reply. */
   senderName?: string | null;
+  /**
+   * Missed calls (0010) — `'missed_call'` for a row recording a missed
+   * WhatsApp call (`body` is `null`, `messageType` is `'missedVoiceCall'` or
+   * `'missedVideoCall'`); `null` for an ordinary message, and for any row
+   * read before 0010 is applied. Optional for the same fixture reason as
+   * `mediaStatus`.
+   */
+  eventKind?: "missed_call" | null;
 }
 
 /**
