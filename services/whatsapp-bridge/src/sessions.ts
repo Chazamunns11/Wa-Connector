@@ -148,6 +148,7 @@ import {
   type ParticipantsRequest,
 } from "./group-management.js";
 import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
+import { MissedCallTracker } from "./calls.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
 import { runMediaCapture } from "./media-capture.js";
 import { prepareOutboundAudio, resolveOutboundAttachment } from "./media-fetch.js";
@@ -1205,6 +1206,22 @@ export class SessionManager {
         this.log.error({ coachId, err: (err as Error).message }, "processInboundBatch threw unexpectedly — should be impossible");
       });
     });
+
+    // Missed calls (src/calls.ts) — observe only, never answer or reject.
+    // Subscribed only when WA_MISSED_CALLS_ENABLED is on.
+    if (this.config.missedCallsEnabled) {
+      const tracker = new MissedCallTracker({
+        resolvePnForLid: (lidJid) => sock.signalRepository.lidMapping.getPNForLID(lidJid),
+        hasRecentMissedCall: (id, phone, since) => this.store.hasRecentMissedCall(id, phone, since),
+        recordInboundMessage: (input) => this.store.recordInboundMessage(input),
+        schedulePoke: () => this.poke?.schedule(),
+        ownPhone: () => session.phoneNumber,
+        log: this.log,
+      });
+      sock.ev.on("call", (events) => {
+        void tracker.handle(coachId, events);
+      });
+    }
   }
 
   /**

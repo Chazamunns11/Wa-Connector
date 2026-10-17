@@ -541,7 +541,7 @@ export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertT
  * dead end, `processInboundBatch` gets one more resolution attempt for it
  * (`InboundDeps.resolvePnForLid`) before the message is finally dropped.
  */
-type SenderResolution = { kind: "resolved"; phone: string } | { kind: "unresolved_lid" } | { kind: "unmappable" };
+export type SenderResolution = { kind: "resolved"; phone: string } | { kind: "unresolved_lid" } | { kind: "unmappable" };
 
 /**
  * THE ONE PLACE a `s.whatsapp.net`-suffixed JID is ever turned into the
@@ -555,7 +555,7 @@ type SenderResolution = { kind: "resolved"; phone: string } | { kind: "unresolve
  * it) or whose resulting `+${user}` still fails this bridge's own strict
  * `isE164` gate (src/phone.ts) — this bridge REFUSES, it never repairs.
  */
-function pnJidToE164(jid: string): string | null {
+export function pnJidToE164(jid: string): string | null {
   const decoded = jidDecode(jid);
   if (decoded?.server !== "s.whatsapp.net") return null;
   const candidate = `+${decoded.user}`;
@@ -588,7 +588,7 @@ function pnJidToE164(jid: string): string | null {
  * structural guarantee) as a substitute for actually decoding the JID being
  * consulted.
  */
-function resolveSenderE164(remoteJid: string, remoteJidAlt: string | undefined): SenderResolution {
+export function resolveSenderE164(remoteJid: string, remoteJidAlt: string | undefined): SenderResolution {
   const decoded = jidDecode(remoteJid);
   if (!decoded) return { kind: "unmappable" };
 
@@ -702,6 +702,8 @@ export interface RecordInboundInput {
   groupJid: string | null;
   /** `InboundReply.senderName` — only meaningful on a group row. */
   senderName: string | null;
+  /** Non-message event kind (migration 0010); omitted for an ordinary message. */
+  eventKind?: "missed_call";
 }
 
 /**

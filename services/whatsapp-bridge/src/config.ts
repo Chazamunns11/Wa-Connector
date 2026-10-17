@@ -144,6 +144,8 @@ export interface BridgeConfig {
    * the image, probed at boot. Off (or ffmpeg missing) = audio sends as a file.
    */
   voiceTranscodeEnabled: boolean;
+  /** Log missed WhatsApp calls as inbound rows (src/calls.ts). Default off until the real-device check passes. */
+  missedCallsEnabled: boolean;
 }
 
 function required(name: string): string {
@@ -226,6 +228,7 @@ export function loadConfig(): BridgeConfig {
     inboundMediaPerTenantDaily: intWithDefault("WA_INBOUND_MEDIA_PER_TENANT_DAILY", 300),
     mediaBucket: process.env.WA_MEDIA_BUCKET?.trim() || "wa-media",
     voiceTranscodeEnabled: boolWithDefault("WA_VOICE_TRANSCODE_ENABLED", false),
+    missedCallsEnabled: boolWithDefault("WA_MISSED_CALLS_ENABLED", false),
   };
 
   if (config.lockTtlMs <= config.lockHeartbeatMs) {

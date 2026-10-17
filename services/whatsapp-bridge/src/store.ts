@@ -559,6 +559,8 @@ export class BridgeStore {
     groupJid?: string | null;
     /** The group member's push name (<=60 chars, src/inbound.ts), or null. Only written on a group row. */
     senderName?: string | null;
+    /** Non-message event kind (migration 0010). Omitted -> column untouched (NULL). */
+    eventKind?: "missed_call";
   }): Promise<{ fresh: boolean }> {
     if (input.groupJid != null && !isGroupJid(input.groupJid)) {
       throw new Error("[store] recordInboundMessage: refused a malformed group jid");
@@ -572,6 +574,7 @@ export class BridgeStore {
       received_at: input.receivedAt,
     };
     if (input.captureMedia) row.media_status = "pending";
+    if (input.eventKind) row.event_kind = input.eventKind;
     if (input.groupJid != null) {
       row.group_jid = input.groupJid;
       row.sender_name = input.senderName ?? null;
@@ -581,6 +584,28 @@ export class BridgeStore {
     // 23505 = unique_violation on (coach_id, wa_message_id) — a redelivery, not a failure.
     if (error && error.code !== "23505") throw error;
     return { fresh: false };
+  }
+
+  /**
+   * Has this caller already produced a missed-call row since `sinceIso`?
+   * One query on the partial index from migration 0010. On a DB error it
+   * returns false (and logs a fixed string) so a call is never silently
+   * lost because the check failed; the unique wa_message_id still dedups.
+   */
+  async hasRecentMissedCall(coachId: string, phoneE164: string, sinceIso: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_inbound_messages")
+      .select("id")
+      .eq("coach_id", coachId)
+      .eq("from_phone", phoneE164)
+      .eq("event_kind", "missed_call")
+      .gte("received_at", sinceIso)
+      .limit(1);
+    if (error) {
+      console.warn("[store] hasRecentMissedCall: query failed; treating as no recent call");
+      return false;
+    }
+    return (data?.length ?? 0) > 0;
   }
 
   // -------------------------------------------------------------------------

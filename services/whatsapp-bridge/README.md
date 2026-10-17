@@ -81,6 +81,24 @@ different: its build must not go live before 0006 to 0009 are applied, or every 
 recorded, the GHL inbound drain fails on every pass, and a GHL install
 (OAuth) errors after it has already written the account.
 
+
+## Missed WhatsApp calls
+
+The bridge notices calls that ring out unanswered and records each as an
+inbound row (`event_kind = 'missed_call'`, no body, message type
+`missedVoiceCall` or `missedVideoCall`), which the app posts to GoHighLevel. It
+only observes: it never answers or rejects a call.
+
+- **Flag:** `WA_MISSED_CALLS_ENABLED` (default `false`). Apply migration
+  `0010_missed_calls_and_receipts.sql` first.
+- A call is missed when it ends (`timeout`, `reject`, `terminate`) with no
+  `accept` from any device. Group calls and calls from the number itself are
+  ignored.
+- The caller is resolved like a message sender (phone JID, or a LID that
+  the session's LID mapping resolves); unresolvable callers are dropped.
+- At most one row per caller per 10 minutes.
+- Logs carry fixed strings only: no phones, JIDs or call ids.
+
 ## Voice notes (ffmpeg)
 
 Audio that GHL sends and that is not ogg/opus (an mp3, an m4a, GHL's own

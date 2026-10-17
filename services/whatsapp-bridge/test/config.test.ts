@@ -24,6 +24,7 @@ const POKE_KEYS = ["PORTAL_INBOUND_URL", "PORTAL_OUTBOUND_URL", "WA_INBOUND_POKE
 const MEDIA_KEYS = [
   "WA_MEDIA_OUTBOUND_ENABLED",
   "WA_MEDIA_INBOUND_ENABLED",
+  "WA_MISSED_CALLS_ENABLED",
   "WA_MEDIA_FETCH_TIMEOUT_MS",
   "WA_MEDIA_MAX_IMAGE_BYTES",
   "WA_MEDIA_MAX_AUDIO_BYTES",
@@ -334,4 +335,9 @@ test("config: group limits default to 3 creates and 50 direct adds a day, and re
     assert.equal(config.groupCreateDaily, 1);
     assert.equal(config.groupAddDaily, 10);
   });
+});
+
+test("config: WA_MISSED_CALLS_ENABLED defaults to false and reads true", () => {
+  withEnv({}, () => assert.equal(loadConfig().missedCallsEnabled, false));
+  withEnv({ WA_MISSED_CALLS_ENABLED: "true" }, () => assert.equal(loadConfig().missedCallsEnabled, true));
 });

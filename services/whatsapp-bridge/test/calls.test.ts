@@ -1,0 +1,180 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { pino } from "pino";
+import type { WACallEvent } from "@whiskeysockets/baileys";
+import { MissedCallTracker, type MissedCallDeps } from "../src/calls.js";
+
+const PN = "447700900123@s.whatsapp.net";
+const DATE = new Date("2026-10-17T10:00:00.000Z");
+
+function ev(status: WACallEvent["status"], over: Partial<WACallEvent> = {}): WACallEvent {
+  return { chatId: PN, from: PN, id: "CALL1", date: DATE, status, offline: false, ...over };
+}
+
+function setup(over: Partial<MissedCallDeps> = {}) {
+  const rows: Array<Parameters<MissedCallDeps["recordInboundMessage"]>[0]> = [];
+  const state = { pokes: 0, recent: false };
+  const deps: MissedCallDeps = {
+    resolvePnForLid: async () => null,
+    hasRecentMissedCall: async () => state.recent,
+    recordInboundMessage: async (i) => {
+      rows.push(i);
+      return { fresh: true };
+    },
+    schedulePoke: () => {
+      state.pokes++;
+    },
+    ownPhone: () => "+447700900999",
+    log: pino({ level: "silent" }),
+    ...over,
+  };
+  return { tracker: new MissedCallTracker(deps), rows, state };
+}
+
+test("offer then timeout -> one missed voice-call row", async () => {
+  const { tracker, rows, state } = setup();
+  await tracker.handle("coach1", [ev("offer")]);
+  await tracker.handle("coach1", [ev("timeout")]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0], {
+    coachId: "coach1",
+    fromPhone: "+447700900123",
+    waMessageId: "call:CALL1",
+    body: null,
+    messageType: "missedVoiceCall",
+    receivedAt: "2026-10-17T10:00:00.000Z",
+    groupJid: null,
+    senderName: null,
+    eventKind: "missed_call",
+  });
+  assert.equal(state.pokes, 1);
+});
+
+test("video call missed -> missedVideoCall", async () => {
+  const { tracker, rows } = setup();
+  await tracker.handle("c", [ev("offer", { isVideo: true }), ev("timeout", { isVideo: true })]);
+  assert.equal(rows[0]?.messageType, "missedVideoCall");
+});
+
+test("accepted call is never missed", async () => {
+  const { tracker, rows, state } = setup();
+  await tracker.handle("c", [ev("offer"), ev("accept"), ev("terminate")]);
+  assert.equal(rows.length, 0);
+  assert.equal(state.pokes, 0);
+});
+
+test("a late duplicate terminal after an answered call is still not missed", async () => {
+  const { tracker, rows } = setup();
+  await tracker.handle("c", [ev("offer"), ev("accept"), ev("terminate"), ev("terminate")]);
+  assert.equal(rows.length, 0);
+});
+
+test("reject without accept is missed", async () => {
+  const { tracker, rows } = setup();
+  await tracker.handle("c", [ev("offer"), ev("reject")]);
+  assert.equal(rows.length, 1);
+});
+
+test("group call ignored", async () => {
+  const { tracker, rows } = setup();
+  await tracker.handle("c", [ev("offer", { isGroup: true }), ev("timeout", { isGroup: true, groupJid: "123@g.us" })]);
+  assert.equal(rows.length, 0);
+});
+
+test("call from our own number ignored", async () => {
+  const { tracker, rows } = setup({ ownPhone: () => "+447700900123" });
+  await tracker.handle("c", [ev("offer"), ev("timeout")]);
+  assert.equal(rows.length, 0);
+});
+
+test("callerPn is used as the alt for a LID caller", async () => {
+  const { tracker, rows } = setup();
+  await tracker.handle("c", [ev("timeout", { from: "99999@lid", callerPn: PN })]);
+  assert.equal(rows[0]?.fromPhone, "+447700900123");
+});
+
+test("LID caller resolved via lidMapping", async () => {
+  const { tracker, rows } = setup({ resolvePnForLid: async (l) => (l === "99999@lid" ? "447700900555:3@s.whatsapp.net" : null) });
+  await tracker.handle("c", [ev("timeout", { from: "99999@lid" })]);
+  assert.equal(rows[0]?.fromPhone, "+447700900555");
+});
+
+test("unresolvable LID dropped, no row", async () => {
+  const { tracker, rows, state } = setup();
+  await tracker.handle("c", [ev("timeout", { from: "99999@lid" })]);
+  assert.equal(rows.length, 0);
+  assert.equal(state.pokes, 0);
+});
+
+test("rate limit: second missed call within 10 minutes is not recorded", async () => {
+  const seen: string[] = [];
+  const { tracker, rows, state } = setup({
+    hasRecentMissedCall: async (_c, _p, since) => {
+      seen.push(since);
+      return true;
+    },
+  });
+  await tracker.handle("c", [ev("timeout", { id: "CALL2" })]);
+  assert.equal(rows.length, 0);
+  assert.equal(state.pokes, 0);
+  assert.deepEqual(seen, ["2026-10-17T09:50:00.000Z"]);
+});
+
+test("duplicate terminal events for one call -> one row", async () => {
+  const { tracker, rows, state } = setup();
+  await tracker.handle("c", [ev("timeout"), ev("terminate")]);
+  assert.equal(rows.length, 1);
+  assert.equal(state.pokes, 1);
+});
+
+test("redelivered call (store says not fresh) -> no poke", async () => {
+  const { tracker, state } = setup({ recordInboundMessage: async () => ({ fresh: false }) });
+  await tracker.handle("c", [ev("timeout")]);
+  assert.equal(state.pokes, 0);
+});
+
+test("a thrown store error doesn't throw out of handle, and later events still process", async () => {
+  let n = 0;
+  const { tracker, state } = setup({
+    recordInboundMessage: async () => {
+      if (n++ === 0) throw new Error("db down");
+      return { fresh: true };
+    },
+  });
+  await assert.doesNotReject(tracker.handle("c", [ev("timeout", { id: "A" }), ev("timeout", { id: "B", from: "447700900124@s.whatsapp.net" })]));
+  assert.equal(state.pokes, 1);
+});
+
+test("per-call state is swept after 10 minutes", async () => {
+  let t = 0;
+  const rows2: unknown[] = [];
+  const tracker = new MissedCallTracker(
+    {
+      resolvePnForLid: async () => null,
+      hasRecentMissedCall: async () => false,
+      recordInboundMessage: async (i) => {
+        rows2.push(i);
+        return { fresh: true };
+      },
+      schedulePoke: () => {},
+      ownPhone: () => null,
+      log: pino({ level: "silent" }),
+    },
+    () => t,
+  );
+  await tracker.handle("c", [ev("accept")]);
+  t = 11 * 60 * 1000;
+  await tracker.handle("c", [ev("terminate")]);
+  assert.equal(rows2.length, 1, "swept accept no longer protects the call");
+});
+
+test("wiring: sessions.ts subscribes to call only behind missedCallsEnabled", () => {
+  const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/sessions.ts"), "utf8");
+  const m = /if \(this\.config\.missedCallsEnabled\) \{[\s\S]*?\n    \}\n/.exec(src);
+  assert.ok(m, "missedCallsEnabled block present");
+  assert.match(m[0], /sock\.ev\.on\("call"/);
+  assert.equal((src.match(/ev\.on\("call"/g) ?? []).length, 1, "only one call subscription, inside the block");
+});
