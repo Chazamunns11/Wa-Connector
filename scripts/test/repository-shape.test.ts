@@ -83,17 +83,26 @@ const METHODS = [
   "clearOptOut",
   "isOptedOut",
   "countOptOutsByTenant",
+  "upsertTriggerSubscription",
+  "deleteTriggerSubscription",
+  "listTriggerSubscriptions",
+  "listLocationsWithTriggerKeys",
+  "rememberNotOnWhatsapp",
+  "isRememberedNotOnWhatsapp",
+  "forgetNotOnWhatsapp",
+  "setSessionTriggerState",
+  "listSessionsForTriggers",
 ] as const;
 
-test("SupabaseGhlRepository implements all 74 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 74);
-  assert.equal(new Set(METHODS).size, 74);
+test("SupabaseGhlRepository implements all 83 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 83);
+  assert.equal(new Set(METHODS).size, 83);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 74", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 83", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });

@@ -685,3 +685,18 @@ export interface LocationStats {
   failedLast7Days: { count: number; reasons: string[] };
   everReceived: boolean;
 }
+
+/** One number's session joined with its slot and label, for the workflow-trigger connection watcher. */
+export interface TriggerSessionRow {
+  tenantId: string;
+  locationId: string;
+  slot: number;
+  label: string | null;
+  phone: string | null;
+  status: WhatsappSessionStatus;
+  /** When the number was first seen down; null while up. */
+  downSince: string | null;
+  /** The last connection trigger fired for this number. */
+  lastFired: "down" | "up" | null;
+  lastConnectedAt: string | null;
+}

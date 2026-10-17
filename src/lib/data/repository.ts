@@ -30,7 +30,9 @@ import type {
   WhatsappGroup,
   WhatsappInboundMessage,
   WhatsappSessionSummary,
+  TriggerSessionRow,
 } from "@/lib/types";
+import type { TriggerKey } from "@/lib/ghl-trigger-keys";
 
 export interface GhlRepository {
   /**
@@ -803,6 +805,31 @@ export interface GhlRepository {
   isOptedOut(tenantId: string, phone: string): Promise<boolean>;
   /** Opt-out counts per tenant; every requested id appears (0 when none). */
   countOptOutsByTenant(tenantIds: string[]): Promise<Map<string, number>>;
+  /** Stores (or replaces, by GHL triggerData.id) a workflow trigger subscription. */
+  upsertTriggerSubscription(sub: {
+    id: string;
+    locationId: string;
+    workflowId: string | null;
+    triggerKey: TriggerKey;
+    targetUrl: string;
+    filters: unknown;
+  }): Promise<void>;
+  /** Removes a workflow trigger subscription; a no-op when absent. */
+  deleteTriggerSubscription(id: string): Promise<void>;
+  /** The subscriptions of this location for this trigger key. */
+  listTriggerSubscriptions(locationId: string, key: TriggerKey): Promise<{ id: string; targetUrl: string }[]>;
+  /** Locations that have at least one subscription for any of these keys. */
+  listLocationsWithTriggerKeys(keys: TriggerKey[]): Promise<string[]>;
+  /** Remembers that this phone is not on WhatsApp for this location until `untilIso`. */
+  rememberNotOnWhatsapp(locationId: string, phoneE164: string, untilIso: string): Promise<void>;
+  /** True while a not-on-WhatsApp memory for (location, phone) has not expired at `nowIso`. */
+  isRememberedNotOnWhatsapp(locationId: string, phoneE164: string, nowIso: string): Promise<boolean>;
+  /** Clears the not-on-WhatsApp memory for (location, phone); a no-op when absent. */
+  forgetNotOnWhatsapp(locationId: string, phoneE164: string): Promise<void>;
+  /** Sets the connection-trigger state of a number's session. */
+  setSessionTriggerState(tenantId: string, state: { downSince: string | null; lastFired: "down" | "up" | null }): Promise<void>;
+  /** Sessions (with slot and label) of the given locations' numbers, for the connection watcher. */
+  listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]>;
   /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */
   recordStripeEvent(eventId: string, type: string): Promise<boolean>;
   /** Releases a recorded Stripe event id after a processing failure so Stripe's retry is handled, not dropped as a duplicate. */

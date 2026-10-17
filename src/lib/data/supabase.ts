@@ -31,6 +31,7 @@ import type {
   LocationStats,
   Role,
   Scope,
+  TriggerSessionRow,
   WhatsappGroup,
   WhatsappInboundMessage,
   WhatsappSessionStatus,
@@ -51,6 +52,7 @@ import {
   type GhlWaitingHealthRow,
 } from "@/lib/ghl-health";
 import { locationTenantIds, nextFreeSlot, promoteAfterRemoval, shouldReplaceSticky } from "@/lib/location-numbers";
+import type { TriggerKey } from "@/lib/ghl-trigger-keys";
 import { isWhatsappGroupJid } from "@/lib/whatsapp-bridge";
 import type { GhlRepository } from "./repository";
 
@@ -2067,6 +2069,153 @@ export class SupabaseGhlRepository implements GhlRepository {
       if (page.length < PAGE_SIZE) break;
     }
     return counts;
+  }
+
+  async upsertTriggerSubscription(sub: {
+    id: string;
+    locationId: string;
+    workflowId: string | null;
+    triggerKey: TriggerKey;
+    targetUrl: string;
+    filters: unknown;
+  }) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_workflow_trigger_subscriptions").upsert(
+      {
+        id: sub.id,
+        location_id: sub.locationId,
+        workflow_id: sub.workflowId,
+        trigger_key: sub.triggerKey,
+        target_url: sub.targetUrl,
+        filters: sub.filters ?? [],
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }
+    );
+    if (error) throw error;
+  }
+
+  async deleteTriggerSubscription(id: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_workflow_trigger_subscriptions").delete().eq("id", id);
+    if (error) throw error;
+  }
+
+  async listTriggerSubscriptions(locationId: string, key: TriggerKey) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_workflow_trigger_subscriptions")
+      .select("id, target_url")
+      .eq("location_id", locationId)
+      .eq("trigger_key", key)
+      .order("id", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as { id: string; target_url: string }[]).map((r) => ({ id: r.id, targetUrl: r.target_url }));
+  }
+
+  async listLocationsWithTriggerKeys(keys: TriggerKey[]) {
+    if (keys.length === 0) return [];
+    const supabase = getServiceClient();
+    const locations = new Set<string>();
+    const PAGE_SIZE = 1000;
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from("ghl_workflow_trigger_subscriptions")
+        .select("location_id")
+        .in("trigger_key", keys)
+        .order("id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      const page = (data ?? []) as { location_id: string }[];
+      for (const r of page) locations.add(r.location_id);
+      if (page.length < PAGE_SIZE) break;
+    }
+    return [...locations];
+  }
+
+  async rememberNotOnWhatsapp(locationId: string, phoneE164: string, untilIso: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_not_on_whatsapp")
+      .upsert({ location_id: locationId, phone_e164: phoneE164, until: untilIso }, { onConflict: "location_id,phone_e164" });
+    if (error) throw error;
+  }
+
+  async isRememberedNotOnWhatsapp(locationId: string, phoneE164: string, nowIso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_not_on_whatsapp")
+      .select("phone_e164")
+      .eq("location_id", locationId)
+      .eq("phone_e164", phoneE164)
+      .gt("until", nowIso)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async forgetNotOnWhatsapp(locationId: string, phoneE164: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_not_on_whatsapp").delete().eq("location_id", locationId).eq("phone_e164", phoneE164);
+    if (error) throw error;
+  }
+
+  async setSessionTriggerState(tenantId: string, state: { downSince: string | null; lastFired: "down" | "up" | null }) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("whatsapp_sessions")
+      .update({ trigger_down_since: state.downSince, trigger_last_fired: state.lastFired })
+      .eq("coach_id", tenantId);
+    if (error) throw error;
+  }
+
+  async listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]> {
+    if (locationIds.length === 0) return [];
+    const supabase = getServiceClient();
+    const { data: numberData, error: numberError } = await supabase
+      .from("ghl_location_numbers")
+      .select("tenant_id, location_id, slot, label")
+      .in("location_id", locationIds);
+    if (numberError) throw numberError;
+    const numbers = (numberData ?? []) as { tenant_id: string; location_id: string; slot: number; label: string | null }[];
+    if (numbers.length === 0) return [];
+    const { data: sessionData, error: sessionError } = await supabase
+      .from("whatsapp_sessions")
+      .select("coach_id, status, phone_number, last_connected_at, trigger_down_since, trigger_last_fired")
+      .in(
+        "coach_id",
+        numbers.map((n) => n.tenant_id)
+      );
+    if (sessionError) throw sessionError;
+    const sessions = new Map(
+      (
+        (sessionData ?? []) as {
+          coach_id: string;
+          status: WhatsappSessionStatus;
+          phone_number: string | null;
+          last_connected_at: string | null;
+          trigger_down_since: string | null;
+          trigger_last_fired: "down" | "up" | null;
+        }[]
+      ).map((r) => [r.coach_id, r])
+    );
+    const rows: TriggerSessionRow[] = [];
+    for (const n of numbers) {
+      const s = sessions.get(n.tenant_id);
+      if (!s) continue; // a number with no session row was never linked
+      rows.push({
+        tenantId: n.tenant_id,
+        locationId: n.location_id,
+        slot: n.slot,
+        label: n.label,
+        phone: s.phone_number,
+        status: s.status,
+        downSince: s.trigger_down_since,
+        lastFired: s.trigger_last_fired,
+        lastConnectedAt: s.last_connected_at,
+      });
+    }
+    return rows;
   }
 
   async recordStripeEvent(eventId: string, type: string) {
