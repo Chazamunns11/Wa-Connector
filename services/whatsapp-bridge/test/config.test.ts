@@ -346,3 +346,8 @@ test("config: WA_READ_RECEIPTS_ENABLED defaults to false and reads true", () => 
   withEnv({}, () => assert.equal(loadConfig().readReceiptsEnabled, false));
   withEnv({ WA_READ_RECEIPTS_ENABLED: "true" }, () => assert.equal(loadConfig().readReceiptsEnabled, true));
 });
+
+test("config: WA_INBOUND_EVENTS_ENABLED defaults to false and reads true", () => {
+  withEnv({}, () => assert.equal(loadConfig().inboundEventsEnabled, false));
+  withEnv({ WA_INBOUND_EVENTS_ENABLED: "true" }, () => assert.equal(loadConfig().inboundEventsEnabled, true));
+});

@@ -148,6 +148,12 @@ export interface BridgeConfig {
   missedCallsEnabled: boolean;
   /** Record delivered / read receipts on sent messages (src/receipts.ts). Default off until the real-device check passes. */
   readReceiptsEnabled: boolean;
+  /**
+   * Record a contact's edits, reactions and deletes as event rows and render
+   * quoted replies (src/inbound.ts, migration 0011). Default off: events are
+   * dropped and quotes ignored, exactly as before.
+   */
+  inboundEventsEnabled: boolean;
 }
 
 function required(name: string): string {
@@ -232,6 +238,7 @@ export function loadConfig(): BridgeConfig {
     voiceTranscodeEnabled: boolWithDefault("WA_VOICE_TRANSCODE_ENABLED", false),
     missedCallsEnabled: boolWithDefault("WA_MISSED_CALLS_ENABLED", false),
     readReceiptsEnabled: boolWithDefault("WA_READ_RECEIPTS_ENABLED", false),
+    inboundEventsEnabled: boolWithDefault("WA_INBOUND_EVENTS_ENABLED", false),
   };
 
   if (config.lockTtlMs <= config.lockHeartbeatMs) {

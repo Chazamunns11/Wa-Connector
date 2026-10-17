@@ -596,7 +596,11 @@ export class BridgeStore {
     /** The group member's push name (<=60 chars, src/inbound.ts), or null. Only written on a group row. */
     senderName?: string | null;
     /** Non-message event kind (migration 0010). Omitted -> column untouched (NULL). */
-    eventKind?: "missed_call";
+    eventKind?: "missed_call" | "edit" | "reaction" | "delete";
+    /** Edit/reaction/delete rows (migration 0011): the wa_message_id the event acts on. Omitted -> column untouched (NULL). */
+    targetWaMessageId?: string | null;
+    /** Edit/reaction/delete rows (migration 0011): whether that target is ours. Omitted or null -> column untouched (NULL). */
+    targetFromMe?: boolean | null;
   }): Promise<{ fresh: boolean }> {
     if (input.groupJid != null && !isGroupJid(input.groupJid)) {
       throw new Error("[store] recordInboundMessage: refused a malformed group jid");
@@ -611,6 +615,8 @@ export class BridgeStore {
     };
     if (input.captureMedia) row.media_status = "pending";
     if (input.eventKind) row.event_kind = input.eventKind;
+    if (input.targetWaMessageId != null) row.target_wa_message_id = input.targetWaMessageId;
+    if (input.targetFromMe != null) row.target_from_me = input.targetFromMe;
     if (input.groupJid != null) {
       row.group_jid = input.groupJid;
       row.sender_name = input.senderName ?? null;

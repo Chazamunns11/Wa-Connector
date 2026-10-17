@@ -128,6 +128,35 @@ events.
 - The absence of a read receipt means nothing: people turn read receipts off.
 - Logs carry fixed strings and error names only: no message ids or JIDs.
 
+## Edits, reactions, deletes and quoted replies
+
+The bridge records a contact's edits, reactions and "delete for everyone" as
+inbound event rows, and puts a quoted reply's quote in front of its body. The
+app decides what to post to GoHighLevel (reactions and deletes only when the
+sub-account turns them on).
+
+- **Flag:** `WA_INBOUND_EVENTS_ENABLED` (default `false`). Apply migration
+  `0011_message_events.sql` first. Off means today's behaviour exactly: events
+  are dropped and quotes are ignored.
+- Each event row has its own `wa_message_id` (so redelivery still dedupes),
+  `message_type = 'event'`, no media, `event_kind` and `target_wa_message_id`
+  (the message it acts on):
+  - `reaction`: body is the emoji. `target_from_me` is true for a reaction to
+    one of our messages. A removed reaction (empty emoji) is ignored.
+  - `edit`: body is the new text (or new caption). An edit with no text is
+    ignored.
+  - `delete`: no body.
+- An event is found inside any wrapper (disappearing messages, view-once,
+  and the rest) and is never treated as a fresh message. Polls and other
+  protocol messages stay dropped. Our own edits, reactions and deletes stay
+  dropped.
+- Quoted reply: the body starts with `↩ "<first 80 characters of the quoted
+  text>"`, or `↩ (photo)`, `↩ (video)`, `↩ (voice note)`, `↩ (audio)`,
+  `↩ (document)`, `↩ (sticker)`, otherwise `↩ (message)`, then a newline and
+  the reply. The reply text is cut to fit 500 characters, never the prefix. A
+  media reply's body stays empty, as before.
+- Logs carry fixed drop reasons only: no text, emoji, ids, phones or JIDs.
+
 ## Voice notes (ffmpeg)
 
 Audio that GHL sends and that is not ogg/opus (an mp3, an m4a, GHL's own

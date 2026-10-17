@@ -507,6 +507,19 @@ test("store.recordInboundMessage: a group row carries group_jid and sender_name;
   assert.equal("sender_name" in inserts[1]!.row, false);
 });
 
+test("store.recordInboundMessage: an event row writes event_kind and its target; an ordinary row names neither target column", async () => {
+  const { store, inserts } = storeWithFakeClient();
+  await store.recordInboundMessage({ coachId: TENANT, fromPhone: "+447700900555", waMessageId: "E1", body: "👍", messageType: "event", receivedAt: "x", groupJid: null, senderName: null, eventKind: "reaction", targetWaMessageId: "T1", targetFromMe: true });
+  assert.equal(inserts[0]?.row.event_kind, "reaction");
+  assert.equal(inserts[0]?.row.target_wa_message_id, "T1");
+  assert.equal(inserts[0]?.row.target_from_me, true);
+  await store.recordInboundMessage({ coachId: TENANT, fromPhone: "+447700900555", waMessageId: "E2", body: null, messageType: "event", receivedAt: "x", groupJid: null, senderName: null, eventKind: "delete", targetWaMessageId: "T2", targetFromMe: null });
+  assert.equal(inserts[1]?.row.target_wa_message_id, "T2");
+  assert.equal("target_from_me" in inserts[1]!.row, false);
+  await store.recordInboundMessage({ coachId: TENANT, fromPhone: "+447700900555", waMessageId: "M3", body: "hi", messageType: "conversation", receivedAt: "x", groupJid: null, senderName: null });
+  for (const column of ["event_kind", "target_wa_message_id", "target_from_me"]) assert.equal(column in inserts[2]!.row, false);
+});
+
 test("store.acceptMessage: a group target writes group_jid with no to_phone; a malformed JID is refused before Supabase", async () => {
   const { store, inserts, touched } = storeWithFakeClient();
   const { record } = await store.acceptMessage(TENANT, "g-1", { groupJid: GROUP_JID });

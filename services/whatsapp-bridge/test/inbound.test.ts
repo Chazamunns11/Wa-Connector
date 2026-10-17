@@ -11,6 +11,7 @@ import { pino } from "pino";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import {
   classifyInboundMessage,
+  renderQuotePrefix,
   processInboundBatch,
   type InboundDeps,
   type RecordInboundInput,
@@ -639,4 +640,337 @@ test("groups: the rest of the filter chain still applies to an enabled group (fr
 test("groups: a malformed @g.us JID is dropped even if it were somehow in the set", () => {
   const bad = "abc@g.us";
   assert.deepEqual(classifyInboundMessage(groupMsg({ key: { remoteJid: bad } }), "notify", new Set([bad])), { kind: "dropped", reason: "group_not_enabled" });
+});
+
+// ---------------------------------------------------------------------------
+// Message events and quoted replies (WA_INBOUND_EVENTS_ENABLED) — the
+// message-events plan, Task 2. Every test below passes `{ events: true }`;
+// the flag-off behaviour is pinned by every test above (unedited) and by the
+// "events flag off" test at the end of this section.
+// ---------------------------------------------------------------------------
+
+const EVENTS_ON = { events: true } as const;
+const REVOKE = 0; // proto.Message.ProtocolMessage.Type.REVOKE
+const MESSAGE_EDIT = 14; // proto.Message.ProtocolMessage.Type.MESSAGE_EDIT
+
+function classifyEvent(message: Record<string, unknown>, key: NonNullable<Parameters<typeof makeMsg>[0]>["key"] = {}) {
+  return classifyInboundMessage(makeMsg({ message, key: { id: "EVT1", ...key } }), "notify", undefined, EVENTS_ON);
+}
+
+function replyOf(result: ReturnType<typeof classifyInboundMessage>) {
+  assert.equal(result.kind, "reply");
+  if (result.kind !== "reply") throw new Error("unreachable");
+  return result.reply;
+}
+
+const reactionPayload = { reactionMessage: { text: "👍", key: { id: "TARGET1", fromMe: false } } };
+const revokePayload = { protocolMessage: { type: REVOKE, key: { id: "TARGET2", fromMe: true } } };
+const editPayload = { protocolMessage: { type: MESSAGE_EDIT, key: { id: "TARGET3", fromMe: true }, editedMessage: { conversation: "new text" } } };
+
+const WRAPPINGS: Array<[string, (inner: Record<string, unknown>) => Record<string, unknown>]> = [
+  ["top level", (inner) => inner],
+  ["inside ephemeralMessage", (inner) => ({ ephemeralMessage: { message: inner } })],
+  ["inside viewOnceMessageV2", (inner) => ({ viewOnceMessageV2: { message: inner } })],
+];
+
+for (const [where, wrap] of WRAPPINGS) {
+  test(`events: reaction ${where} is a reaction event`, () => {
+    const reply = replyOf(classifyEvent(wrap(reactionPayload)));
+    assert.equal(reply.eventKind, "reaction");
+    assert.equal(reply.body, "👍");
+    assert.equal(reply.targetWaMessageId, "TARGET1");
+    assert.equal(reply.targetFromMe, false);
+    assert.equal(reply.messageType, "event");
+    assert.equal(reply.mediaRef, null);
+    assert.equal(reply.waMessageId, "EVT1");
+    assert.equal(reply.fromPhone, PROSPECT_PHONE);
+  });
+
+  test(`events: revoke ${where} is a delete event`, () => {
+    const reply = replyOf(classifyEvent(wrap(revokePayload)));
+    assert.equal(reply.eventKind, "delete");
+    assert.equal(reply.body, null);
+    assert.equal(reply.targetWaMessageId, "TARGET2");
+    assert.equal(reply.messageType, "event");
+    assert.equal(reply.mediaRef, null);
+  });
+
+  test(`events: edit ${where} is an edit event`, () => {
+    const reply = replyOf(classifyEvent(wrap(editPayload)));
+    assert.equal(reply.eventKind, "edit");
+    assert.equal(reply.body, "new text");
+    assert.equal(reply.targetWaMessageId, "TARGET3");
+    assert.equal(reply.messageType, "event");
+    assert.equal(reply.mediaRef, null);
+  });
+}
+
+test("events: reaction removed (empty text) dropped as reaction_removed", () => {
+  assert.deepEqual(classifyEvent({ reactionMessage: { text: "", key: { id: "TARGET1" } } }), { kind: "dropped", reason: "reaction_removed" });
+  assert.deepEqual(
+    classifyEvent({ ephemeralMessage: { message: { reactionMessage: { text: "", key: { id: "TARGET1" } } } } }),
+    { kind: "dropped", reason: "reaction_removed" }
+  );
+});
+
+test("events: reaction to our message sets targetFromMe true", () => {
+  const reply = replyOf(classifyEvent({ reactionMessage: { text: "❤️", key: { id: "OURS1", fromMe: true } } }));
+  assert.equal(reply.targetFromMe, true);
+  assert.equal(reply.targetWaMessageId, "OURS1");
+  assert.equal(reply.body, "❤️");
+});
+
+test("events: revoke → delete with target id", () => {
+  const reply = replyOf(classifyEvent(revokePayload));
+  assert.equal(reply.eventKind, "delete");
+  assert.equal(reply.targetWaMessageId, "TARGET2");
+  assert.equal(reply.waMessageId, "EVT1", "the event row keeps its own wa_message_id, so the dedupe still holds");
+});
+
+test("events: edit via protocolMessage MESSAGE_EDIT", () => {
+  const reply = replyOf(classifyEvent(editPayload));
+  assert.equal(reply.eventKind, "edit");
+  assert.equal(reply.body, "new text");
+  assert.equal(reply.targetWaMessageId, "TARGET3");
+  assert.equal(reply.targetFromMe, false);
+});
+
+test("events: edit via editedMessage wrapper (the wire shape: editedMessage around a MESSAGE_EDIT protocolMessage)", () => {
+  const reply = replyOf(classifyEvent({ editedMessage: { message: editPayload } }));
+  assert.equal(reply.eventKind, "edit");
+  assert.equal(reply.body, "new text");
+  assert.equal(reply.targetWaMessageId, "TARGET3");
+});
+
+test("events: an editedMessage wrapper inside ephemeralMessage is still an edit, never fresh content", () => {
+  const reply = replyOf(classifyEvent({ ephemeralMessage: { message: { editedMessage: { message: editPayload } } } }));
+  assert.equal(reply.eventKind, "edit");
+  assert.equal(reply.targetWaMessageId, "TARGET3");
+});
+
+test("events: a bare editedMessage wrapper with no MESSAGE_EDIT inside names no target, so it stays dropped (never fresh content)", () => {
+  assert.deepEqual(
+    classifyEvent({ editedMessage: { message: { conversation: "edited text" } } }),
+    { kind: "dropped", reason: "edit_reaction_or_system" }
+  );
+});
+
+test("events: an edit of a caption carries the new caption as the body", () => {
+  const reply = replyOf(
+    classifyEvent({ protocolMessage: { type: MESSAGE_EDIT, key: { id: "TARGET3" }, editedMessage: { imageMessage: { caption: "new caption" } } } })
+  );
+  assert.equal(reply.eventKind, "edit");
+  assert.equal(reply.body, "new caption");
+});
+
+test("events: an edit with no text (caption-only edit with no caption) is dropped as no_content", () => {
+  assert.deepEqual(
+    classifyEvent({ protocolMessage: { type: MESSAGE_EDIT, key: { id: "TARGET3" }, editedMessage: { imageMessage: {} } } }),
+    { kind: "dropped", reason: "no_content" }
+  );
+});
+
+test("events: the edit body is sanitised (NUL stripped, 500 code points)", () => {
+  const nul = String.fromCharCode(0);
+  const long = `a${nul}` + "x".repeat(900);
+  const reply = replyOf(classifyEvent({ protocolMessage: { type: MESSAGE_EDIT, key: { id: "T" }, editedMessage: { conversation: long } } }));
+  assert.equal([...reply.body!].length, 500);
+  assert.ok(!reply.body!.includes(nul));
+});
+
+test("events: other protocolMessage types stay dropped as edit_reaction_or_system", () => {
+  assert.deepEqual(classifyEvent({ protocolMessage: { type: 3 } }), { kind: "dropped", reason: "edit_reaction_or_system" }); // EPHEMERAL_SETTING
+  assert.deepEqual(classifyEvent({ protocolMessage: { type: 6 } }), { kind: "dropped", reason: "edit_reaction_or_system" }); // APP_STATE_SYNC_KEY_SHARE
+});
+
+test("events: a revoke with no target id is dropped, never stored without a target", () => {
+  assert.deepEqual(classifyEvent({ protocolMessage: { type: REVOKE } }), { kind: "dropped", reason: "edit_reaction_or_system" });
+});
+
+test("events: poll update still dropped", () => {
+  assert.deepEqual(classifyEvent({ pollUpdateMessage: { vote: {} } }), { kind: "dropped", reason: "edit_reaction_or_system" });
+  assert.deepEqual(
+    classifyEvent({ ephemeralMessage: { message: { pollUpdateMessage: { vote: {} } } } }),
+    { kind: "dropped", reason: "edit_reaction_or_system" }
+  );
+});
+
+test("events: fromMe reaction still dropped", () => {
+  assert.deepEqual(classifyEvent(reactionPayload, { fromMe: true }), { kind: "dropped", reason: "from_me" });
+  assert.deepEqual(classifyEvent(revokePayload, { fromMe: true }), { kind: "dropped", reason: "from_me" });
+  assert.deepEqual(classifyEvent(editPayload, { fromMe: true }), { kind: "dropped", reason: "from_me" });
+});
+
+test("events: an enabled group's reaction is an event attributed to the member", () => {
+  const result = classifyInboundMessage(
+    groupMsg({ message: reactionPayload }),
+    "notify",
+    new Set([GROUP_JID]),
+    EVENTS_ON
+  );
+  const reply = replyOf(result);
+  assert.equal(reply.eventKind, "reaction");
+  assert.equal(reply.groupJid, GROUP_JID);
+});
+
+test("events: a LID sender's event still goes through LID resolution", () => {
+  const result = classifyInboundMessage(
+    makeMsg({ key: { remoteJid: "123456789012345@lid" }, message: reactionPayload }),
+    "notify",
+    undefined,
+    EVENTS_ON
+  );
+  assert.equal(result.kind, "needs_lid_resolution");
+  if (result.kind === "needs_lid_resolution") assert.equal(result.pending.eventKind, "reaction");
+});
+
+// Quoted replies.
+
+test("quote: renderQuotePrefix for quoted text", () => {
+  assert.equal(renderQuotePrefix({ conversation: "are you free tomorrow?" }), '↩ "are you free tomorrow?"');
+  assert.equal(renderQuotePrefix({ extendedTextMessage: { text: "see link" } }), '↩ "see link"');
+});
+
+test("quote: renderQuotePrefix keeps the first 80 code points of the quoted text", () => {
+  const quoted = "😀".repeat(100);
+  assert.equal(renderQuotePrefix({ conversation: quoted }), `↩ "${"😀".repeat(80)}"`);
+});
+
+test("quote: renderQuotePrefix keeps the prefix on one line", () => {
+  assert.equal(renderQuotePrefix({ conversation: "line one\nline two" }), '↩ "line one line two"');
+});
+
+test("quote: renderQuotePrefix media placeholders", () => {
+  assert.equal(renderQuotePrefix({ imageMessage: {} }), "↩ (photo)");
+  assert.equal(renderQuotePrefix({ videoMessage: {} }), "↩ (video)");
+  assert.equal(renderQuotePrefix({ audioMessage: { ptt: true } }), "↩ (voice note)");
+  assert.equal(renderQuotePrefix({ audioMessage: {} }), "↩ (audio)");
+  assert.equal(renderQuotePrefix({ audioMessage: { ptt: false } }), "↩ (audio)");
+  assert.equal(renderQuotePrefix({ documentMessage: {} }), "↩ (document)");
+  assert.equal(renderQuotePrefix({ stickerMessage: {} }), "↩ (sticker)");
+  assert.equal(renderQuotePrefix({ locationMessage: {} }), "↩ (message)");
+  assert.equal(renderQuotePrefix({}), "↩ (message)");
+});
+
+test("quote: a quoted text reply gets the prefix, a newline, then the reply", () => {
+  const reply = replyOf(
+    classifyEvent({ extendedTextMessage: { text: "yes I am", contextInfo: { stanzaId: "Q1", quotedMessage: { conversation: "are you free?" } } } })
+  );
+  assert.equal(reply.body, '↩ "are you free?"\nyes I am');
+  assert.equal(reply.messageType, "extendedTextMessage");
+  assert.equal(reply.eventKind, undefined);
+});
+
+for (const [quoted, prefix] of [
+  [{ imageMessage: {} }, "↩ (photo)"],
+  [{ videoMessage: {} }, "↩ (video)"],
+  [{ audioMessage: { ptt: true } }, "↩ (voice note)"],
+  [{ audioMessage: {} }, "↩ (audio)"],
+  [{ documentMessage: {} }, "↩ (document)"],
+  [{ stickerMessage: {} }, "↩ (sticker)"],
+  [{ contactMessage: {} }, "↩ (message)"],
+] as const) {
+  test(`quote: a text reply to a quoted ${Object.keys(quoted)[0]} renders ${prefix}`, () => {
+    const reply = replyOf(classifyEvent({ extendedTextMessage: { text: "nice", contextInfo: { quotedMessage: quoted } } }));
+    assert.equal(reply.body, `${prefix}\nnice`);
+  });
+}
+
+test("quote: a quoted reply inside ephemeralMessage still gets the prefix", () => {
+  const reply = replyOf(
+    classifyEvent({ ephemeralMessage: { message: { extendedTextMessage: { text: "ok", contextInfo: { quotedMessage: { conversation: "hi" } } } } } })
+  );
+  assert.equal(reply.body, '↩ "hi"\nok');
+});
+
+test("quote: a media reply with no caption keeps body null and its media placeholder", () => {
+  const reply = replyOf(
+    classifyEvent({ audioMessage: { ptt: true, mediaKey: new Uint8Array([1]), contextInfo: { quotedMessage: { conversation: "call me?" } } } })
+  );
+  assert.equal(reply.body, null);
+  assert.equal(reply.messageType, "audioMessage");
+});
+
+test("quote: quote prefix survives truncation", () => {
+  const text = "y".repeat(500);
+  const reply = replyOf(classifyEvent({ extendedTextMessage: { text, contextInfo: { quotedMessage: { conversation: "q".repeat(200) } } } }));
+  const prefix = `↩ "${"q".repeat(80)}"\n`;
+  assert.equal([...reply.body!].length, 500);
+  assert.ok(reply.body!.startsWith(prefix));
+  assert.equal(reply.body, prefix + "y".repeat(500 - [...prefix].length));
+});
+
+test("quote: truncation of the reply text never splits an emoji", () => {
+  const text = "😀".repeat(600);
+  const reply = replyOf(classifyEvent({ extendedTextMessage: { text, contextInfo: { quotedMessage: { conversation: "hi" } } } }));
+  assert.equal([...reply.body!].length, 500);
+  assert.ok(!/[\uD800-\uDBFF]$/.test(reply.body!));
+});
+
+test("quote: a reply with no quotedMessage is unchanged", () => {
+  const reply = replyOf(classifyEvent({ extendedTextMessage: { text: "plain", contextInfo: { stanzaId: "X" } } }));
+  assert.equal(reply.body, "plain");
+});
+
+// The flag off.
+
+test("events flag off: every event dropped as today, quotes ignored", () => {
+  const payloads = [
+    reactionPayload,
+    revokePayload,
+    editPayload,
+    { editedMessage: { message: editPayload } },
+    { ephemeralMessage: { message: reactionPayload } },
+    { viewOnceMessageV2: { message: revokePayload } },
+    { reactionMessage: { text: "", key: { id: "T" } } },
+  ];
+  for (const message of payloads) {
+    const msg = makeMsg({ message });
+    assert.deepEqual(classifyInboundMessage(msg, "notify"), { kind: "dropped", reason: "edit_reaction_or_system" });
+    assert.deepEqual(classifyInboundMessage(msg, "notify", undefined, { events: false }), { kind: "dropped", reason: "edit_reaction_or_system" });
+  }
+  const quoted = makeMsg({ message: { extendedTextMessage: { text: "yes", contextInfo: { quotedMessage: { conversation: "free?" } } } } });
+  const reply = replyOf(classifyInboundMessage(quoted, "notify"));
+  assert.equal(reply.body, "yes");
+  assert.ok(!("eventKind" in reply) && !("targetWaMessageId" in reply) && !("targetFromMe" in reply));
+});
+
+test("processInboundBatch: events flag off (deps.events omitted) records nothing for a reaction", async () => {
+  const fake = makeFakeStore();
+  await processInboundBatch([makeMsg({ message: reactionPayload })], "notify", COACH_A, fake.deps);
+  assert.equal(fake.recordCalls.length, 0);
+  assert.equal(fake.pokeCalls, 0);
+});
+
+test("processInboundBatch: events on records an event row with its kind and target, and pokes", async () => {
+  const fake = makeFakeStore();
+  fake.deps = { ...fake.deps, events: true };
+  await processInboundBatch([makeMsg({ key: { id: "EVT9" }, message: reactionPayload })], "notify", COACH_A, fake.deps);
+  assert.equal(fake.recordCalls.length, 1);
+  const call = fake.recordCalls[0];
+  assert.equal(call.eventKind, "reaction");
+  assert.equal(call.targetWaMessageId, "TARGET1");
+  assert.equal(call.targetFromMe, false);
+  assert.equal(call.messageType, "event");
+  assert.equal(call.body, "👍");
+  assert.equal(call.waMessageId, "EVT9");
+  assert.equal(call.captureMedia, false);
+  assert.equal(fake.pokeCalls, 1);
+});
+
+test("processInboundBatch: an ordinary reply's record call names no event fields, flag on or off", async () => {
+  for (const events of [false, true]) {
+    const fake = makeFakeStore();
+    fake.deps = { ...fake.deps, events };
+    await processInboundBatch([makeMsg()], "notify", COACH_A, fake.deps);
+    const call = fake.recordCalls[0];
+    assert.ok(!("eventKind" in call) && !("targetWaMessageId" in call) && !("targetFromMe" in call));
+  }
+});
+
+test("LOCKSTEP (SOURCE-LEVEL): inbound processing passes WA_INBOUND_EVENTS_ENABLED through", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/sessions.ts", import.meta.url), "utf8");
+  const upsert = src.slice(src.indexOf('sock.ev.on("messages.upsert"'));
+  assert.match(upsert.slice(0, 5000), /events: this\.config\.inboundEventsEnabled/);
 });

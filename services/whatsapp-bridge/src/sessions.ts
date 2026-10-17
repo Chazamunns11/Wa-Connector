@@ -1203,6 +1203,9 @@ export class SessionManager {
         // Opt-in groups (src/inbound.ts "GROUPS") — read at event time, so a
         // refresh that replaced the set applies to the very next batch.
         enabledGroups: session.enabledGroups,
+        // Edits, reactions, deletes and quoted replies (src/inbound.ts).
+        // Off = events dropped and quotes ignored, exactly as before.
+        events: this.config.inboundEventsEnabled,
         log: this.log,
       }).catch((err) => {
         // processInboundBatch is itself per-message try/catch'd — this
