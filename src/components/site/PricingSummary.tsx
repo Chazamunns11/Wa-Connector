@@ -15,6 +15,7 @@ export function PricingSummary({ ctaLabel, terms }: { ctaLabel: string; terms: s
         <p className="mt-3.5 max-w-[52ch] text-[1.15rem] font-semibold">
           Up to {NUMBERS_INCLUDED} WhatsApp numbers included. {MID_FROM} to {VOLUME_FROM - 1} sub-accounts: {midPrice(pricing.currency)} each. {VOLUME_FROM} or more sub-accounts: {volumePrice(pricing.currency)} each, for all of them.
         </p>
+        <p className="mt-2 max-w-[52ch] font-medium">Every feature on every plan. No setup fee, no charge per message.</p>
         <p className="mt-2 max-w-[52ch] font-medium">{terms}</p>
         <p className="mt-2 max-w-[52ch] font-medium">
           Reselling to clients?{" "}

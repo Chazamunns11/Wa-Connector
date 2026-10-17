@@ -52,7 +52,7 @@ export default async function SetupPage({
     AUDIENCES.map((a) => [
       a,
       <div key={a}>
-        <h2 className="font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">{AUDIENCE_LABELS[a]}</h2>
+        <h2 className="h-section font-display">{AUDIENCE_LABELS[a]}</h2>
         <ol role="list" className="mt-4 list-none p-0">
           {steps.map((s, i) => (
             <SetupStep key={s.id} index={i} step={s} audience={a} brandName={brand.name} />
@@ -77,12 +77,12 @@ export default async function SetupPage({
           .
         </p>
       </PageTop>
-      <section className="pb-12 pt-12 md:pb-20">
+      <section className="band">
         <Container>
           <div className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-16">
             <div>
-              <div className="section-rule max-w-[52ch]">
-                <h2 className="font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">Before you start</h2>
+              <div className="max-w-[52ch] border-t-2 border-rule pt-6">
+                <h2 className="h-section font-display">Before you start</h2>
                 <ul className="mt-3 grid list-disc gap-2 pl-5 marker:text-ink-faint">
                   <li>A GoHighLevel account with at least one sub-account.</li>
                   <li>A {brand.name} account. The free trial is fine.</li>
@@ -93,7 +93,7 @@ export default async function SetupPage({
             </div>
             <figure>
               <ConnectPanelSample connectedStrip />
-              <figcaption className="mt-3 text-[0.95rem] text-ink-dim">
+              <figcaption className="mt-3 small text-ink-dim">
                 Sample screen: the connect page you&apos;ll see in step 4, before and after the scan.
               </figcaption>
             </figure>
@@ -103,7 +103,7 @@ export default async function SetupPage({
               <AudienceTabs key={initial} panels={panels} initial={initial} />
             </div>
 
-            <h2 id="troubleshooting" className="mt-16 scroll-mt-4 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">
+            <h2 id="troubleshooting" className="mt-16 scroll-mt-4 h-section font-display">
               Troubleshooting
             </h2>
             <div className="mt-4">
@@ -121,7 +121,7 @@ export default async function SetupPage({
               ))}
             </div>
 
-            <h2 className="mt-16 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">Once you are sending</h2>
+            <h2 className="mt-16 h-section font-display">Once you are sending</h2>
             <ul className="mt-4 grid max-w-[62ch] list-disc gap-2 pl-5 text-ink-dim marker:text-ink-faint">
               <li>Each number has a daily cap, and messages go out at a steady pace rather than all at once.</li>
               <li>If someone replies STOP, that sub-account&apos;s WhatsApp numbers stop messaging them until they reply START. Other sub-accounts are not affected.</li>

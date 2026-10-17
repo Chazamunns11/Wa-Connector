@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { dashboardHref, type DashboardFilter } from "@/lib/site/dashboard-url";
 
-const LINK = "inline-flex min-h-11 items-center rounded border px-4 text-sm font-medium";
+const LINK = "inline-flex min-h-11 items-center rounded-full border-2 px-5 text-sm font-semibold tabular-nums";
 
 export function AttentionFilter({
   filter,
@@ -25,7 +25,7 @@ export function AttentionFilter({
             key={i.id}
             href={dashboardHref({ filter: i.id })}
             aria-current={current ? "page" : undefined}
-            className={`${LINK} ${current ? "border-accent bg-accent text-accent-ink" : "border-border-strong text-ink hover:bg-raised"}`}
+            className={`${LINK} ${current ? "border-ink bg-ink text-bg" : "border-outline text-ink hover:bg-raised"}`}
           >
             {i.label} ({i.n})
           </Link>

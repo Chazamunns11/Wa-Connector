@@ -79,6 +79,41 @@ export function needsAttention(row: LocationRow): string | null {
   return null;
 }
 
+/** How close a row is to its daily cap: "full" at the cap, "near" from 90%. */
+export type CapLevel = "ok" | "near" | "full";
+
+export function capLevel(row: LocationRow): CapLevel {
+  if (!row.activated || row.dailyCap <= 0) return "ok";
+  if (row.sentToday >= row.dailyCap) return "full";
+  return row.sentToday / row.dailyCap >= 0.9 ? "near" : "ok";
+}
+
+/** The at-a-glance counts at the top of the dashboard. Every figure is a plain count of the rows. */
+export interface FleetSummary {
+  connected: number;
+  offline: number;
+  /** Messages held across every offline number. */
+  waiting: number;
+  awaitingScan: number;
+  sentToday: number;
+  attention: number;
+}
+
+export function fleetSummary(rows: LocationRow[]): FleetSummary {
+  const sum: FleetSummary = { connected: 0, offline: 0, waiting: 0, awaitingScan: 0, sentToday: 0, attention: 0 };
+  for (const r of rows) {
+    if (r.state.kind === "connected") sum.connected += 1;
+    if (r.state.kind === "disconnected") {
+      sum.offline += 1;
+      sum.waiting += r.state.waiting;
+    }
+    if (r.state.kind === "waiting_qr") sum.awaitingScan += 1;
+    if (r.activated) sum.sentToday += r.sentToday;
+    if (needsAttention(r) !== null) sum.attention += 1;
+  }
+  return sum;
+}
+
 export function activeCount(rows: LocationRow[]): number {
   return rows.filter((r) => r.activated).length;
 }

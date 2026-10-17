@@ -32,7 +32,7 @@ export default function DocsIndexPage() {
     <PageTop title={<>{name} docs</>}>
       <p>Start with the setup guide. The rest is here when you need it.</p>
     </PageTop>
-    <section className="pb-12 pt-12 md:pb-20">
+    <section className="band">
       <Container>
         <div className="max-w-[760px]">
           <ul role="list" className="grid list-none gap-4 p-0 sm:grid-cols-2">

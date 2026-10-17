@@ -43,15 +43,17 @@ export function parseResult(value: string | string[] | undefined): DashboardResu
   return v && Object.hasOwn(DASHBOARD_RESULT_COPY, v) ? (v as DashboardResult) : null;
 }
 
-/** /dashboard URL keeping the filter, with an optional result notice and a row to focus. */
-export function dashboardHref(opts: { filter?: DashboardFilter; result?: DashboardResult; focus?: string; qr?: string } = {}): string {
+/** /dashboard URL keeping the filter, with an optional result notice, a row to focus, and a row whose details are open. */
+export function dashboardHref(opts: { filter?: DashboardFilter; result?: DashboardResult; focus?: string; qr?: string; open?: string } = {}): string {
   const q = new URLSearchParams();
   if (opts.filter === "attention") q.set("filter", "attention");
   if (opts.result) q.set("result", opts.result);
   if (opts.focus) q.set("focus", opts.focus);
   if (opts.qr) q.set("qr", opts.qr);
+  if (opts.open) q.set("open", opts.open);
   const s = q.toString();
-  return `${SITE_ROUTES.dashboard}${s ? `?${s}` : ""}${opts.focus ? `#row-${opts.focus}` : ""}`;
+  const anchor = opts.focus ?? opts.open;
+  return `${SITE_ROUTES.dashboard}${s ? `?${s}` : ""}${anchor ? `#row-${anchor}` : ""}`;
 }
 
 /** Fixed notices the billing page can show after an action. */

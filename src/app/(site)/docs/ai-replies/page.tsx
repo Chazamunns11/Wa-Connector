@@ -15,14 +15,14 @@ export function generateMetadata(): Metadata {
 
 export default function AiRepliesPage() {
   const { name } = brandConfig();
-  const h2 = "mt-12 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em] first:mt-0";
+  const h2 = "mt-12 h-section font-display first:mt-0";
   const p = "mt-3 max-w-[62ch] text-ink-dim";
   return (
     <>
     <PageTop title="AI replies on WhatsApp with GHL's Conversation AI">
       <p>{name} does not have its own bot. GoHighLevel&apos;s AI answers in the conversation, and {name} sends the answer.</p>
     </PageTop>
-    <section className="pb-12 pt-4 md:pb-20">
+    <section className="band">
       <Container>
         <div className="max-w-[760px]">
           <h2 className={h2}>What this is</h2>

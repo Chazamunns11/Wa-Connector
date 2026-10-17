@@ -5,10 +5,10 @@ import { RESALE_DEFAULT_NUMBERS, RESALE_DEFAULT_PRICE, resaleView } from "@/lib/
 import { CALC_MAX, CALC_MIN } from "@/lib/site/calculator";
 
 const FIELD =
-  "min-h-12 w-full rounded-lg border-2 border-border-strong bg-well px-3 font-display text-xl font-extrabold text-ink [font-variant-numeric:tabular-nums] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none aria-[invalid=true]:border-[3px]";
+  "min-h-12 w-full rounded-lg border-2 border-outline bg-well px-3 font-display text-xl font-extrabold text-ink [font-variant-numeric:tabular-nums] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none aria-[invalid=true]:border-[3px]";
 
 /**
- * Two numbers in, three sentences out. On the Ink band: white text, Coral for the
+ * Two numbers in, three sentences out. On the Coral band: Ink text, an Ink rule for the
  * figure rule only. Labels are visible, the output is a polite live region, and each
  * field's help or error line is its description (and a status, so a bad value is announced).
  */
@@ -40,7 +40,7 @@ export function ResaleCalculator({ currency }: { currency: string }) {
             aria-invalid={countInvalid}
             className={`${FIELD} mt-2`}
           />
-          <p id={countMsg} role="status" className="mt-2 min-h-[1.45em] text-[15px] text-ink-dim">
+          <p id={countMsg} role="status" className="mt-2 min-h-[1.45em] small text-ink-dim">
             {view.numbersNote ?? `Whole numbers from ${CALC_MIN} to ${CALC_MAX}.`}
           </p>
         </div>
@@ -59,7 +59,7 @@ export function ResaleCalculator({ currency }: { currency: string }) {
             aria-invalid={view.priceInvalid}
             className={`${FIELD} mt-2`}
           />
-          <p id={priceMsg} role="status" className="mt-2 min-h-[1.45em] text-[15px] text-ink-dim">
+          <p id={priceMsg} role="status" className="mt-2 min-h-[1.45em] small text-ink-dim">
             {view.priceNote ?? "In pounds. Pence are fine, like 19.99."}
           </p>
         </div>

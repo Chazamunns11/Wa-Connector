@@ -24,8 +24,8 @@ export const FAQ_IDS = [
   "white-label",
 ] as const;
 
-/** The entries the home page shows; the disclosure block there already says the other two uncomfortable ones. */
-export const HOME_FAQ_IDS = ["workflows", "disconnected", "daily-cap", "trial", "cancel", "agency-or-single", "white-label"] as const;
+/** The entries the home page shows. The linked-device and ban-risk answers are here since the disclosure block went. */
+export const HOME_FAQ_IDS = ["workflows", "official-api", "ban-risk", "disconnected", "daily-cap", "trial", "cancel", "agency-or-single", "white-label"] as const;
 
 type FaqId = (typeof FAQ_IDS)[number];
 

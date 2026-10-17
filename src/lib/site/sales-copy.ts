@@ -1,6 +1,9 @@
 import type { BrandConfig } from "@/lib/brand-config";
+import { MID_FROM } from "@/lib/pricing";
+import { OWN_RESULTS_AVERAGE } from "@/lib/site/proof";
 
 export interface SalesCopy {
+  heroH1: string;
   heroSub: string;
   ctaNote: string;
   setup: {
@@ -13,7 +16,8 @@ export interface SalesCopy {
   /** Not rendered on the home page since Direction B (W37); kept for the tests and the docs. */
   safetyIntro: string;
   safety: { title: string; body: string }[];
-  disclosure: { heading: string; paragraphs: [string, string, string] };
+  /** "Why use us": the reasons to pick this over the alternatives, said plainly. */
+  reasons: { heading: string; items: { title: string; body: string; footnote?: true }[] };
   faqHeading: string;
   faqAllLink: string;
   priceStrip: { terms: string };
@@ -24,7 +28,8 @@ export interface SalesCopy {
 export function salesCopy(brand: BrandConfig): SalesCopy {
   const { name } = brand;
   return {
-    heroSub: `${name} takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.`,
+    heroH1: "Two-way WhatsApp chat in GoHighLevel, from your own number.",
+    heroSub: `Set ${name} as the Telephony Provider and the Send SMS steps you already have go out on WhatsApp. When the customer writes back, the reply lands in Conversations.`,
     ctaNote:
       "7-day free trial, no card needed. The trial covers up to 3 sub-accounts, and if it ends before you add a card, sending pauses until you do.",
     setup: {
@@ -67,12 +72,34 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
         body: "If someone replies STOP, they get no more messages from that sub-account's WhatsApp numbers until they reply START. Other sub-accounts aren't affected.",
       },
     ],
-    disclosure: {
-      heading: "Read this before you sign up",
-      paragraphs: [
-        `${name} works as a linked device on your WhatsApp number, the same mechanism WhatsApp Web uses. It is not the official WhatsApp Business API. You don't get the verified badge or Meta's template approval, Meta doesn't charge you per message, and the phone that holds the number has to stay switched on and online.`,
-        "WhatsApp can restrict or ban any number it decides is misusing the service, and automated sending through a linked device is the kind of thing it looks at. The pacing, the daily cap and STOP handling lower that risk. They cannot remove it, and we can't promise a number will never be restricted.",
-        "Use a dedicated business number rather than your personal one, and only message people who expect to hear from you. If you need the official API, this isn't it, and we'd rather say so now.",
+    reasons: {
+      heading: `Why use ${name}`,
+      items: [
+        {
+          title: "Nothing to rebuild",
+          body: "Your workflows, triggers and Send SMS steps stay exactly as they are. Change one setting and they go out on WhatsApp, with no template approval to wait for.",
+        },
+        {
+          title: "Your own number",
+          body: "Customers see the business number they already have saved, not a new one. Neither Meta nor we charge per message, so a busy month costs the same as a quiet one.",
+        },
+        {
+          title: "Replies stay in GoHighLevel",
+          body: "When someone writes back, it lands in Conversations next to their contact record, where your team already works. Nobody has to watch a phone.",
+        },
+        {
+          title: "Made for agencies",
+          body: `One dashboard shows every sub-account and its numbers. From ${MID_FROM} sub-accounts every sub-account drops to the lower price, and you set what your clients pay.`,
+        },
+        {
+          title: "Careful with your number",
+          body: "Paced sending, a daily cap, messages held while a phone is offline and STOP opt-outs are on every number, and none of them can be switched off.",
+        },
+        {
+          title: "We run reminders ourselves",
+          body: `WhatsApp reminders took the businesses we run them for from about half of booked clients turning up to ${OWN_RESULTS_AVERAGE.after}. We built this to do the same job inside GoHighLevel.`,
+          footnote: true,
+        },
       ],
     },
     faqHeading: "Questions we get",

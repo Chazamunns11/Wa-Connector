@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { EmailLinkForm } from "@/components/auth/EmailLinkForm";
+import { SiteFooter } from "@/components/site/SiteFooter";
+import { SiteHeader } from "@/components/site/SiteHeader";
 import { brandCssVars, brandConfig } from "@/lib/brand-config";
 import { TRIAL_DAYS } from "@/lib/pricing";
 import { sendLoginLinkAction } from "./actions";
@@ -51,43 +53,50 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const { name } = brand;
 
   return (
-    <main id="main" style={brandCssVars(brand)} className="min-h-screen bg-bg">
-      <AuthShell
-        title="Sign in"
-        intro={sent ? undefined : <p>We&apos;ll email you a sign-in link. No password needed.</p>}
-      >
-        {authError ? (
-          <div
-            role="alert"
-            className="mb-5 rounded-[12px] border-2 border-border-strong bg-well p-4"
-          >
-            <p className="text-sm font-semibold text-ink">{authError.title}</p>
-            <p className="mt-1 text-sm text-ink-dim">{authError.body}</p>
-          </div>
-        ) : null}
+    <div style={brandCssVars(brand)} className="site-body flex min-h-screen flex-col">
+      <a href="#main" className="skip-link">
+        Skip to main content
+      </a>
+      <SiteHeader />
+      <main id="main" className="flex-1">
+        <AuthShell
+          title="Sign in"
+          intro={sent ? undefined : <p>We&apos;ll email you a sign-in link. No password needed.</p>}
+        >
+          {authError ? (
+            <div
+              role="alert"
+              className="mb-5 rounded-[12px] border-2 border-loss bg-loss-soft p-4"
+            >
+              <p className="text-sm font-semibold text-ink">{authError.title}</p>
+              <p className="mt-1 text-sm text-ink-dim">{authError.body}</p>
+            </div>
+          ) : null}
 
-        {sent ? (
-          <p role="status" className="text-ink-dim">
-            If that address has a {name} account, a sign-in link is on its way.
-            Open it in this browser.
+          {sent ? (
+            <p role="status" className="text-ink-dim">
+              If that address has a {name} account, a sign-in link is on its way.
+              Open it in this browser.
+            </p>
+          ) : (
+            <EmailLinkForm
+              action={sendLoginLinkAction}
+              buttonLabel="Send me a sign-in link"
+            />
+          )}
+
+          <p className="mt-6 text-sm text-ink-dim">
+            New here?{" "}
+            <Link
+              href="/signup"
+              className="inline-flex min-h-11 items-center font-semibold text-ink underline underline-offset-2"
+            >
+              Start your {TRIAL_DAYS}-day free trial
+            </Link>
           </p>
-        ) : (
-          <EmailLinkForm
-            action={sendLoginLinkAction}
-            buttonLabel="Send me a sign-in link"
-          />
-        )}
-
-        <p className="mt-6 text-sm text-ink-dim">
-          New here?{" "}
-          <Link
-            href="/signup"
-            className="inline-flex min-h-11 items-center font-semibold text-ink underline underline-offset-2"
-          >
-            Start your {TRIAL_DAYS}-day free trial
-          </Link>
-        </p>
-      </AuthShell>
-    </main>
+        </AuthShell>
+      </main>
+      <SiteFooter />
+    </div>
   );
 }

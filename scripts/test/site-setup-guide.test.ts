@@ -96,5 +96,5 @@ test("setup page reads searchParams as a Promise and renders no hard-coded brand
   const src = readFileSync(join(root, "src/app/(site)/docs/setup/page.tsx"), "utf8");
   assert.ok(src.includes("await searchParams"));
   const layout = readFileSync(join(root, "src/app/(site)/docs/layout.tsx"), "utf8");
-  assert.ok(layout.includes("surface-light"));
+  assert.ok(!layout.includes("surface-light"), "the no-op alias is gone (site pass A)");
 });

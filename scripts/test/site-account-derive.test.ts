@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   activeCount,
+  capLevel,
+  fleetSummary,
   headline,
   needsAttention,
   needsCard,
@@ -138,4 +140,26 @@ test("primaryActionFor: one inline action per state, none when connected", () =>
   assert.deepEqual(primaryActionFor(row({ state: { kind: "waiting_qr" } })), { key: "show-qr", label: "Show QR" });
   assert.deepEqual(primaryActionFor(row({ state: { kind: "disconnected", waiting: 2 } })), { key: "show-qr", label: "Reconnect" });
   assert.equal(primaryActionFor(row({ state: { kind: "connected", number: "+447700900101" } })), null);
+});
+
+test("capLevel: ok below 90%, near from 90%, full at the cap, ok when not active", () => {
+  assert.equal(capLevel(row({ sentToday: 134 })), "ok");
+  assert.equal(capLevel(row({ sentToday: 135 })), "near");
+  assert.equal(capLevel(row({ sentToday: 150 })), "full");
+  assert.equal(capLevel(row({ sentToday: 160 })), "full");
+  assert.equal(capLevel(row({ activated: false, state: { kind: "not_active" }, sentToday: 150 })), "ok");
+  assert.equal(capLevel(row({ dailyCap: 0 })), "ok");
+});
+
+test("fleetSummary counts states, held messages, active sends and rows needing attention", () => {
+  const rows = [
+    row({ sentToday: 64 }),
+    row({ state: { kind: "disconnected", waiting: 7 }, sentToday: 12 }),
+    row({ state: { kind: "disconnected", waiting: 2 }, sentToday: 0 }),
+    row({ state: { kind: "waiting_qr" }, sentToday: 0 }),
+    row({ providerNudge: true, sentToday: 0 }),
+    row({ activated: false, state: { kind: "not_active" }, sentToday: 5 }),
+  ];
+  assert.deepEqual(fleetSummary(rows), { connected: 2, offline: 2, waiting: 9, awaitingScan: 1, sentToday: 76, attention: 4 });
+  assert.deepEqual(fleetSummary([]), { connected: 0, offline: 0, waiting: 0, awaitingScan: 0, sentToday: 0, attention: 0 });
 });

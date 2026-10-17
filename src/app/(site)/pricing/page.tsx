@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Container } from "@/components/site/Container";
 import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
+import { IncludedList } from "@/components/site/IncludedList";
 import { PricingCalculator } from "@/components/site/PricingCalculator";
 import { ResaleCalculator } from "@/components/site/ResaleCalculator";
 import { PricingTable } from "@/components/site/PricingTable";
@@ -23,10 +24,9 @@ export function generateMetadata(): Metadata {
 
 const BILLING_FAQ = ["trial", "cancel", "ban-risk", "official-api", "disconnected"];
 
-const H2 = "h-display font-display font-extrabold";
-const H3 = "font-display text-[1.35rem] font-extrabold leading-[1.1] tracking-[-0.015em]";
+const H2 = "h-page font-display";
+const H3 = "h-item font-display";
 const LI = "border-t-2 border-rule py-3.5";
-const SECTION = "pt-[clamp(64px,9vw,120px)]";
 const PROSE = "max-w-[62ch]";
 
 export default function PricingPage() {
@@ -38,13 +38,11 @@ export default function PricingPage() {
   const faq = BILLING_FAQ.flatMap((id) => all.filter((e) => e.id === id));
   return (
     <div>
-      <section className="surface-coral pb-[clamp(48px,6vw,80px)] pt-10 md:pt-14">
+      <section className="surface-dark pb-[clamp(48px,6vw,80px)] pt-10 md:pt-14">
         <Container>
-          <h1>
-            <span className="block font-display text-[clamp(56px,10vw,96px)] font-extrabold leading-[0.95] tracking-[-0.04em] [font-variant-numeric:tabular-nums]">
-              {price}
-            </span>{" "}
-            <span className="mt-2 block font-display text-[clamp(1.3rem,2.4vw,1.6rem)] font-extrabold leading-[1.2]">
+          <h1 className="h-hero">
+            <span className="num-display block">{price}</span>{" "}
+            <span className="h-section mt-2 block">
               per sub-account, per month
             </span>
           </h1>
@@ -54,7 +52,7 @@ export default function PricingPage() {
         </Container>
       </section>
 
-      <section className="pt-[clamp(48px,6vw,80px)]">
+      <section className="band">
         <Container>
           <div className="slab slab-lift p-[clamp(24px,5vw,48px)]">
             <PricingCalculator currency={pricing.currency} />
@@ -64,11 +62,14 @@ export default function PricingPage() {
             <div className="mt-6">
               <PricingTable pricing={pricing} />
             </div>
+            <div className="mt-10">
+              <IncludedList brand={brand} />
+            </div>
           </div>
         </Container>
       </section>
 
-      <section id="resale" className="surface-dark band mt-[clamp(64px,9vw,120px)] scroll-mt-4">
+      <section id="resale" className="surface-coral band scroll-mt-4">
         <Container>
           <div className="grid gap-10 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-16">
             <div>
@@ -77,13 +78,13 @@ export default function PricingPage() {
                 Many agencies include WhatsApp sending in a client package and charge for each client. {resaleExamplePrice(pricing.currency)} a sub-account
                 is a common price, so it is the starting figure here. Change it to whatever you charge.
               </p>
-              <p className="mt-4 max-w-[44ch] text-ink-dim">
+              <p className="mt-4 max-w-[44ch]">
                 You set your own price. These figures are examples, not a promise of income, and they leave out your own costs and tax.
               </p>
             </div>
             <div>
               <ResaleCalculator currency={pricing.currency} />
-              <p className="mt-8 max-w-[52ch] border-t-2 border-border pt-4 text-[.95rem] leading-[1.45] text-ink-dim">
+              <p className="mt-8 max-w-[52ch] border-t-2 border-rule small pt-4 text-ink-dim">
                 {resaleFallbackLine(pricing.currency)}
               </p>
             </div>
@@ -91,7 +92,7 @@ export default function PricingPage() {
         </Container>
       </section>
 
-      <section className={SECTION}>
+      <section className="band">
         <Container>
           <h2 className={H2}>The trial, and what happens after</h2>
           <div className={`${PROSE} mt-6 grid gap-4`}>
@@ -106,7 +107,7 @@ export default function PricingPage() {
         </Container>
       </section>
 
-      <section className={SECTION}>
+      <section className="band">
         <Container>
           <h2 className={H2}>{COMPARISON.heading}</h2>
           <p className={`${PROSE} mt-6`}>{COMPARISON.intro}</p>
@@ -121,7 +122,7 @@ export default function PricingPage() {
                 ))}
               </ul>
             </div>
-            <div className="md:border-l-[3px] md:border-rule md:pl-10">
+            <div className="md:border-l-[3px] md:border-outline md:pl-10">
               <h3 className={H3}>
                 {COMPARISON.nativeHeading}
               </h3>
@@ -132,7 +133,7 @@ export default function PricingPage() {
               </ul>
             </div>
           </div>
-          <p className={`${PROSE} mt-10 text-[.95rem] leading-[1.45] text-ink-dim`}>
+          <p className={`${PROSE} small mt-10 text-ink-dim`}>
             {sourceParts().map((part, i) =>
               typeof part === "string" ? (
                 part
@@ -147,7 +148,7 @@ export default function PricingPage() {
         </Container>
       </section>
 
-      <section className="band mt-[clamp(64px,9vw,120px)] bg-raised">
+      <section className="band bg-raised">
         <Container>
           <h2 className={H2}>Billing questions</h2>
           <FaqList entries={faq} />

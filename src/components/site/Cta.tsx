@@ -4,23 +4,24 @@ import { SITE_ROUTES } from "@/lib/site/routes";
 
 /**
  * Primary trial link, plus an optional secondary link. One primary CTA per view.
- * On a coral ground the primary is an Ink pill (`onCoral`); elsewhere it is Coral with Ink text.
+ * The primary follows the ground it sits on: an Ink pill on Coral, a Coral pill with
+ * Ink text on White or Ink (white on Coral never passes AA).
  */
 export function Cta({
   label,
   secondary,
   note,
-  onCoral = false,
+  ground = "white",
 }: {
   label: string;
   secondary?: { href: string; label: string };
   note?: string;
-  onCoral?: boolean;
+  ground?: "white" | "coral" | "dark";
 }) {
   return (
     <div>
       <div className="btn-stack">
-        <Link href={SITE_ROUTES.signup} className={siteButton(onCoral ? "ink" : "coral")}>
+        <Link href={SITE_ROUTES.signup} className={siteButton(ground === "coral" ? "ink" : "coral")}>
           {label}
         </Link>
         {secondary ? (
@@ -29,7 +30,7 @@ export function Cta({
           </Link>
         ) : null}
       </div>
-      {note ? <p className="mt-4 max-w-[52ch] text-[.95rem]">{note}</p> : null}
+      {note ? <p className="small mt-4 max-w-[52ch]">{note}</p> : null}
     </div>
   );
 }
