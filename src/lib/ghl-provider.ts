@@ -35,6 +35,7 @@
  *   | drain, bridge ledger resolves to 'sent'    | sent         | delivered |
  *   | drain, bridge ledger resolves to 'failed'  | failed       | failed + the ledger's own fixed error |
  *   | drain, bridge ledger 'not_on_whatsapp'     | not_on_whatsapp | failed + "recipient has no WhatsApp account" |
+ *   |   (SMS fallback B sent the text as SMS)   | not_on_whatsapp | failed + "Not on WhatsApp — sent as SMS instead" |
  *
  * "Transient bridge failure" (adversarial-review finding 5, fixed) is a
  * DENY-list, not an allow-list: `unreachable`/`lease_unavailable` plus
@@ -81,9 +82,10 @@
  * (resending different text under that key would be ACCEPTED as the real
  * content — the bridge's own ledger has no row yet for a send that never
  * reached it). `pending_text` (0070) closes that gap, and 0013 keeps it on an
- * accepted row until its status is reported (only while workflow triggers are
- * on), so a "not on WhatsApp" trigger can carry the unsent text. It is cleared
- * on refusal, on accept when triggers are off, when the status is reported,
+ * accepted row until its status is reported (only while workflow triggers or
+ * the SMS fallback are on), so a "not on WhatsApp" trigger can carry the
+ * unsent text and the SMS fallback (`src/lib/sms-fallback.ts`) can send it. It
+ * is cleared on refusal, on accept when both are off, when the status is reported,
  * and by the cron for an accepted row never reported within 7 days.
  */
 import { after } from "next/server";
@@ -94,7 +96,9 @@ import {
   deriveIdempotencyKey,
   deriveMediaFallbackIdempotencyKey,
   isMediaOutboundEnabled,
+  isSmsFallbackEnabled,
   refreshGhlToken,
+  type sendGhlSms,
   updateGhlMessageStatus,
   type RefreshGhlTokenResult,
 } from "@/lib/ghl";
@@ -116,6 +120,7 @@ import { decideNotConnected, REASON_NUMBER_BANNED, type NotConnectedDecision } f
 import type { TriggerKey } from "@/lib/ghl-trigger-keys";
 import { isWorkflowTriggersEnabled, type TriggerPayloads, type TriggerRepo } from "@/lib/ghl-triggers";
 import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, LocationNumber } from "@/lib/types";
+import { REASON_SENT_AS_SMS, REASON_SMS_FALLBACK_LOOP, smsFallbackTextSha256, trySmsFallback, type SmsFallbackOutcome } from "@/lib/sms-fallback";
 
 /** Repo slice this module needs — every method it touches is already on `GhlRepository` (Phase 2's extension of Phase 1's interface — see that Pick list's own comment, src/lib/data/index.ts). Both entry points are only ever driven via `webhookRepo` (the webhook route, the poke route, the reminders cron — none carry a user session). */
 export type GhlProviderRepo = Pick<
@@ -154,6 +159,13 @@ export type GhlProviderRepo = Pick<
   // SMS fallback — contacts remembered as not on WhatsApp.
   | "rememberNotOnWhatsapp"
   | "isRememberedNotOnWhatsapp"
+  // SMS fallback B (0014) — the text sent as an SMS (`src/lib/sms-fallback.ts`)
+  // and the loop guard in `handleProviderOutboundMessage`.
+  | "recordSmsFallbackEcho"
+  | "consumeSmsFallbackEcho"
+  | "blockSmsFallback"
+  | "claimSmsFallback"
+  | "setSmsFallbackResult"
 >;
 
 /**
@@ -244,6 +256,8 @@ export interface GhlProviderDeps {
    * Never throws; used for the send-path trigger fire.
    */
   defer: (fn: () => Promise<void>) => void;
+  /** SMS fallback B — GHL's send-an-SMS call. Optional so tests can fake it; unset, the real `sendGhlSms`. */
+  sendSms?: typeof sendGhlSms;
 }
 
 export const defaultGhlProviderDeps: GhlProviderDeps = {
@@ -432,6 +446,19 @@ async function rememberNotOnWhatsappBestEffort(repo: GhlProviderRepo, row: GhlOu
   } catch {
     console.error("[ghl-provider] could not remember a not-on-WhatsApp contact (non-fatal)");
   }
+}
+
+/** The GHL status reason for a not-on-WhatsApp message, by what the SMS fallback did. */
+function notOnWhatsappReason(sms: SmsFallbackOutcome): string {
+  return sms === "sent" ? REASON_SENT_AS_SMS : REASON_NOT_ON_WHATSAPP;
+}
+
+/**
+ * `whatsapp_not_on_whatsapp` fires unless the SMS fallback sent the text (a
+ * workflow must not send a second SMS) or the contact opted out (STOP wins).
+ */
+function shouldFireNotOnWhatsapp(sms: SmsFallbackOutcome): boolean {
+  return sms !== "sent" && sms !== "opted_out";
 }
 
 /** The narrow slice `resolveGhlAccessToken` actually touches — see `GhlTokenRefreshRepo`'s identical rationale, just for `deps` instead of `repo`. `GhlProviderDeps` already contains all three, so `defaultGhlProviderDeps` (and every existing call site) keeps typechecking unchanged. */
@@ -931,6 +958,8 @@ export async function handleProviderOutboundMessage(
   // Phase B (below) can reach them; see the assignment site's own comment.
   let mediaSplit: boolean;
   let attachments: string[];
+  // SMS fallback B — hoisted for Phase B (the loop guard and the SMS text).
+  let rawMessage: string;
   // Multiple numbers (Task 3) — hoisted for Phase B like the two above.
   let sendingNumber: OutboundNumber;
   try {
@@ -965,7 +994,7 @@ export async function handleProviderOutboundMessage(
       target = toPhone ? { to: toPhone } : null;
     }
 
-    const rawMessage = typeof payload.message === "string" ? payload.message : "";
+    rawMessage = typeof payload.message === "string" ? payload.message : "";
     attachments = Array.isArray(payload.attachments) ? payload.attachments.filter((a): a is string => typeof a === "string") : [];
     // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — with the flag
     // off, or with no attachments at all, `textResult` is built EXACTLY as
@@ -1025,6 +1054,13 @@ export async function handleProviderOutboundMessage(
   // drain's problem to pick up next pass, never GHL's — the route returns
   // 200 regardless (see the "error" outcome's own JSDoc).
   try {
+    // SMS fallback B loop guard — FIRST, before any send or other refusal: our
+    // own fallback SMS handed back to us by GHL (PingWren is this
+    // sub-account's SMS provider) is refused, never sent on WhatsApp, and
+    // switches the fallback off for the sub-account.
+    const echo = await refuseIfSmsFallbackEcho(repo, deps, account, row, rawMessage);
+    if (echo) return echo;
+
     // Accounts gate, then the STOP check — before the media split, so the
     // media path is gated too (see `refuseIfGatedOrOptedOut`).
     const blocked = await refuseIfGatedOrOptedOut(repo, deps, account, row, toPhone);
@@ -1046,7 +1082,8 @@ export async function handleProviderOutboundMessage(
       return { kind: "refused", reason: groupRefusal };
     }
 
-    const remembered = await refuseIfNotOnWhatsapp(repo, deps, account, row, textResult.ok ? textResult.text : "");
+    // The SMS carries the message text only, never the attachment links.
+    const remembered = await refuseIfNotOnWhatsapp(repo, deps, account, row, textResult.ok ? textResult.text : "", rawMessage);
     if (remembered) return remembered;
 
     if (mediaSplit) {
@@ -1071,6 +1108,42 @@ export async function handleProviderOutboundMessage(
     console.error(`[ghl-provider] handleProviderOutboundMessage: post-intake failure for row ${row.id} (row already recorded — the drain owns it from here):`, err);
     return { kind: "error", recorded: true };
   }
+}
+
+/**
+ * SMS fallback B loop guard. When the fallback flag is on and this message's
+ * (contact, text hash) matches a pending echo of a fallback SMS we just asked
+ * GHL to send, it is that SMS coming back through our own provider webhook:
+ * consume the echo, block the fallback for the sub-account, and refuse the
+ * message with `REASON_SMS_FALLBACK_LOOP`. Returns null to go on. A read error
+ * fails open (the message carries on as normal); a failed block is logged and
+ * the message is still refused.
+ */
+async function refuseIfSmsFallbackEcho(
+  repo: GhlProviderRepo,
+  deps: GhlProviderDeps,
+  account: GhlAccount,
+  row: GhlOutboundMessage,
+  rawMessage: string
+): Promise<HandleProviderOutboundOutcome | null> {
+  if (!isSmsFallbackEnabled() || !rawMessage.trim()) return null;
+  let isEcho = false;
+  try {
+    isEcho = await repo.consumeSmsFallbackEcho(account.locationId, row.ghlContactId, smsFallbackTextSha256(rawMessage), new Date().toISOString());
+  } catch {
+    console.error("[ghl-provider] SMS fallback echo read failed (sending normally)");
+    return null;
+  }
+  if (!isEcho) return null;
+  console.error("[ghl-provider] SMS fallback echo came back through PingWren — refused, and the fallback is switched off for this sub-account");
+  try {
+    await repo.blockSmsFallback(account.locationId);
+  } catch {
+    console.error("[ghl-provider] could not switch the SMS fallback off for this sub-account (non-fatal)");
+  }
+  await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_SMS_FALLBACK_LOOP });
+  await reportGhlOutcome(repo, deps, account, row, "failed", REASON_SMS_FALLBACK_LOOP);
+  return { kind: "refused", reason: REASON_SMS_FALLBACK_LOOP };
 }
 
 /**
@@ -1126,16 +1199,22 @@ async function refuseIfNotOnWhatsapp(
   deps: GhlProviderDeps,
   account: GhlAccount,
   row: GhlOutboundMessage,
-  text: string
+  text: string,
+  smsText: string = text
 ): Promise<HandleProviderOutboundOutcome | null> {
   if (!row.toPhone || account.status === "needs_reauth" || account.status === "disabled") return null;
   if (!(await isRememberedNotOnWhatsappSafe(repo, row.locationId, row.toPhone))) return null;
-  await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_NOT_ON_WHATSAPP });
-  const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
+  // SMS fallback B, once per send (the row is new; a redelivery is a
+  // duplicate). Before the refusal is stamped, so the stored reason (which a
+  // later pass reports if this report fails) says whether it went as SMS.
+  const sms = await trySmsFallback(repo, deps, { account, row, text: smsText });
+  const reason = notOnWhatsappReason(sms);
+  await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
+  const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", reason);
   // An unreported PUT still fires (no later pass fires for a refused row); a
   // status an overlapping pass already stored never fires twice.
-  if (outcome !== "already_reported") fireNotOnWhatsappFromSend(repo, deps, row, text);
-  return { kind: "refused", reason: REASON_NOT_ON_WHATSAPP };
+  if (outcome !== "already_reported" && shouldFireNotOnWhatsapp(sms)) fireNotOnWhatsappFromSend(repo, deps, row, text);
+  return { kind: "refused", reason };
 }
 
 /** True when the contact is remembered as not on WhatsApp; false on any read error. */
@@ -2020,15 +2099,23 @@ async function drainMultipartRow(
 
   const status = aggregate.status === "delivered" ? "delivered" : "failed";
   const unsentText = row.pendingText;
-  const outcome = await reportGhlOutcome(repo, deps, account, row, status, aggregate.status === "failed" ? aggregate.reason : null);
+  const notOnWhatsapp = aggregate.status === "failed" && aggregate.reason === REASON_NOT_ON_WHATSAPP;
+  // SMS fallback B: the text part's text (never the attachments), before the report.
+  const sms: SmsFallbackOutcome | null = notOnWhatsapp ? await trySmsFallback(repo, deps, { account, row, text: unsentText }) : null;
+  if (sms === "busy") {
+    result.unresolved++;
+    return;
+  }
+  const reason = aggregate.status === "failed" ? (sms ? notOnWhatsappReason(sms) : aggregate.reason) : null;
+  const outcome = await reportGhlOutcome(repo, deps, account, row, status, reason);
   if (isReportedOutcome(outcome)) {
     if (aggregate.status === "delivered") result.delivered++;
     else {
       result.failed++;
       // Only the pass that stored the status remembers and fires.
-      if (aggregate.reason === REASON_NOT_ON_WHATSAPP && outcome === "reported") {
+      if (sms && outcome === "reported") {
         await rememberNotOnWhatsappBestEffort(repo, row);
-        fireNotOnWhatsapp(repo, deps, result, row, unsentText);
+        if (shouldFireNotOnWhatsapp(sms)) fireNotOnWhatsapp(repo, deps, result, row, unsentText);
       }
     }
   } else {
@@ -2085,7 +2172,7 @@ async function resolveTextPartOutcome(
  * opt-out reports the original W10 string; one recorded on another number
  * reports `REASON_OPTED_OUT_OTHER_NUMBER`. At most 4 point reads (3 numbers).
  */
-export async function optedOutReason(repo: GhlProviderRepo, locationId: string, sendingTenantId: string, phone: string): Promise<string | null> {
+export async function optedOutReason(repo: Pick<GhlRepository, "isOptedOut" | "listLocationNumbers">, locationId: string, sendingTenantId: string, phone: string): Promise<string | null> {
   if (await repo.isOptedOut(sendingTenantId, phone)) return REASON_OPTED_OUT;
   const numbers = await repo.listLocationNumbers(locationId);
   for (const n of numbers) {
@@ -2443,11 +2530,18 @@ async function drainAcceptedRow(
   }
   if (bridgeMessage.status === "not_on_whatsapp") {
     const unsentText = row.pendingText;
-    const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
+    // SMS fallback B: before the report, so the reason can say it went as SMS.
+    const sms = await trySmsFallback(repo, deps, { account, row, text: unsentText });
+    if (sms === "busy") {
+      // Another pass holds this row's SMS; it reports the row.
+      result.unresolved++;
+      return;
+    }
+    const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", notOnWhatsappReason(sms));
     if (outcome === "reported") {
       result.failed++;
       await rememberNotOnWhatsappBestEffort(repo, row);
-      fireNotOnWhatsapp(repo, deps, result, row, unsentText);
+      if (shouldFireNotOnWhatsapp(sms)) fireNotOnWhatsapp(repo, deps, result, row, unsentText);
     } else if (outcome === "already_reported") {
       // An overlapping pass stored it first; that pass remembers and fires.
       result.failed++;

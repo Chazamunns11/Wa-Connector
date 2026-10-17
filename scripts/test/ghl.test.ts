@@ -458,6 +458,26 @@ function createFakeRepo(
       const until = notOnWhatsapp.get(`${locationId}:${phone}`);
       return until !== undefined && until > nowIso;
     },
+    // SMS fallback B (0014): with GHL_SMS_FALLBACK_ENABLED unset (every test in
+    // this file) none of these is reached; scripts/test/sms-fallback.test.ts
+    // covers them.
+    async recordSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, expiresIso: string) {
+      calls.push({ method: "recordSmsFallbackEcho", args: [locationId, contactId, textSha256, expiresIso] });
+    },
+    async consumeSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, nowIso: string) {
+      calls.push({ method: "consumeSmsFallbackEcho", args: [locationId, contactId, textSha256, nowIso] });
+      return false;
+    },
+    async blockSmsFallback(locationId: string) {
+      calls.push({ method: "blockSmsFallback", args: [locationId] });
+    },
+    async claimSmsFallback(id: string) {
+      calls.push({ method: "claimSmsFallback", args: [id] });
+      return false;
+    },
+    async setSmsFallbackResult(id: string, result: "sent" | "failed") {
+      calls.push({ method: "setSmsFallbackResult", args: [id, result] });
+    },
     async isOptedOut(tenantId: string, phone: string) {
       calls.push({ method: "isOptedOut", args: [tenantId, phone] });
       return optOuts.has(`${tenantId}:${phone}`);
@@ -524,7 +544,12 @@ function createFakeRepo(
       // Mirrors src/lib/data/supabase.ts's own clearing rule (0070).
       // 0013: an accepted row keeps its text until its status is reported, but
       // only while workflow triggers are on; with them off the accept clears it.
-      if (patch.sendState === "refused" || (patch.sendState === "accepted" && process.env.GHL_WORKFLOW_TRIGGERS_ENABLED !== "true")) row.pendingText = null;
+      // 0014: the SMS fallback keeps it too.
+      if (
+        patch.sendState === "refused" ||
+        (patch.sendState === "accepted" && process.env.GHL_WORKFLOW_TRIGGERS_ENABLED !== "true" && process.env.GHL_SMS_FALLBACK_ENABLED !== "true")
+      )
+        row.pendingText = null;
       // Mirrors src/lib/data/supabase.ts's own stamp-once rule (0071).
       if (patch.sendState === "refused" && patch.refusalReason !== undefined) row.refusalReason = patch.refusalReason;
       return 1;
