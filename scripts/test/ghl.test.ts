@@ -27,6 +27,8 @@ import {
   upsertGhlGroupContact,
   verifyGhlSignature,
 } from "@/lib/ghl";
+import { sendingGate } from "@/lib/billing/gate";
+import { brandConfig } from "@/lib/brand-config";
 import { listWhatsappGroups, refreshWhatsappGroups, sendWhatsappAttachment, sendWhatsappMessage } from "@/lib/whatsapp-bridge";
 import {
   drainGhlOutboundStatuses,
@@ -3557,8 +3559,11 @@ const APP_INPUT = { tenantId: TENANT_ID, ghlContactId: "ghl-contact-app", toPhon
 
 test("app-originated: ids carry the pwapp_ prefix and are recognised", () => {
   assert.equal(APP_MESSAGE_ID_PREFIX, "pwapp_");
-  assert.equal(isAppOriginatedMessageId("pwapp_abc"), true);
+  assert.equal(isAppOriginatedMessageId("pwapp_0123456789abcdef0123456789abcdef"), true);
   assert.equal(isAppOriginatedMessageId("ghl-msg-1"), false);
+  assert.equal(isAppOriginatedMessageId("pwapp_" + "a".repeat(32)), true);
+  assert.equal(isAppOriginatedMessageId("pwapp_x"), false);
+  assert.equal(isAppOriginatedMessageId("pwapp_" + "A".repeat(32)), false);
 });
 
 test("app-originated: a STOP on another of the location's numbers refuses the invite", async () => {
@@ -3602,8 +3607,7 @@ test("app-originated: billing gate applies and nothing is PUT to GHL", async () 
   const { repo, rows } = createFakeRepo([makeAccount()], { status: "cancelled" });
   const { deps, sendCalls, statusCalls } = makeDeps();
   const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT });
-  assert.equal(outcome.kind, "refused");
-  assert.match((outcome as { reason: string }).reason, /subscription inactive/);
+  assert.deepEqual(outcome, { kind: "refused", reason: sendingGate(makeAccount(), "cancelled", brandConfig().name) });
   assert.equal(sendCalls.length, 0);
   assert.equal(statusCalls.length, 0);
   assert.equal([...rows.values()][0].reportedStatus, "failed");
@@ -3618,4 +3622,14 @@ test("app-originated: the status drain marks an accepted row reported without ca
   assert.equal(outcome, "reported");
   assert.equal(statusCalls.length, 0);
   assert.equal(bundle.rows.get(row.id)!.reportedStatus, "delivered");
+});
+
+test("app-originated: a tenant that is not one of the location's numbers is refused, nothing recorded or sent", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()]);
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT, tenantId: SECOND_TENANT_ID });
+  assert.deepEqual(outcome, { kind: "refused", reason: "Sending number isn't on this sub-account — not sent" });
+  assert.equal(rows.size, 0);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 0);
 });

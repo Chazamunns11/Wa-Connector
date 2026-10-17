@@ -596,11 +596,13 @@ export async function resolveGhlAccessToken(repo: GhlTokenRefreshRepo, deps: Ghl
   return tokens.accessToken;
 }
 
+const REASON_SENDING_NUMBER_NOT_ON_LOCATION = "Sending number isn't on this sub-account — not sent";
+
 /** Prefix of the `ghl_message_id` on rows this app originates (not GHL), e.g. group invites. */
 export const APP_MESSAGE_ID_PREFIX = "pwapp_";
 
 export function isAppOriginatedMessageId(id: string): boolean {
-  return id.startsWith(APP_MESSAGE_ID_PREFIX);
+  return /^pwapp_[0-9a-f]{32}$/.test(id);
 }
 
 /**
@@ -1003,6 +1005,13 @@ export async function sendAppOriginatedText(
   input: { account: GhlAccount; tenantId: string; ghlContactId: string; toPhone: string; text: string }
 ): Promise<HandleProviderOutboundOutcome> {
   const { account } = input;
+  try {
+    const numbers = await repo.listLocationNumbers(account.locationId);
+    if (!numbers.some((n) => n.tenantId === input.tenantId)) return { kind: "refused", reason: REASON_SENDING_NUMBER_NOT_ON_LOCATION };
+  } catch (err) {
+    console.error("[ghl-provider] sendAppOriginatedText: could not read the location's numbers (nothing sent):", err instanceof Error ? err.name : "unknown");
+    return { kind: "error", recorded: false };
+  }
   const sendingNumber = groupSendingNumber(account, input.tenantId);
   const ghlMessageId = APP_MESSAGE_ID_PREFIX + randomUUID().replaceAll("-", "");
   let row: GhlOutboundMessage;
