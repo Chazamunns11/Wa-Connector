@@ -204,7 +204,7 @@ export interface GhlProviderDeps {
     messageId: string,
     status: "delivered" | "failed" | "pending" | "read",
     errorMessage?: string
-  ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  ) => Promise<{ ok: true } | { ok: false; error: string; status?: number }>;
   refreshToken: (refreshToken: string) => Promise<RefreshGhlTokenResult>;
   /** How long the loser of `claimGhlTokenRefresh` waits before re-reading (plan's D2 — "sleep ~1s"). Overridable so tests don't actually wait a second. */
   refreshWaitMs: number;
@@ -2185,3 +2185,79 @@ export const GHL_PROVIDER_REASONS = {
   groupSyncOff: REASON_GROUP_SYNC_OFF,
   groupLeft: REASON_GROUP_LEFT,
 } as const;
+
+// ---------------------------------------------------------------------------
+// Read receipts (migration 0010) — reported to GHL after `delivered`.
+// ---------------------------------------------------------------------------
+
+/** Only rows this young are considered for a `read` report. */
+const READ_RECEIPT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** Fixed `read_report_error` for a final 4xx refusal of the `read` status. */
+const REASON_GHL_REFUSED_READ = "GHL refused read status";
+
+export type GhlReadReceiptsRepo = GhlTokenRefreshRepo & Pick<GhlRepository, "listGhlOutboundAwaitingRead" | "getWhatsappReadTimes" | "markGhlOutboundReadReported">;
+
+export interface DrainGhlReadReceiptsResult {
+  examined: number;
+  reported: number;
+  failed: number;
+}
+
+/**
+ * Reports `read` to GHL for delivered rows whose bridge ledger row has a
+ * `read_at`. Never touches `reported_status`. App-originated rows are marked
+ * locally without a PUT; a 4xx is final (fixed error, never retried); a 5xx,
+ * network error or token failure leaves the row for the next pass. Never
+ * throws; logs fixed strings only.
+ */
+export async function drainGhlReadReceipts(
+  repo: GhlReadReceiptsRepo,
+  deps: GhlProviderDeps = defaultGhlProviderDeps
+): Promise<DrainGhlReadReceiptsResult> {
+  const result: DrainGhlReadReceiptsResult = { examined: 0, reported: 0, failed: 0 };
+
+  let rows: GhlOutboundMessage[];
+  let readTimes: Map<string, string>;
+  try {
+    rows = await repo.listGhlOutboundAwaitingRead(DRAIN_BATCH_CAP, new Date(Date.now() - READ_RECEIPT_WINDOW_MS).toISOString());
+    result.examined = rows.length;
+    if (rows.length === 0) return result;
+    readTimes = await repo.getWhatsappReadTimes(
+      rows.filter((r) => !isAppOriginatedMessageId(r.ghlMessageId)).map((r) => ({ tenantId: r.tenantId, idempotencyKey: r.idempotencyKey }))
+    );
+  } catch (err) {
+    console.error("[ghl-provider.drainGhlReadReceipts] failed to load rows (non-fatal):", err instanceof Error ? err.name : "error");
+    return result;
+  }
+
+  for (const row of rows) {
+    try {
+      if (isAppOriginatedMessageId(row.ghlMessageId)) {
+        await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
+        continue;
+      }
+      if (!readTimes.has(`${row.tenantId}:${row.idempotencyKey}`)) continue;
+
+      const account = await repo.getGhlAccountByLocationId(row.locationId);
+      const accessToken = account ? await resolveGhlAccessToken(repo, deps, account) : null;
+      if (!accessToken) {
+        result.failed++;
+        continue;
+      }
+      const put = await deps.updateStatus(accessToken, row.ghlMessageId, "read");
+      if (put.ok) {
+        await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
+        result.reported++;
+      } else if (put.status !== undefined && put.status >= 400 && put.status < 500) {
+        await repo.markGhlOutboundReadReported(row.id, { readReportError: REASON_GHL_REFUSED_READ });
+        result.failed++;
+      } else {
+        result.failed++;
+      }
+    } catch (err) {
+      result.failed++;
+      console.error("[ghl-provider.drainGhlReadReceipts] row failed (non-fatal):", err instanceof Error ? err.name : "error");
+    }
+  }
+  return result;
+}

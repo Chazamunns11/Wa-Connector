@@ -287,6 +287,10 @@ export interface GhlOutboundMessage {
   reportedStatus: GhlOutboundReportedStatus | null;
   reportedAt: string | null;
   reportError: string | null;
+  /** 0010 — when the `read` status was PUT to GHL (or finally given up on); `null` until then. Independent of `reportedStatus`. */
+  readReportedAt: string | null;
+  /** 0010 — fixed diagnostic string from a refused `read` report; `null` when none. */
+  readReportError: string | null;
   createdAt: string;
 }
 

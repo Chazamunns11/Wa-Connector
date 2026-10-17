@@ -29,7 +29,7 @@ function heldRow(n: number, ageHours: number, over: Partial<GhlOutboundMessage> 
   return {
     id: `row-${n}`, locationId: LOC, tenantId: TENANT, ghlMessageId: `m${n}`, ghlContactId: "c",
     idempotencyKey: `key-${n}`, toPhone: "+447700900123", hadAttachments: false, sendState: "held", sendAttempts: 0,
-    pendingText: `text ${n}`, refusalReason: null, reportedStatus: null, reportedAt: null, reportError: null,
+    pendingText: `text ${n}`, refusalReason: null, reportedStatus: null, reportedAt: null, reportError: null, readReportedAt: null, readReportError: null,
     createdAt: new Date(NOW - ageHours * 3_600_000).toISOString(), ...over,
   };
 }

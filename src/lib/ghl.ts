@@ -649,7 +649,7 @@ export async function updateGhlMessageStatus(
   messageId: string,
   status: "delivered" | "failed" | "pending" | "read",
   errorMessage?: string
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string; status?: number }> {
   try {
     const body: Record<string, unknown> = { status };
     if (status === "failed" && errorMessage) body.error = { message: errorMessage };
@@ -677,7 +677,7 @@ export async function updateGhlMessageStatus(
       // free text.
       const text = await res.text().catch(() => "");
       console.error(`[ghl] status update rejected: HTTP ${res.status}${text ? ` — ${text.slice(0, 300)}` : ""}`);
-      return { ok: false, error: `GHL status update rejected (HTTP ${res.status})` };
+      return { ok: false, error: `GHL status update rejected (HTTP ${res.status})`, status: res.status };
     }
     return { ok: true };
   } catch (err) {

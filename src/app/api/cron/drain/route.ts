@@ -22,7 +22,7 @@
 import { timingSafeEqual } from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { repo } from "@/lib/data";
-import { drainGhlOutboundStatuses } from "@/lib/ghl-provider";
+import { drainGhlOutboundStatuses, drainGhlReadReceipts } from "@/lib/ghl-provider";
 import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
 import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
 import { purgeCancelledAccounts } from "@/lib/billing/cleanup";
@@ -92,6 +92,19 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] ghl outbound-status drain failed (non-fatal):", err);
   }
 
+  // Read receipts: off unless GHL_READ_RECEIPTS_ENABLED is exactly "true".
+  let ghlReadReceipts = { examined: 0, reported: 0, failed: 0 };
+  if (process.env.GHL_READ_RECEIPTS_ENABLED === "true") {
+    try {
+      ghlReadReceipts = await drainGhlReadReceipts(repo);
+      if (ghlReadReceipts.examined > 0) {
+        console.log(`[cron/drain] ghl read receipts: ${ghlReadReceipts.examined} examined, reported ${ghlReadReceipts.reported}, failed ${ghlReadReceipts.failed}.`);
+      }
+    } catch (err) {
+      console.error("[cron/drain] ghl read-receipt drain failed (non-fatal):", err instanceof Error ? err.name : "error");
+    }
+  }
+
   let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, optedOut: 0, optedIn: 0, blockedUnconfigured: false };
   try {
     ghlInboundReplies = await drainGhlInboundReplies(repo);
@@ -129,5 +142,5 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] cancelled-account cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
-  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlInboundReplies, whatsappInboundPurged, cancelledCleanup });
+  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlReadReceipts, ghlInboundReplies, whatsappInboundPurged, cancelledCleanup });
 }

@@ -486,7 +486,7 @@ function createFakeRepo(
         refusalReason: null,
         reportedStatus: null,
         reportedAt: null,
-        reportError: null,
+        reportError: null, readReportedAt: null, readReportError: null,
         createdAt: new Date(Date.now() + nextId).toISOString(),
       };
       rows.set(row.id, row);
@@ -1246,7 +1246,7 @@ function seedAcceptedRow(
     refusalReason: null,
     reportedStatus: null,
     reportedAt: null,
-    reportError: null,
+    reportError: null, readReportedAt: null, readReportError: null,
     createdAt: new Date(Date.now() + repoBundle.rows.size).toISOString(),
     ...overrides,
   };

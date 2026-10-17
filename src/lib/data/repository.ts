@@ -434,6 +434,19 @@ export interface GhlRepository {
    */
   markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundReportedStatus | null; reportError: string | null }): Promise<void>;
 
+  /**
+   * Rows GHL already knows as `delivered` whose `read` status has not been
+   * reported (`read_reported_at IS NULL`), created at or after `sinceIso`,
+   * oldest first. Never looks at or changes `reported_status`.
+   */
+  listGhlOutboundAwaitingRead(limit: number, sinceIso: string): Promise<GhlOutboundMessage[]>;
+
+  /** `whatsapp_messages.read_at` by `${tenantId}:${idempotencyKey}`; only rows whose `read_at` is set appear in the map. */
+  getWhatsappReadTimes(pairs: { tenantId: string; idempotencyKey: string }[]): Promise<Map<string, string>>;
+
+  /** Stamps `read_reported_at = now()` and `read_report_error`. The row is never listed by `listGhlOutboundAwaitingRead` again. */
+  markGhlOutboundReadReported(id: string, result: { readReportError: string | null }): Promise<void>;
+
   // -------------------------------------------------------------------------
   // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — outbound
   // attachment PARTS of one `ghl_outbound_messages` row

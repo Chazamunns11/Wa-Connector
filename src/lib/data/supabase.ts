@@ -383,6 +383,8 @@ interface GhlOutboundMessageRow {
   reported_status: string | null;
   reported_at: string | null;
   report_error: string | null;
+  read_reported_at: string | null;
+  read_report_error: string | null;
   created_at: string;
 }
 
@@ -403,6 +405,8 @@ function mapGhlOutboundMessage(row: GhlOutboundMessageRow): GhlOutboundMessage {
     reportedStatus: row.reported_status as GhlOutboundMessage["reportedStatus"],
     reportedAt: row.reported_at,
     reportError: row.report_error,
+    readReportedAt: row.read_reported_at,
+    readReportError: row.read_report_error,
     createdAt: row.created_at,
   };
 }
@@ -1368,6 +1372,49 @@ export class SupabaseGhlRepository implements GhlRepository {
       update.reported_at = new Date().toISOString();
     }
     const { error } = await supabase.from("ghl_outbound_messages").update(update).eq("id", id);
+    if (error) throw error;
+  }
+
+  async listGhlOutboundAwaitingRead(limit: number, sinceIso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .select("*")
+      .eq("reported_status", "delivered")
+      .is("read_reported_at", null)
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    if (error) throw error;
+    return ((data ?? []) as unknown as GhlOutboundMessageRow[]).map(mapGhlOutboundMessage);
+  }
+
+  async getWhatsappReadTimes(pairs: { tenantId: string; idempotencyKey: string }[]) {
+    const out = new Map<string, string>();
+    if (pairs.length === 0) return out;
+    const supabase = getServiceClient();
+    const { tenantIds, idempotencyKeys } = ghlTenantKeyQueryFilters(pairs);
+    const { data, error } = await supabase
+      .from("whatsapp_messages")
+      .select("coach_id, idempotency_key, read_at")
+      .in("coach_id", tenantIds)
+      .in("idempotency_key", idempotencyKeys)
+      .not("read_at", "is", null);
+    if (error) throw error;
+    const wanted = new Set(pairs.map((p) => `${p.tenantId}:${p.idempotencyKey}`));
+    for (const row of (data ?? []) as { coach_id: string; idempotency_key: string; read_at: string }[]) {
+      const key = `${row.coach_id}:${row.idempotency_key}`;
+      if (wanted.has(key)) out.set(key, row.read_at);
+    }
+    return out;
+  }
+
+  async markGhlOutboundReadReported(id: string, result: { readReportError: string | null }) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_outbound_messages")
+      .update({ read_reported_at: new Date().toISOString(), read_report_error: result.readReportError })
+      .eq("id", id);
     if (error) throw error;
   }
 
