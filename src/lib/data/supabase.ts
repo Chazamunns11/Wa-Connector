@@ -1377,36 +1377,11 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async listGhlOutboundAwaitingRead(limit: number, sinceIso: string) {
     const supabase = getServiceClient();
-    const { data, error } = await supabase
-      .from("ghl_outbound_messages")
-      .select("*")
-      .eq("reported_status", "delivered")
-      .is("read_reported_at", null)
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: true })
-      .limit(limit);
+    // The join with whatsapp_messages lives in SQL (0010) so unread rows
+    // cannot fill the batch and starve the ones that were read.
+    const { data, error } = await supabase.rpc("ghl_outbound_awaiting_read", { p_since: sinceIso, p_limit: limit });
     if (error) throw error;
-    return ((data ?? []) as unknown as GhlOutboundMessageRow[]).map(mapGhlOutboundMessage);
-  }
-
-  async getWhatsappReadTimes(pairs: { tenantId: string; idempotencyKey: string }[]) {
-    const out = new Map<string, string>();
-    if (pairs.length === 0) return out;
-    const supabase = getServiceClient();
-    const { tenantIds, idempotencyKeys } = ghlTenantKeyQueryFilters(pairs);
-    const { data, error } = await supabase
-      .from("whatsapp_messages")
-      .select("coach_id, idempotency_key, read_at")
-      .in("coach_id", tenantIds)
-      .in("idempotency_key", idempotencyKeys)
-      .not("read_at", "is", null);
-    if (error) throw error;
-    const wanted = new Set(pairs.map((p) => `${p.tenantId}:${p.idempotencyKey}`));
-    for (const row of (data ?? []) as { coach_id: string; idempotency_key: string; read_at: string }[]) {
-      const key = `${row.coach_id}:${row.idempotency_key}`;
-      if (wanted.has(key)) out.set(key, row.read_at);
-    }
-    return out;
+    return ((data ?? []) as unknown as (GhlOutboundMessageRow & { read_at: string })[]).map((r) => ({ message: mapGhlOutboundMessage(r), readAt: r.read_at }));
   }
 
   async markGhlOutboundReadReported(id: string, result: { readReportError: string | null }) {

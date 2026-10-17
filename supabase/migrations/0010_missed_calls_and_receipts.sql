@@ -60,3 +60,56 @@ create index if not exists ghl_outbound_read_pending_idx
 
 -- RLS is already on for all three tables; no new policies, deliberately.
 -- Service-role only.
+
+-- ---------------------------------------------------------------------------
+-- ghl_outbound_awaiting_read: the read-receipt drain's work list
+-- ---------------------------------------------------------------------------
+
+-- Delivered-and-not-yet-read-reported rows whose bridge ledger row HAS a
+-- read_at, oldest first. The join lives in SQL so rows that were never read
+-- (contacts with read receipts off) cannot fill the batch and starve the rest.
+-- Service-role only, like activate_ghl_location.
+create or replace function public.ghl_outbound_awaiting_read(p_since timestamptz, p_limit int)
+returns table (
+  id uuid,
+  location_id text,
+  tenant_id uuid,
+  ghl_message_id text,
+  ghl_contact_id text,
+  idempotency_key text,
+  to_phone text,
+  had_attachments boolean,
+  send_state text,
+  send_attempts int,
+  pending_text text,
+  refusal_reason text,
+  reported_status text,
+  reported_at timestamptz,
+  report_error text,
+  read_reported_at timestamptz,
+  read_report_error text,
+  created_at timestamptz,
+  read_at timestamptz
+)
+language sql
+stable
+security invoker
+as $$
+  select g.id, g.location_id, g.tenant_id, g.ghl_message_id, g.ghl_contact_id,
+         g.idempotency_key, g.to_phone, g.had_attachments, g.send_state,
+         g.send_attempts, g.pending_text, g.refusal_reason, g.reported_status,
+         g.reported_at, g.report_error, g.read_reported_at, g.read_report_error,
+         g.created_at, w.read_at
+  from public.ghl_outbound_messages g
+  join public.whatsapp_messages w
+    on w.coach_id = g.tenant_id and w.idempotency_key = g.idempotency_key
+  where g.reported_status = 'delivered'
+    and g.read_reported_at is null
+    and g.created_at >= p_since
+    and w.read_at is not null
+  order by g.created_at
+  limit p_limit
+$$;
+
+revoke all on function public.ghl_outbound_awaiting_read(timestamptz, int) from public, anon, authenticated;
+grant execute on function public.ghl_outbound_awaiting_read(timestamptz, int) to service_role;

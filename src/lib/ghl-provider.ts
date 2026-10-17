@@ -2195,7 +2195,7 @@ const READ_RECEIPT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /** Fixed `read_report_error` for a final 4xx refusal of the `read` status. */
 const REASON_GHL_REFUSED_READ = "GHL refused read status";
 
-export type GhlReadReceiptsRepo = GhlTokenRefreshRepo & Pick<GhlRepository, "listGhlOutboundAwaitingRead" | "getWhatsappReadTimes" | "markGhlOutboundReadReported">;
+export type GhlReadReceiptsRepo = GhlTokenRefreshRepo & Pick<GhlRepository, "listGhlOutboundAwaitingRead" | "markGhlOutboundReadReported">;
 
 export interface DrainGhlReadReceiptsResult {
   examined: number;
@@ -2206,7 +2206,7 @@ export interface DrainGhlReadReceiptsResult {
 /**
  * Reports `read` to GHL for delivered rows whose bridge ledger row has a
  * `read_at`. Never touches `reported_status`. App-originated rows are marked
- * locally without a PUT; a 4xx is final (fixed error, never retried); a 5xx,
+ * locally without a PUT; a 4xx other than 401 is final (fixed error, never retried); a 5xx,
  * network error or token failure leaves the row for the next pass. Never
  * throws; logs fixed strings only.
  */
@@ -2217,14 +2217,9 @@ export async function drainGhlReadReceipts(
   const result: DrainGhlReadReceiptsResult = { examined: 0, reported: 0, failed: 0 };
 
   let rows: GhlOutboundMessage[];
-  let readTimes: Map<string, string>;
   try {
-    rows = await repo.listGhlOutboundAwaitingRead(DRAIN_BATCH_CAP, new Date(Date.now() - READ_RECEIPT_WINDOW_MS).toISOString());
+    rows = (await repo.listGhlOutboundAwaitingRead(DRAIN_BATCH_CAP, new Date(Date.now() - READ_RECEIPT_WINDOW_MS).toISOString())).map((r) => r.message);
     result.examined = rows.length;
-    if (rows.length === 0) return result;
-    readTimes = await repo.getWhatsappReadTimes(
-      rows.filter((r) => !isAppOriginatedMessageId(r.ghlMessageId)).map((r) => ({ tenantId: r.tenantId, idempotencyKey: r.idempotencyKey }))
-    );
   } catch (err) {
     console.error("[ghl-provider.drainGhlReadReceipts] failed to load rows (non-fatal):", err instanceof Error ? err.name : "error");
     return result;
@@ -2236,8 +2231,6 @@ export async function drainGhlReadReceipts(
         await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
         continue;
       }
-      if (!readTimes.has(`${row.tenantId}:${row.idempotencyKey}`)) continue;
-
       const account = await repo.getGhlAccountByLocationId(row.locationId);
       const accessToken = account ? await resolveGhlAccessToken(repo, deps, account) : null;
       if (!accessToken) {
@@ -2248,7 +2241,8 @@ export async function drainGhlReadReceipts(
       if (put.ok) {
         await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
         result.reported++;
-      } else if (put.status !== undefined && put.status >= 400 && put.status < 500) {
+      } else if (put.status !== undefined && put.status >= 400 && put.status < 500 && put.status !== 401) {
+        // A 401 is a token problem, not a refusal of the status: retry next pass.
         await repo.markGhlOutboundReadReported(row.id, { readReportError: REASON_GHL_REFUSED_READ });
         result.failed++;
       } else {

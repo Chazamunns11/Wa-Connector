@@ -41,12 +41,12 @@ function setup(rows: GhlOutboundMessage[], readKeys: string[], putResult: { ok: 
     async markGhlNeedsReauth() {},
     async listGhlOutboundAwaitingRead(limit, sinceIso) {
       listed.push({ limit, sinceIso });
-      return [...byId.values()].filter((r) => r.reportedStatus === "delivered" && r.readReportedAt === null && r.createdAt >= sinceIso).slice(0, limit);
-    },
-    async getWhatsappReadTimes(pairs) {
-      const out = new Map<string, string>();
-      for (const p of pairs) if (readKeys.includes(p.idempotencyKey)) out.set(`${p.tenantId}:${p.idempotencyKey}`, "2026-10-17T09:00:00Z");
-      return out;
+      // Mirrors the SQL function: delivered, unreported, in window, AND read.
+      return [...byId.values()]
+        .filter((r) => r.reportedStatus === "delivered" && r.readReportedAt === null && r.createdAt >= sinceIso && readKeys.includes(r.idempotencyKey))
+        .sort((x, y) => x.createdAt.localeCompare(y.createdAt))
+        .slice(0, limit)
+        .map((message) => ({ message, readAt: "2026-10-17T09:00:00Z" }));
     },
     async markGhlOutboundReadReported(id, result) {
       const r = byId.get(id)!;
@@ -83,6 +83,26 @@ test("no read_at: no PUT and not marked", async () => {
   assert.equal(s.puts.length, 0);
   assert.equal(s.byId.get("row-1")!.readReportedAt, null);
   assert.equal(r.reported, 0);
+});
+
+test("starvation: 60 unread rows ahead of one read row, the read row is reported", async () => {
+  const base = Date.now() - 3_600_000;
+  const unread = Array.from({ length: 60 }, (_, i) => row(i + 1, { createdAt: new Date(base + i * 1000).toISOString() }));
+  const readRow = row(100, { createdAt: new Date(base + 100_000).toISOString() });
+  const s = setup([...unread, readRow], ["key-100"]);
+  const r = await drainGhlReadReceipts(s.repo, s.deps);
+  assert.deepEqual(s.puts, [{ messageId: "m100", status: "read" }]);
+  assert.equal(r.reported, 1);
+});
+
+test("401 on read is not final: left for the next pass", async () => {
+  const s = setup([row(1)], ["key-1"], { ok: false, error: "GHL status update rejected (HTTP 401)", status: 401 });
+  const r = await drainGhlReadReceipts(s.repo, s.deps);
+  assert.equal(s.byId.get("row-1")!.readReportedAt, null);
+  assert.equal(s.byId.get("row-1")!.readReportError, null);
+  assert.equal(r.failed, 1);
+  await drainGhlReadReceipts(s.repo, s.deps);
+  assert.equal(s.puts.length, 2);
 });
 
 test("app-originated row: marked locally, no PUT", async () => {
@@ -133,11 +153,14 @@ test("rows older than 7 days aren't listed", async () => {
   // The real query encodes the same filters.
   const src = readFileSync(new URL("../../src/lib/data/supabase.ts", import.meta.url), "utf8");
   const start = src.indexOf("async listGhlOutboundAwaitingRead(");
-  const body = src.slice(start, src.indexOf("async getWhatsappReadTimes(", start));
-  assert.match(body, /\.eq\("reported_status", "delivered"\)/);
-  assert.match(body, /\.is\("read_reported_at", null\)/);
-  assert.match(body, /\.gte\("created_at", sinceIso\)/);
-  assert.match(body, /ascending: true/);
+  assert.match(src.slice(start, start + 600), /rpc\("ghl_outbound_awaiting_read"/);
+  const sql = readFileSync(new URL("../../supabase/migrations/0010_missed_calls_and_receipts.sql", import.meta.url), "utf8");
+  assert.match(sql, /g\.reported_status = 'delivered'/);
+  assert.match(sql, /g\.read_reported_at is null/);
+  assert.match(sql, /g\.created_at >= p_since/);
+  assert.match(sql, /w\.read_at is not null/);
+  assert.match(sql, /order by g\.created_at/);
+  assert.match(sql, /grant execute on function public\.ghl_outbound_awaiting_read\(timestamptz, int\) to service_role/);
 });
 
 test("the drain never writes reported_status (repo has no such write)", () => {
