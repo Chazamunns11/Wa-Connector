@@ -48,14 +48,14 @@ test("read defaults: reactions and deletes off, SMS fallback on", async () => {
   const { repo } = fakeRepo();
   const r = await decideMessageEventsRequest(repo, LOC_A, {});
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, { ok: true, showReactions: false, showDeletes: false, smsFallback: true, smsFallbackBlocked: false });
+  assert.deepEqual(r.body, { ok: true, showReactions: false, showDeletes: false, smsFallback: true, smsFallbackBlocked: false, smsFallbackAvailable: false });
 });
 
 test("writing one leaves the other alone", async () => {
   const { repo } = fakeRepo();
-  assert.deepEqual((await decideMessageEventsRequest(repo, LOC_A, { showReactions: true })).body, { ok: true, showReactions: true, showDeletes: false, smsFallback: true, smsFallbackBlocked: false });
-  assert.deepEqual((await decideMessageEventsRequest(repo, LOC_A, { showDeletes: true, smsFallback: true, smsFallbackBlocked: false })).body, { ok: true, showReactions: true, showDeletes: true, smsFallback: true, smsFallbackBlocked: false });
-  assert.deepEqual((await decideMessageEventsRequest(repo, LOC_A, { showReactions: false })).body, { ok: true, showReactions: false, showDeletes: true, smsFallback: true, smsFallbackBlocked: false });
+  assert.deepEqual((await decideMessageEventsRequest(repo, LOC_A, { showReactions: true })).body, { ok: true, showReactions: true, showDeletes: false, smsFallback: true, smsFallbackBlocked: false, smsFallbackAvailable: false });
+  assert.deepEqual((await decideMessageEventsRequest(repo, LOC_A, { showDeletes: true, smsFallback: true, smsFallbackBlocked: false, smsFallbackAvailable: false })).body, { ok: true, showReactions: true, showDeletes: true, smsFallback: true, smsFallbackBlocked: false, smsFallbackAvailable: false });
+  assert.deepEqual((await decideMessageEventsRequest(repo, LOC_A, { showReactions: false })).body, { ok: true, showReactions: false, showDeletes: true, smsFallback: true, smsFallbackBlocked: false, smsFallbackAvailable: false });
 });
 
 test("a non-boolean is a 400 and writes nothing", async () => {
@@ -71,8 +71,8 @@ test("a non-boolean is a 400 and writes nothing", async () => {
 
 test("one sub-account's settings never change another's", async () => {
   const { repo } = fakeRepo();
-  await decideMessageEventsRequest(repo, LOC_A, { showReactions: true, showDeletes: true, smsFallback: true, smsFallbackBlocked: false });
-  assert.deepEqual((await decideMessageEventsRequest(repo, LOC_B, {})).body, { ok: true, showReactions: false, showDeletes: false, smsFallback: true, smsFallbackBlocked: false });
+  await decideMessageEventsRequest(repo, LOC_A, { showReactions: true, showDeletes: true, smsFallback: true, smsFallbackBlocked: false, smsFallbackAvailable: false });
+  assert.deepEqual((await decideMessageEventsRequest(repo, LOC_B, {})).body, { ok: true, showReactions: false, showDeletes: false, smsFallback: true, smsFallbackBlocked: false, smsFallbackAvailable: false });
 });
 
 test("an unknown location is a 404 and never written", async () => {
@@ -98,6 +98,7 @@ test("the SMS fallback setting reads and writes, and leaves the other switches a
     showDeletes: false,
     smsFallback: false,
     smsFallbackBlocked: false,
+    smsFallbackAvailable: false,
   });
   assert.deepEqual(writes, [`sms:${LOC_A}`], "only the SMS switch is written");
   assert.equal((await decideMessageEventsRequest(repo, LOC_A, {})).body.smsFallback, false);
@@ -113,6 +114,7 @@ test("a blocked sub-account reads as off and blocked; switching it on again clea
     showDeletes: false,
     smsFallback: false,
     smsFallbackBlocked: true,
+    smsFallbackAvailable: false,
   });
   const after = await decideMessageEventsRequest(repo, LOC_A, { smsFallback: true });
   assert.equal(after.body.smsFallback, true);
@@ -141,4 +143,18 @@ test("the settings card has the plan's exact SMS fallback wording", () => {
       "Turned off: this sub-account's SMS goes through PingWren. Connect another SMS provider (LC Phone or Twilio) in GHL, then switch it back on."
     )
   );
+});
+
+test("smsFallbackAvailable follows the global GHL_SMS_FALLBACK_ENABLED switch, so the toggle only shows when it can work", async () => {
+  const before = process.env.GHL_SMS_FALLBACK_ENABLED;
+  try {
+    const { repo } = fakeRepo();
+    delete process.env.GHL_SMS_FALLBACK_ENABLED;
+    assert.equal((await decideMessageEventsRequest(repo, LOC_A, {})).body.smsFallbackAvailable, false);
+    process.env.GHL_SMS_FALLBACK_ENABLED = "true";
+    assert.equal((await decideMessageEventsRequest(repo, LOC_A, {})).body.smsFallbackAvailable, true);
+  } finally {
+    if (before === undefined) delete process.env.GHL_SMS_FALLBACK_ENABLED;
+    else process.env.GHL_SMS_FALLBACK_ENABLED = before;
+  }
 });

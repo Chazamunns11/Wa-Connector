@@ -17,6 +17,7 @@
  */
 import type { GhlRepository } from "@/lib/data";
 import type { GhlAccount } from "@/lib/types";
+import { isSmsFallbackEnabled } from "@/lib/ghl";
 
 export type MessageEventsRepo = Pick<GhlRepository, "getGhlAccountByLocationId" | "setMessageEventSettings" | "setSmsFallbackEnabled">;
 
@@ -63,5 +64,7 @@ function settingsBody(account: GhlAccount): Record<string, unknown> {
     showDeletes: account.showDeletes === true,
     smsFallback: account.smsFallbackEnabled !== false && !blocked,
     smsFallbackBlocked: blocked,
+    // false while the global GHL_SMS_FALLBACK_ENABLED switch is off: the UI hides the toggle.
+    smsFallbackAvailable: isSmsFallbackEnabled(),
   };
 }

@@ -12,7 +12,7 @@ const SMS_FALLBACK_BLOCKED =
 
 type CallEmbedApi = (path: string, method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>) => Promise<Record<string, unknown>>;
 type Key = "showReactions" | "showDeletes" | "smsFallback";
-type Values = Record<Key, boolean> & { smsFallbackBlocked: boolean };
+type Values = Record<Key, boolean> & { smsFallbackBlocked: boolean; smsFallbackAvailable: boolean };
 
 const SWITCHES: { key: Key; label: string; note: string }[] = [
   { key: "showReactions", label: "Show reactions in GHL", note: WARNING },
@@ -50,7 +50,7 @@ export function MessageEventSettings({ callEmbedApi }: { callEmbedApi: CallEmbed
         typeof json.smsFallback === "boolean" &&
         typeof json.smsFallbackBlocked === "boolean"
       ) {
-        setValues({ showReactions: json.showReactions, showDeletes: json.showDeletes, smsFallback: json.smsFallback, smsFallbackBlocked: json.smsFallbackBlocked });
+        setValues({ showReactions: json.showReactions, showDeletes: json.showDeletes, smsFallback: json.smsFallback, smsFallbackBlocked: json.smsFallbackBlocked, smsFallbackAvailable: json.smsFallbackAvailable === true });
       } else {
         setError(messageOf(json));
       }
@@ -73,7 +73,7 @@ export function MessageEventSettings({ callEmbedApi }: { callEmbedApi: CallEmbed
         {values === null ? (
           error ? null : <p className="text-xs text-ink-faint">Loading…</p>
         ) : (
-          SWITCHES.map(({ key, label, note }) => (
+          SWITCHES.filter(({ key }) => key !== "smsFallback" || values.smsFallbackAvailable).map(({ key, label, note }) => (
             <div key={key} className="flex flex-col gap-1">
               <div className="flex items-center justify-between gap-3">
                 <span id={`message-events-${key}`} className="text-sm text-ink">
