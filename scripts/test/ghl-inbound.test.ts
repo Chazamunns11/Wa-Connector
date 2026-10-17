@@ -1998,3 +1998,23 @@ test("fallback: a failing memory clear never fails the row", async () => {
   assert.equal(result.pushed, 1);
   assert.equal(result.retried, 0);
 });
+
+test("fallback: exhausted, stale missed-call and unknown-event rows clear the memory too", async () => {
+  const rows = [
+    makeRow({ pushAttempts: 99, fromPhone: "+447700900001" }),
+    makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date(Date.now() - MISSED_CALL_STALE_MS - 60_000).toISOString(), fromPhone: "+447700900002" }),
+    makeRow({ body: null, messageType: "event", eventKind: "someFutureKind" as never, fromPhone: "+447700900003" }),
+  ];
+  const { repo, calls } = createFakeRepo([makeAccount()], rows);
+  await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.deepEqual(
+    calls.filter((c) => c.method === "forgetNotOnWhatsapp").map((c) => c.args[1]).sort(),
+    ["+447700900001", "+447700900002", "+447700900003"]
+  );
+});
+
+test("fallback: a row for a tenant with no account never clears anything", async () => {
+  const { repo, calls } = createFakeRepo([], [makeRow()]);
+  await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.equal(calls.some((c) => c.method === "forgetNotOnWhatsapp"), false);
+});

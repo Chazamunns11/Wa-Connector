@@ -657,6 +657,7 @@ function makeSendResult(overrides: Partial<Extract<BridgeSendResult, { ok: true 
 
 function makeDeps(overrides: Partial<GhlProviderDeps> = {}): {
   deps: GhlProviderDeps;
+  deferred: (() => Promise<void>)[];
   sendCalls: SendWhatsappInput[];
   sendAttachmentCalls: SendWhatsappAttachmentInput[];
   statusCalls: { accessToken: string; messageId: string; status: string; errorMessage?: string }[];
@@ -664,7 +665,11 @@ function makeDeps(overrides: Partial<GhlProviderDeps> = {}): {
   const sendCalls: SendWhatsappInput[] = [];
   const sendAttachmentCalls: SendWhatsappAttachmentInput[] = [];
   const statusCalls: { accessToken: string; messageId: string; status: string; errorMessage?: string }[] = [];
+  const deferred: (() => Promise<void>)[] = [];
   const deps: GhlProviderDeps = {
+    defer: (fn) => {
+      deferred.push(fn);
+    },
     sendWhatsapp: async (input) => {
       sendCalls.push(input);
       return makeSendResult({ idempotencyKey: input.idempotencyKey, toPhone: input.to });
@@ -697,7 +702,7 @@ function makeDeps(overrides: Partial<GhlProviderDeps> = {}): {
     notify: () => {},
     ...overrides,
   };
-  return { deps, sendCalls, sendAttachmentCalls, statusCalls };
+  return { deps, deferred, sendCalls, sendAttachmentCalls, statusCalls };
 }
 
 function samplePayloadFor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -3906,7 +3911,6 @@ test("triggers: number lookups are memoised per pass in the status drain", async
 
 const MEMORY_KEY = `${LOCATION_ID}:+447700900123`;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 test("fallback: not_on_whatsapp is remembered for 30 days", async () => {
   const repoBundle = createFakeRepo([makeAccount()]);
@@ -3933,18 +3937,32 @@ test("fallback: remembered contact is refused fast without a bridge call and fir
   repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
   repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
   const { fired, fireTrigger } = triggerFake();
-  const { deps, sendCalls, statusCalls } = makeDeps({ fireTrigger });
+  const { deps, deferred, sendCalls, statusCalls } = makeDeps({ fireTrigger });
   const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor({ message: "see you at 3" }), deps);
   assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.notOnWhatsapp });
   assert.equal(sendCalls.length, 0);
   assert.equal(statusCalls[0].status, "failed");
   assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notOnWhatsapp);
   assert.equal([...repoBundle.rows.values()][0].sendState, "refused");
-  await tick();
-  await tick();
+  assert.equal(deferred.length, 1, "the fire is handed to defer, not dropped");
+  await Promise.all(deferred.map((fn) => fn()));
   assert.deepEqual(fired, [
     { locationId: LOCATION_ID, key: "whatsapp_not_on_whatsapp", payload: { number: "+447700900999", numberLabel: null, contactId: "ghl-contact-1", message: "see you at 3" } },
   ]);
+});
+
+test("fallback: a remembered contact is refused fast even with attachments", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  const { fired, fireTrigger } = triggerFake();
+  const { deps, deferred, sendCalls, sendAttachmentCalls } = makeDeps({ fireTrigger });
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor({ message: "pic", attachments: ["https://x/a.pdf"] }), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.notOnWhatsapp });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(sendAttachmentCalls.length, 0);
+  await Promise.all(deferred.map((fn) => fn()));
+  assert.equal(fired.length, 1);
 });
 
 test("fallback: an expired memory sends normally", async () => {
@@ -3961,11 +3979,11 @@ test("fallback: opted-out contact: STOP refusal wins, no fallback trigger", asyn
   repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
   repoBundle.optOuts.add(`${TENANT_ID}:+447700900123`);
   const { fired, fireTrigger } = triggerFake();
-  const { deps, sendCalls } = makeDeps({ fireTrigger });
+  const { deps, deferred, sendCalls } = makeDeps({ fireTrigger });
   const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor(), deps);
   assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOut });
   assert.equal(sendCalls.length, 0);
-  await tick();
+  await Promise.all(deferred.map((fn) => fn()));
   assert.deepEqual(fired, []);
 });
 

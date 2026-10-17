@@ -85,6 +85,7 @@
  * carry the unsent text. It is cleared on refusal, when the status is reported,
  * and by the cron for an accepted row never reported within 7 days.
  */
+import { after } from "next/server";
 import { randomUUID } from "node:crypto";
 import {
   buildOutboundText,
@@ -237,6 +238,11 @@ export interface GhlProviderDeps {
    * module — and it reads the firing flag itself). See `fireTriggerBestEffort`.
    */
   fireTrigger?: FireTrigger;
+  /**
+   * Runs background work that must outlive the response (Next's `after()`).
+   * Never throws; used for the send-path trigger fire.
+   */
+  defer: (fn: () => Promise<void>) => void;
 }
 
 export const defaultGhlProviderDeps: GhlProviderDeps = {
@@ -248,6 +254,14 @@ export const defaultGhlProviderDeps: GhlProviderDeps = {
   refreshWaitMs: 1000,
   notify: (text) => {
     void import("@/lib/slack").then((m) => m.notifyText(text));
+  },
+  defer: (fn) => {
+    try {
+      after(fn);
+    } catch {
+      // Outside a request scope: just run it in the background.
+      void fn().catch(() => {});
+    }
   },
 };
 
@@ -1018,6 +1032,9 @@ export async function handleProviderOutboundMessage(
       return { kind: "refused", reason: groupRefusal };
     }
 
+    const remembered = await refuseIfNotOnWhatsapp(repo, deps, account, row, textResult.ok ? textResult.text : "");
+    if (remembered) return remembered;
+
     if (mediaSplit) {
       return await handleMediaSplitOutbound(repo, deps, account, row, target, textResult, attachments, messageId, sendingNumber);
     }
@@ -1082,6 +1099,29 @@ async function refuseIfGatedOrOptedOut(
   return null;
 }
 
+/**
+ * SMS fallback: a one-to-one contact remembered as not on WhatsApp is refused
+ * with no bridge call (text or attachments), and `whatsapp_not_on_whatsapp`
+ * fires so a workflow can send it by SMS. Runs after the gate/STOP check and
+ * the group refusal. A group row has no `toPhone` and ignores the memory; a
+ * needs_reauth/disabled account is left to its own refusal; a read error
+ * fails open. Returns the refused outcome, or null to go on.
+ */
+async function refuseIfNotOnWhatsapp(
+  repo: GhlProviderRepo,
+  deps: GhlProviderDeps,
+  account: GhlAccount,
+  row: GhlOutboundMessage,
+  text: string
+): Promise<HandleProviderOutboundOutcome | null> {
+  if (!row.toPhone || account.status === "needs_reauth" || account.status === "disabled") return null;
+  if (!(await isRememberedNotOnWhatsappSafe(repo, row.locationId, row.toPhone))) return null;
+  await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_NOT_ON_WHATSAPP });
+  await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
+  fireNotOnWhatsappFromSend(repo, deps, row, text);
+  return { kind: "refused", reason: REASON_NOT_ON_WHATSAPP };
+}
+
 /** True when the contact is remembered as not on WhatsApp; false on any read error. */
 async function isRememberedNotOnWhatsappSafe(repo: GhlProviderRepo, locationId: string, phone: string): Promise<boolean> {
   try {
@@ -1109,6 +1149,8 @@ function fireNotOnWhatsappFromSend(repo: GhlProviderRepo, deps: GhlProviderDeps,
         message: capTriggerMessage(text),
       });
     });
+    // Hand the capped wait to the host so the fire survives the response.
+    deps.defer(() => settleTriggers(pass));
   } catch {
     // best effort
   }
@@ -1153,18 +1195,6 @@ export async function continueTextOutbound(
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
     await reportGhlOutcome(repo, deps, account, row, "failed", reason);
     return { kind: "refused", reason };
-  }
-
-  // SMS fallback: a one-to-one contact remembered as not on WhatsApp is
-  // refused here, with no bridge call, and `whatsapp_not_on_whatsapp` fires so
-  // a workflow can send it by SMS. The STOP check and the billing gate already
-  // ran. A group row has no `toPhone` and ignores the memory. A read error
-  // fails open (sends normally).
-  if (row.toPhone && (await isRememberedNotOnWhatsappSafe(repo, row.locationId, row.toPhone))) {
-    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_NOT_ON_WHATSAPP });
-    await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
-    fireNotOnWhatsappFromSend(repo, deps, row, ctx.text);
-    return { kind: "refused", reason: REASON_NOT_ON_WHATSAPP };
   }
 
   // Ordering: older messages for this number still waiting (held) go first,
@@ -1261,6 +1291,8 @@ export async function sendAppOriginatedText(
   try {
     const blocked = await refuseIfGatedOrOptedOut(repo, deps, account, row, input.toPhone);
     if (blocked) return blocked;
+    const remembered = await refuseIfNotOnWhatsapp(repo, deps, account, row, input.text);
+    if (remembered) return remembered;
     return await continueTextOutbound(repo, deps, { account, row, target: { to: input.toPhone }, text: input.text, sendingNumber });
   } catch (err) {
     console.error(`[ghl-provider] sendAppOriginatedText: post-intake failure for row ${row.id} (row already recorded — the drain owns it from here):`, err instanceof Error ? err.name : "unknown");

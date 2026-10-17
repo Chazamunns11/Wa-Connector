@@ -437,7 +437,7 @@ export async function drainGhlInboundReplies(
   result.candidates = rows.length;
   if (rows.length === 0) return result;
 
-  const memos: PassMemos = { contactIdByKey: new Map(), numbersByLocation: new Map(), groupsByTenant: new Map(), triggers: newTriggerPass(() => result.triggersSkipped++) };
+  const memos: PassMemos = { contactIdByKey: new Map(), numbersByLocation: new Map(), groupsByTenant: new Map(), locationByTenant: new Map(), triggers: newTriggerPass(() => result.triggersSkipped++) };
   const breaker: CircuitBreakerState = { consecutiveContactUpsertFailures: 0, consecutivePostFailures: 0 };
 
   for (const row of rows) {
@@ -473,6 +473,8 @@ interface PassMemos {
   numbersByLocation: Map<string, LocationNumber[]>;
   /** Opt-in groups — per-tenant group rows. A group contact created this pass is written into its entry, so later rows reuse it. */
   groupsByTenant: Map<string, WhatsappGroup[]>;
+  /** SMS fallback — the location of each tenant seen this pass (only a found one is kept). */
+  locationByTenant: Map<string, string>;
   /** Workflow triggers — the fires this pass started, and its number lookups. */
   triggers: TriggerPass;
 }
@@ -522,6 +524,28 @@ function isKnownEventKind(kind: WhatsappInboundMessage["eventKind"]): boolean {
 }
 
 /** One row's full pipeline — see this file's header for the sequence and retry table. */
+/**
+ * SMS fallback: this phone just messaged us one-to-one (event rows included),
+ * so it is on WhatsApp: forget any "not on WhatsApp" memory for (location,
+ * phone). Never for a group row. Best effort: every error is swallowed and the
+ * row's outcome is untouched. The tenant's location is looked up once per pass.
+ */
+async function forgetNotOnWhatsappBestEffort(repo: GhlInboundRepo, row: WhatsappInboundMessage, memos: PassMemos): Promise<void> {
+  if (row.groupJid != null) return;
+  try {
+    let locationId = memos.locationByTenant.get(row.coachId);
+    if (!locationId) {
+      const account = await repo.getGhlAccountByTenantId(row.coachId);
+      if (!account) return;
+      locationId = account.locationId;
+      memos.locationByTenant.set(row.coachId, locationId);
+    }
+    await repo.forgetNotOnWhatsapp(locationId, row.fromPhone);
+  } catch {
+    console.error("[ghl-inbound] could not clear the not-on-WhatsApp memory (non-fatal)");
+  }
+}
+
 async function processGhlInboundRow(
   repo: GhlInboundRepo,
   deps: GhlInboundDeps,
@@ -531,6 +555,8 @@ async function processGhlInboundRow(
   result: DrainGhlInboundRepliesResult,
   breaker: CircuitBreakerState
 ): Promise<void> {
+  await forgetNotOnWhatsappBestEffort(repo, row, memos);
+
   // Exhaustion pre-check — mirrors `src/lib/ghl-provider.ts`'s
   // `drainPendingSend` exhaustion branch exactly (Phase 1-2 finding 1's own
   // fix shape). A row that has already failed `MAX_PUSH_ATTEMPTS` times sits
@@ -627,17 +653,6 @@ async function processGhlInboundRow(
     await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: REASON_ACCOUNT_NOT_FOUND, unclaim: false });
     result.retried++;
     return;
-  }
-
-  // SMS fallback: this phone just messaged us one-to-one (event rows
-  // included), so it is on WhatsApp: forget any "not on WhatsApp" memory.
-  // Best effort, one quick query; never fails or changes the row's outcome.
-  if (!group) {
-    try {
-      await repo.forgetNotOnWhatsapp(account.locationId, row.fromPhone);
-    } catch {
-      console.error("[ghl-inbound] could not clear the not-on-WhatsApp memory (non-fatal)");
-    }
   }
 
   // Reactions and deletes are posted only when the sub-account turned them
