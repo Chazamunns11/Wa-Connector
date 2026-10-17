@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { WhatsappConnectionPanel, type WhatsappPanelCopy } from "@/components/whatsapp/WhatsappConnectionPanel";
+import { embedPausedMessage } from "@/app/api/crm/embed/session/logic";
 import type { GhlEmbedWhatsappSummary } from "@/lib/types";
 import { MAX_NUMBER_LABEL_LENGTH, parseLabelInput, type LocationSlot } from "@/lib/location-numbers";
 import type { BridgeOkResult, BridgeSessionResult } from "@/lib/whatsapp-bridge";
@@ -121,6 +122,8 @@ interface EmbedSessionResponse {
   ok: boolean;
   state?: "ok" | "not_installed" | "disabled" | "unclaimed" | "billing_paused" | "not_activated";
   claimUrl?: string | null;
+  /** With `billing_paused`: set when the free trial ended with no card. */
+  reason?: "trial_ended";
   token?: string;
   label?: string;
   numbers?: EmbedNumber[];
@@ -139,7 +142,7 @@ type HandshakeOutcome =
   | { kind: "not_installed" }
   | { kind: "disabled" }
   | { kind: "unclaimed"; claimUrl: string | null }
-  | { kind: "billing_paused" }
+  | { kind: "billing_paused"; trialEnded: boolean }
   | { kind: "not_activated" }
   | { kind: "error" };
 
@@ -170,7 +173,7 @@ async function runHandshake(): Promise<HandshakeOutcome> {
   if (json.state === "not_installed") return { kind: "not_installed" };
   if (json.state === "disabled") return { kind: "disabled" };
   if (json.state === "unclaimed") return { kind: "unclaimed", claimUrl: typeof json.claimUrl === "string" ? json.claimUrl : null };
-  if (json.state === "billing_paused") return { kind: "billing_paused" };
+  if (json.state === "billing_paused") return { kind: "billing_paused", trialEnded: json.reason === "trial_ended" };
   if (json.state === "not_activated") return { kind: "not_activated" };
   if (json.state !== "ok" || typeof json.token !== "string") return { kind: "error" };
 
@@ -254,6 +257,7 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
   // handshake, same "nothing to show yet" meaning it always had.
   const [bridgeReachable, setBridgeReachable] = useState<boolean | null>(null);
   const [claimUrl, setClaimUrl] = useState<string | null>(null);
+  const [trialEnded, setTrialEnded] = useState(false);
 
   // The embed token itself — a ref, not state: every closure below reads
   // `tokenRef.current` synchronously at call time rather than closing over a
@@ -289,7 +293,12 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
       setPhase("unclaimed");
       return null;
     }
-    if (outcome.kind === "billing_paused" || outcome.kind === "not_activated") {
+    if (outcome.kind === "billing_paused") {
+      setTrialEnded(outcome.trialEnded);
+      setPhase("billing_paused");
+      return null;
+    }
+    if (outcome.kind === "not_activated") {
       setPhase(outcome.kind);
       return null;
     }
@@ -477,7 +486,10 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
     return (
       <Card>
         <CardHeader title="WhatsApp" />
-        <EmptyState title="Sending is paused" description="The account owner needs to update billing." />
+        <EmptyState
+          title="Sending is paused"
+          description={embedPausedMessage(trialEnded)}
+        />
       </Card>
     );
   }

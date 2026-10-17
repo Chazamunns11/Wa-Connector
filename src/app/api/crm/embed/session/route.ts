@@ -210,7 +210,7 @@ export async function POST(request: Request) {
     }
     const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
     const claimUrl = !account.accountId && isClaimConfigured() ? claimSignupUrl(brandConfig().appUrl, account.locationId) : null;
-    const embedState = embedStateFor(account, owner?.billingStatus ?? null, claimUrl);
+    const embedState = embedStateFor(account, owner?.billingStatus ?? null, claimUrl, owner?.trialEndsAt ?? null);
     if (embedState.state !== "ok") {
       // disabled / unclaimed / billing_paused / not_activated: no embed token, no QR.
       return NextResponse.json({ ok: true, ...embedState });
