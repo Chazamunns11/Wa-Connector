@@ -5,13 +5,13 @@ import { buttonClasses } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { getAccountDataSource } from "@/lib/account-data";
-import { headline, planStatus } from "@/lib/account-data/derive";
+import { headline, needsCard, planStatus } from "@/lib/account-data/derive";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { formatMoney, pricingConfig, tierSentence } from "@/lib/pricing";
 import { dashboardHref, parseBillingNotice } from "@/lib/site/dashboard-url";
 
-import { endTrialNowAction, openBillingPortalAction, startCheckoutAction } from "./actions";
+import { addCardAction, endTrialNowAction, openBillingPortalAction, startCheckoutAction } from "./actions";
 
 // Session-gated (requireAccountSession reads cookies): never prerendered.
 export const dynamic = "force-dynamic";
@@ -24,6 +24,7 @@ const DATE = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", y
 
 const NOTICE = {
   trial_ended: "Your free trial has ended and monthly billing has started. This page can take a moment to catch up.",
+  card_added: "Card saved. If sending was paused it restarts once Stripe confirms, which can take a moment.",
   no_portal: "There is no billing portal for this account yet.",
   stripe_failed: "We could not reach billing just now, so nothing was changed. Please try again.",
 } as const;
@@ -40,7 +41,10 @@ export default async function BillingPage({
   const source = getAccountDataSource(session, now);
   const [account, rows] = await Promise.all([source.getAccount(), source.listLocations()]);
   const billing = await source.getBilling(rows);
-  const status = planStatus(account, now);
+  const hasCard = billing.cardLast4 !== null;
+  const status = planStatus(account, now, { hasCard });
+  // Offered for the whole trial on this page (not just its last days), and once a trial has ended with no card.
+  const offerCard = needsCard(account, now, hasCard) || (account.billingStatus === "trialing" && !hasCard);
   const endsOn = billing.nextInvoiceAt ? DATE.format(new Date(billing.nextInvoiceAt)) : null;
   const next = billing.cancelAtPeriodEnd
     ? "None, the plan is ending"
@@ -86,7 +90,7 @@ export default async function BillingPage({
           {account.billingStatus === "pending" ? (
             <form action={startCheckoutAction}>
               <button type="submit" className={buttonClasses("primary", "md", "min-h-11 px-5")}>
-                Add a card to start your trial
+                Start your free trial
               </button>
             </form>
           ) : null}
@@ -97,6 +101,18 @@ export default async function BillingPage({
               </button>
             </form>
           ) : null}
+          {offerCard ? (
+            <form action={addCardAction}>
+              <button type="submit" className={buttonClasses("primary", "md", "min-h-11 px-5")}>
+                Add a card
+              </button>
+              <p className="mt-2 text-sm text-ink-dim">
+                {account.billingStatus === "paused"
+                  ? "Sending restarts as soon as the card is saved. Monthly billing starts today."
+                  : "Nothing is charged until your trial ends. Without a card, sending pauses when it does."}
+              </p>
+            </form>
+          ) : null}
           {account.billingStatus === "trialing" ? (
             <form action={endTrialNowAction}>
               <button type="submit" className={buttonClasses("secondary", "md", "min-h-11 px-5")}>
@@ -104,6 +120,7 @@ export default async function BillingPage({
               </button>
               <p className="mt-2 text-sm text-ink-dim">
                 Ends the free trial today and starts monthly billing for your active numbers.
+                {hasCard ? null : " We'll ask for a card first."}
               </p>
             </form>
           ) : null}

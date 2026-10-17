@@ -192,7 +192,9 @@ test("pricing copy follows the deck: one trial paragraph with 'per activated sub
   const c = pricingCopy();
   assert.equal(c.trialTerms.length, 1);
   assert.match(c.trialTerms[0], /per activated sub-account/);
-  assert.match(c.trialTerms[0], /charge nothing until the trial ends/);
+  assert.match(c.trialTerms[0], /7-day free trial, no card needed/);
+  assert.match(c.trialTerms[0], /sending pauses until you add one/);
+  assert.doesNotMatch(c.trialTerms[0], /take a card/);
   assert.equal(c.failedPayment.length, 2);
 });
 

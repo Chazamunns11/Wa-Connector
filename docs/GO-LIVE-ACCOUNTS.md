@@ -122,6 +122,11 @@ same organisation**.
 6. **Settings → Billing → Customer portal.** Turn on:
    - Update payment method
    - View invoice history
+
+   The trial takes no card. "Add a card" on the billing page does not use the
+   portal: it opens a Stripe Checkout in setup mode, and the webhook then makes
+   the card the default and resumes the subscription if the trial had already
+   ended. (Adding a card in the portal does not resume a paused subscription.)
    - Cancel subscription, set to **cancel at end of billing period**
 
    Leave "update quantity" and plan switching off. Quantity follows the
@@ -133,12 +138,19 @@ same organisation**.
    failed" banner (sending keeps working), and `unpaid` into paused.
 8. **Developers → Webhooks → Add endpoint.**
    - URL: `<app>/api/webhooks/billing`
-   - Events, exactly these five (the handler ignores anything else):
-     - `checkout.session.completed`
+   - Events, exactly these seven (the handler ignores anything else):
+     - `checkout.session.completed` (signup, restarts, and "Add a card")
      - `customer.subscription.created`
      - `customer.subscription.updated`
      - `customer.subscription.deleted`
+     - `customer.subscription.paused` (the trial ended with no card)
+     - `customer.subscription.resumed` (a card was added after that)
      - `invoice.payment_failed`
+
+     `customer.subscription.trial_will_end` is not needed: there is no
+     trial-ending email yet (the app has no email sending of its own). The
+     dashboard shows an "add a card" reminder in the trial's last 2 days
+     instead.
    - Copy the **signing secret** (starts `whsec_`). It becomes
      `STRIPE_WEBHOOK_SECRET`. Test mode and live mode have different ones.
 9. **Stripe Tax decision.** Pick one before launch:
@@ -231,7 +243,9 @@ Use a spare GHL sub-account and your own number. Use Stripe test cards.
 2. Open the emailed link in the same browser (it comes from the SMTP you set
    up). Check which template it used: a new address gets "Confirm signup",
    a returning one "Magic Link", and both should be customised. It confirms the address, creates the account and sends you straight to
-   Stripe Checkout. Pay with `4242 4242 4242 4242`, any future date, any CVC.
+   Stripe Checkout. Checkout should **not** ask for a card (the trial is 7
+   days, no card needed); it only confirms the email (and the address if
+   Stripe Tax is on). Start the trial.
    You then land on "You're nearly there"; the button takes you to the
    dashboard. Try the form again with the same address: it should say you
    already have an account and point you to log in.
@@ -251,9 +265,12 @@ Use a spare GHL sub-account and your own number. Use Stripe test cards.
    subscription item in Stripe if the Slack note keeps repeating.
 8. Activate up to the trial cap (three numbers). A fourth should be refused
    with the cap message.
-9. Open **Billing** on the dashboard. **Manage billing** should open the
-   Stripe Customer Portal. **End trial early** should move the account to
-   active.
+9. Open **Billing** on the dashboard. The card row says "No card on file"
+   and there is an **Add a card** button. **Manage billing** should open the
+   Stripe Customer Portal. **Start my paid plan now** with no card first
+   opens a Stripe page to add one (use `4242 4242 4242 4242`); once it is
+   saved the trial ends and the account moves to active. With a card already
+   on file it moves straight to active.
 
 ---
 
@@ -277,24 +294,45 @@ Then walk this journey:
    dashboard will not let you attach an existing customer, create the
    customer and subscription from the dashboard on a clock, and use the
    Stripe CLI or dashboard to replay the events at the webhook.
-2. **Signup and trial.** Status trialing. Trial end date visible on the
-   billing page.
-3. **Activation.** Advance the clock past day 7. The first invoice is paid
-   with the test card. Status becomes **active**. Charge should be 1 x
-   £14.99 (plus tax if on).
-4. **Volume tiers.** Activate eleven sub-accounts (use the comped FitClosers
+2. **Signup and trial.** Checkout asks for no card. Status trialing. Trial
+   end date visible on the billing page, and "No card on file".
+3. **Trial ends with no card, sending pauses.** Activate one sub-account and
+   check it sends. Advance the clock to 2 days before the trial ends: the
+   dashboard shows "Your trial ends in 2 days. Add a card to keep sending."
+   with an **Add a card** button. Advance past day 7 without adding a card.
+   In Stripe the subscription is **Paused** and no invoice was charged. The
+   webhook gets `customer.subscription.paused`; the account's
+   `billing_status` becomes `paused` and `trial_ends_at` stays set. The
+   dashboard and billing page say "Your trial has ended. Add a card to keep
+   sending." Send a workflow SMS: GoHighLevel shows it failed with
+   "PingWren subscription inactive — the account owner needs to update
+   billing". Nothing goes out on WhatsApp.
+4. **Add a card, sending resumes.** Click **Add a card**, save
+   `4242 4242 4242 4242` on the Stripe page, and land back on Billing ("Card
+   saved..."). In Stripe the card is the customer's and the subscription's
+   default, the subscription is **Active**, its billing period starts today,
+   and the first invoice (1 x £14.99, plus tax if on) is paid. The webhook
+   gets `checkout.session.completed` (setup mode), then
+   `customer.subscription.resumed`; `billing_status` becomes `active`. Send
+   the workflow SMS again: it reaches WhatsApp. If the subscription stays
+   Paused, check the webhook log for "card setup: ... failed" and that
+   Stripe retried the event.
+5. **Trial ends with a card.** On a second test-clock customer, add a card
+   during the trial and advance past day 7. The first invoice is paid and
+   status goes straight from trialing to **active**, never paused.
+6. **Volume tiers.** Activate eleven sub-accounts (use the comped FitClosers
    account's locations, or a test account). Charge for the month should be
    11 x £11.99. At 25 it should be 25 x £9.99.
-5. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
+7. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
    attaches, then declines). Advance one billing cycle. Status becomes
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the
    "Stripe payment failed" note, and **sending keeps working** while Stripe
    retries. Advance until the retries run out. Status becomes **paused** and
    sending stops.
-6. **Cancel.** In the Customer Portal, cancel. The billing page should say
+8. **Cancel.** In the Customer Portal, cancel. The billing page should say
    "Cancels at the end of this period". Advance past the period end. Status
    becomes **cancelled**.
-7. **14-day cleanup.** Advance the clock a further 14 days. The hourly cron
+9. **14-day cleanup.** Advance the clock a further 14 days. The hourly cron
    job (`/api/cron/drain`) logs each of the account's numbers out of the
    bridge, which deletes the stored WhatsApp session, and clears activation.
    Check the Vercel log line `cancelled cleanup: 1 account(s)...` with
@@ -302,7 +340,7 @@ Then walk this journey:
    test cleanup properly, move the account's `cancelled_at` back in the
    database instead (`update accounts set cancelled_at = now() - interval
    '15 days' where ...`) and run the cron by hand.
-8. **Resubscribe.** Sign in to the cancelled account and open **Billing**.
+10. **Resubscribe.** Sign in to the cancelled account and open **Billing**.
    Click **Restart your subscription — billing starts today** and complete
    Checkout with a test card. There is no second trial: Checkout shows no
    trial and charges straight away, on the same Stripe customer. The account

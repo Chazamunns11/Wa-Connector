@@ -201,3 +201,17 @@ test("W40: the trial paragraph, our comparison column and the other price copy s
   assert.match(pricingCopy().trialTerms[0], /£14\.99 a month per sub-account, with up to 3 WhatsApp numbers included\. 11 to 24 sub-accounts: £11\.99 each\. 25 or more sub-accounts: £9\.99 each\./);
   assert.deepEqual(ourColumn("GBP")[0], "£14.99 a month per sub-account, with up to 3 WhatsApp numbers included. 11 to 24 sub-accounts: £11.99 each. 25 or more sub-accounts: £9.99 each. The tier you reach applies to every sub-account.");
 });
+
+test("trial copy says no card is needed and never that we take one", () => {
+  const signup = readFileSync(join(process.cwd(), "src/app/(site)/signup/page.tsx"), "utf8");
+  const sources = {
+    sales: strings(salesCopy(brand)).join(" "),
+    faq: faqEntries(brand).find((e) => e.id === "trial")!.answer,
+    pricing: pricingCopy().trialTerms.join(" "),
+    signup,
+  };
+  for (const [k, v] of Object.entries(sources)) {
+    assert.doesNotMatch(v, /take a card|card up front|card is needed|card when you sign up/i, k);
+    assert.match(v, /-day free trial, no card needed/, k);
+  }
+});

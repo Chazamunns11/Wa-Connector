@@ -11,15 +11,19 @@ export function PlanHeader({
   headline,
   hasLocations,
   billingHref,
-  pendingCheckoutAction,
+  bannerAction,
 }: {
   accountName: string;
   status: PlanStatus;
   headline: string;
   hasLocations: boolean;
   billingHref: string;
-  /** Set for a pending account (Checkout abandoned): posts to the action that opens a fresh Checkout. */
-  pendingCheckoutAction?: () => Promise<void>;
+  /**
+   * The banner's button. A pending account (Checkout abandoned) posts to the
+   * action that opens a fresh Checkout; a trial that has ended (or is about to)
+   * with no card posts to "Add a card".
+   */
+  bannerAction?: { action: () => Promise<void>; label: string };
 }) {
   return (
     <header>
@@ -28,10 +32,10 @@ export function PlanHeader({
       {status.banner ? (
         <div role="alert" className="mt-4 rounded-lg border border-loss/30 bg-loss-soft p-4 font-medium text-ink">
           {status.banner}
-          {pendingCheckoutAction ? (
-            <form action={pendingCheckoutAction} className="mt-3">
+          {bannerAction ? (
+            <form action={bannerAction.action} className="mt-3">
               <button type="submit" className={buttonClasses("primary", "md", "min-h-11 px-5")}>
-                Add a card to start your trial
+                {bannerAction.label}
               </button>
             </form>
           ) : null}

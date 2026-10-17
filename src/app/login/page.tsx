@@ -23,7 +23,7 @@ const AUTH_ERROR_COPY: Record<string, { title: string; body: string }> = {
   },
   checkout: {
     title: "Billing isn't set up yet",
-    body: "Your account exists but no card was added. Sign in to finish setting up billing.",
+    body: "Your account exists but checkout wasn't finished. Sign in to start your free trial.",
   },
   exists: {
     title: "You already have an account",

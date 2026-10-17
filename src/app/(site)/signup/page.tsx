@@ -35,7 +35,7 @@ export default async function SignupPage({
         <>
           <p>
             Tell us who the account is for. We&apos;ll email you a link to confirm your address, then take you to
-            checkout: a card is needed to start, and nothing is charged until the trial ends. The trial covers up to{" "}
+            checkout to start your trial: {TRIAL_DAYS}-day free trial, no card needed. The trial covers up to{" "}
             {TRIAL_MAX_SUB_ACCOUNTS} sub-accounts.
           </p>
           {claim ? (

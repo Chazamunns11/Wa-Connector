@@ -11,7 +11,7 @@ export function pricingCopy(): PricingCopy {
   return {
     // One paragraph (Task 13C). Kept as an array because /docs/billing renders it.
     trialTerms: [
-      `The ${TRIAL_DAYS}-day trial covers up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. We take a card when you sign up and charge nothing until the trial ends. After that it's ${tierSentence(pricingConfig().currency)} The price is per activated sub-account, billed monthly, and the tier you reach applies to every sub-account.`,
+      `${TRIAL_DAYS}-day free trial, no card needed. The trial covers up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. If it ends before you add a card, sending pauses until you add one. After that it's ${tierSentence(pricingConfig().currency)} The price is per activated sub-account, billed monthly, and the tier you reach applies to every sub-account.`,
     ],
     failedPayment: [
       "If a payment fails, Stripe retries it for about 7 days. Sending continues while that happens, and a banner on your dashboard asks you to update the card.",

@@ -17,15 +17,29 @@ export interface PlanStatus {
   banner: string | null;
 }
 
-export function planStatus(account: AccountSummary, now: Date): PlanStatus {
+/** Shown on the dashboard and billing page once a trial has ended with no card. */
+export const TRIAL_ENDED_NO_CARD = "Your trial has ended. Add a card to keep sending.";
+
+/** Days before the trial ends when a trial with no card starts showing the reminder. */
+export const TRIAL_REMINDER_DAYS = 2;
+
+/**
+ * `hasCard` is only known where the page has read the Stripe subscription;
+ * when it is false, a trial in its last days gets an "add a card" reminder.
+ */
+export function planStatus(account: AccountSummary, now: Date, opts: { hasCard?: boolean } = {}): PlanStatus {
   switch (account.billingStatus) {
     case "pending":
-      // Checkout abandoned: the dashboard offers a working "add a card" button.
-      return { label: "Trial not started", tone: "warn", banner: `Add a card to start your ${TRIAL_DAYS}-day free trial.` };
+      // Checkout abandoned: the dashboard offers a working "start your trial" button.
+      return { label: "Trial not started", tone: "warn", banner: `Finish signing up to start your ${TRIAL_DAYS}-day free trial. No card needed.` };
     case "trialing": {
       const n = trialDaysLeft(account.trialEndsAt, now);
       if (n === 0) return { label: "Trial ended", tone: "warn", banner: null };
-      return { label: `Trial: ${n} ${n === 1 ? "day" : "days"} left`, tone: "warn", banner: null };
+      const banner =
+        opts.hasCard === false && n <= TRIAL_REMINDER_DAYS
+          ? `Your trial ends in ${n} ${n === 1 ? "day" : "days"}. Add a card to keep sending.`
+          : null;
+      return { label: `Trial: ${n} ${n === 1 ? "day" : "days"} left`, tone: "warn", banner };
     }
     case "active":
     case "comped":
@@ -37,10 +51,20 @@ export function planStatus(account: AccountSummary, now: Date): PlanStatus {
         banner: "Payment failed — update your card. Sending continues while we retry.",
       };
     case "paused":
+      // Stripe `paused` (trial ended, no card) keeps trialEndsAt; `unpaid` (retries ran out) does not.
+      if (account.trialEndsAt) return { label: "Trial ended", tone: "loss", banner: TRIAL_ENDED_NO_CARD };
       return { label: "Paused", tone: "loss", banner: "Sending is paused — update billing to resume" };
     case "cancelled":
       return { label: "Cancelled", tone: "muted", banner: null };
   }
+}
+
+/** True when the dashboard should offer "Add a card": a trial ended with no card, or a trial with none in its last days. */
+export function needsCard(account: AccountSummary, now: Date, hasCard: boolean | undefined): boolean {
+  if (account.billingStatus === "paused") return !!account.trialEndsAt;
+  if (account.billingStatus !== "trialing" || hasCard !== false) return false;
+  const n = trialDaysLeft(account.trialEndsAt, now);
+  return n > 0 && n <= TRIAL_REMINDER_DAYS;
 }
 
 /** The single most important reason a row needs attention, or null. */

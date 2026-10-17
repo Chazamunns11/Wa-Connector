@@ -72,7 +72,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     trial: {
       question: "How does the free trial work?",
-      answer: `You get ${TRIAL_DAYS} days free with up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. We take a card up front and charge nothing until the trial ends. After that it's ${tiers}`,
+      answer: `${TRIAL_DAYS}-day free trial, no card needed, with up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. If the trial ends before you add a card, sending pauses until you do. After that it's ${tiers}`,
     },
     cancel: {
       question: "Can I cancel, and what happens if a payment fails?",

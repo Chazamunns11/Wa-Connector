@@ -55,7 +55,7 @@ export function dashboardHref(opts: { filter?: DashboardFilter; result?: Dashboa
 }
 
 /** Fixed notices the billing page can show after an action. */
-export type BillingNotice = { result?: "trial_ended"; error?: "no_portal" | "stripe_failed" };
+export type BillingNotice = { result?: "trial_ended" | "card_added"; error?: "no_portal" | "stripe_failed" };
 
 export function billingHref(notice: BillingNotice = {}): string {
   const q = new URLSearchParams();
@@ -67,7 +67,8 @@ export function billingHref(notice: BillingNotice = {}): string {
 
 export function parseBillingNotice(params: Record<string, string | string[] | undefined>): BillingNotice {
   const f = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
-  const result = f(params.result) === "trial_ended" ? "trial_ended" : undefined;
+  const r = f(params.result);
+  const result = r === "trial_ended" || r === "card_added" ? r : undefined;
   const e = f(params.error);
   const error = e === "no_portal" || e === "stripe_failed" ? e : undefined;
   return { result, error };

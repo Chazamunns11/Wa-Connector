@@ -4,10 +4,12 @@ import {
   activeCount,
   headline,
   needsAttention,
+  needsCard,
   planStatus,
   primaryActionFor,
   rowActionsFor,
   trialDaysLeft,
+  TRIAL_ENDED_NO_CARD,
 } from "@/lib/account-data/derive";
 import type { AccountSummary, BillingStatus, LocationRow } from "@/lib/account-data/types";
 
@@ -54,8 +56,39 @@ test("planStatus pending: an abandoned Checkout shows the trial has not started"
   assert.deepEqual(planStatus(acct("pending"), NOW), {
     label: "Trial not started",
     tone: "warn",
-    banner: "Add a card to start your 7-day free trial.",
+    banner: "Finish signing up to start your 7-day free trial. No card needed.",
   });
+});
+
+test("planStatus paused after a trial with no card says the trial ended; unpaid keeps the billing banner", () => {
+  const ended = new Date(NOW.getTime() - day).toISOString();
+  assert.deepEqual(planStatus(acct("paused", ended), NOW), { label: "Trial ended", tone: "loss", banner: TRIAL_ENDED_NO_CARD });
+  assert.equal(TRIAL_ENDED_NO_CARD, "Your trial has ended. Add a card to keep sending.");
+  assert.equal(planStatus(acct("paused", null), NOW).banner, "Sending is paused — update billing to resume");
+});
+
+test("planStatus reminds a trial with no card in its last 2 days, and only when the card is known to be missing", () => {
+  const in2 = new Date(NOW.getTime() + 2 * day).toISOString();
+  const in1 = new Date(NOW.getTime() + day).toISOString();
+  const in4 = new Date(NOW.getTime() + 4 * day).toISOString();
+  assert.equal(planStatus(acct("trialing", in2), NOW, { hasCard: false }).banner, "Your trial ends in 2 days. Add a card to keep sending.");
+  assert.equal(planStatus(acct("trialing", in1), NOW, { hasCard: false }).banner, "Your trial ends in 1 day. Add a card to keep sending.");
+  assert.equal(planStatus(acct("trialing", in4), NOW, { hasCard: false }).banner, null);
+  assert.equal(planStatus(acct("trialing", in2), NOW, { hasCard: true }).banner, null);
+  assert.equal(planStatus(acct("trialing", in2), NOW).banner, null);
+});
+
+test("needsCard: a trial ended with no card, or a card-less trial in its last days", () => {
+  const ended = new Date(NOW.getTime() - day).toISOString();
+  const in2 = new Date(NOW.getTime() + 2 * day).toISOString();
+  const in4 = new Date(NOW.getTime() + 4 * day).toISOString();
+  assert.equal(needsCard(acct("paused", ended), NOW, undefined), true);
+  assert.equal(needsCard(acct("paused", null), NOW, undefined), false);
+  assert.equal(needsCard(acct("trialing", in2), NOW, false), true);
+  assert.equal(needsCard(acct("trialing", in2), NOW, true), false);
+  assert.equal(needsCard(acct("trialing", in2), NOW, undefined), false);
+  assert.equal(needsCard(acct("trialing", in4), NOW, false), false);
+  for (const s of ["pending", "active", "past_due", "cancelled", "comped"] as const) assert.equal(needsCard(acct(s, ended), NOW, false), false, s);
 });
 
 test("needsAttention reasons in priority order: disconnected, waiting_qr, providerNudge, cap, null", () => {

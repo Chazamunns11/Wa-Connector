@@ -169,6 +169,6 @@ test("14B sales-copy: step 2 carries the path chip; sampleCaption gone; other st
     "PingWren takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.",
   );
   assert.equal(c.faqAllLink, "All the questions, on one page");
-  assert.equal(c.priceStrip.terms, "The 7-day trial covers up to 3 sub-accounts. We take a card up front, and you can cancel any time from the billing portal.");
+  assert.equal(c.priceStrip.terms, "7-day free trial, no card needed. The trial covers up to 3 sub-accounts, and you can cancel any time from the billing portal.");
   assert.ok(c.safety[0].body.startsWith("Messages leave at a steady rate"));
 });

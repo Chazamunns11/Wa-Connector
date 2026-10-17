@@ -22,7 +22,7 @@ export default async function SignupCompletePage({
       title="You're nearly there"
       intro={
         sessionId ? (
-          <p>Your card is saved and your {TRIAL_DAYS}-day trial is ready.</p>
+          <p>Your {TRIAL_DAYS}-day free trial has started. No card needed until it ends.</p>
         ) : (
           <p>One more step: sign in.</p>
         )

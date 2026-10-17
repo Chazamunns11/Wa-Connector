@@ -19,8 +19,12 @@ export interface StripeSubscription {
 export interface StripeCheckoutSession {
   id: string;
   status: string | null;
+  /** `subscription` for signup and restarts, `setup` for "Add a card". */
+  mode: string | null;
   customer: string | null;
   subscription: StripeSubscription | null;
+  /** The payment method a setup-mode session saved (from the expanded setup_intent). */
+  setupPaymentMethod: string | null;
   metadata: Record<string, string>;
 }
 
@@ -75,11 +79,14 @@ function parseCheckoutSession(raw: unknown): StripeCheckoutSession | null {
   const o = raw as Record<string, unknown>;
   const id = str(o.id);
   if (!id) return null;
+  const setupIntent = o.setup_intent as { payment_method?: unknown } | null | undefined;
   return {
     id,
     status: str(o.status),
+    mode: str(o.mode),
     customer: idOf(o.customer),
     subscription: parseSubscription(o.subscription),
+    setupPaymentMethod: setupIntent && typeof setupIntent === "object" ? idOf(setupIntent.payment_method) : null,
     metadata: stringMap(o.metadata),
   };
 }
@@ -104,14 +111,24 @@ export async function createCheckoutSession(
   deps?: BillingDeps,
 ): Promise<StripeResult<{ id: string; url: string }>> {
   const cfg = stripeConfig();
+  const trial = input.trial !== false;
   const params: Record<string, unknown> = {
     mode: "subscription",
     ...(input.customerId ? { customer: input.customerId } : { customer_email: input.customerEmail }),
     client_reference_id: input.accountId,
     line_items: [{ price: cfg.priceId, quantity: 1 }],
-    subscription_data: { ...(input.trial === false ? {} : { trial_period_days: TRIAL_DAYS }), metadata: { account_id: input.accountId } },
+    // The trial takes no card. If it ends without one Stripe pauses the
+    // subscription (status `paused`), which stops sending until a card is added.
+    subscription_data: trial
+      ? {
+          trial_period_days: TRIAL_DAYS,
+          trial_settings: { end_behavior: { missing_payment_method: "pause" } },
+          metadata: { account_id: input.accountId },
+        }
+      : { metadata: { account_id: input.accountId } },
     metadata: { account_id: input.accountId, owner_email: input.customerEmail },
-    payment_method_collection: "always",
+    // A restart bills today, so it still needs a card up front.
+    payment_method_collection: trial ? "if_required" : "always",
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
   };
@@ -123,9 +140,41 @@ export async function createCheckoutSession(
   return mapData(r, (d) => (typeof d.id === "string" && typeof d.url === "string" ? { id: d.id, url: d.url } : null));
 }
 
+/**
+ * "Add a card": a setup-mode Checkout on the account's existing customer. It
+ * only saves a card; the webhook then makes it the default and, if the trial
+ * ended without one, resumes the paused subscription. The Customer Portal is
+ * not used for this because adding a card there does not resume a paused
+ * subscription.
+ */
+export async function createCardSetupSession(
+  input: {
+    accountId: string;
+    customerId: string;
+    successUrl: string;
+    cancelUrl: string;
+    /** Set when the card is added to end the trial straight away ("Start my paid plan now"). */
+    then?: "end_trial";
+  },
+  deps?: BillingDeps,
+): Promise<StripeResult<{ id: string; url: string }>> {
+  const metadata = { account_id: input.accountId, purpose: "add_card", ...(input.then ? { then: input.then } : {}) };
+  const r = await req(deps)<{ id?: unknown; url?: unknown }>("POST", "/checkout/sessions", {
+    mode: "setup",
+    customer: input.customerId,
+    payment_method_types: ["card"],
+    client_reference_id: input.accountId,
+    metadata,
+    setup_intent_data: { metadata },
+    success_url: input.successUrl,
+    cancel_url: input.cancelUrl,
+  });
+  return mapData(r, (d) => (typeof d.id === "string" && typeof d.url === "string" ? { id: d.id, url: d.url } : null));
+}
+
 export async function retrieveCheckoutSession(id: string, deps?: BillingDeps): Promise<StripeResult<StripeCheckoutSession>> {
   const r = await req(deps)<unknown>("GET", `/checkout/sessions/${id}`, {
-    expand: ["subscription", "subscription.default_payment_method"],
+    expand: ["subscription", "subscription.default_payment_method", "setup_intent"],
   });
   return mapData(r, parseCheckoutSession);
 }
@@ -152,6 +201,40 @@ export async function endTrialNow(subscriptionId: string, deps?: BillingDeps): P
     trial_end: "now",
     proration_behavior: "none",
   });
+  return mapData(r, parseSubscription);
+}
+
+/** Makes a saved card the customer's default for invoices (what a resume charges). */
+export async function setCustomerDefaultPaymentMethod(
+  customerId: string,
+  paymentMethodId: string,
+  deps?: BillingDeps,
+): Promise<StripeResult<{ id: string }>> {
+  const r = await req(deps)<{ id?: unknown }>("POST", `/customers/${customerId}`, {
+    invoice_settings: { default_payment_method: paymentMethodId },
+  });
+  return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id } : null));
+}
+
+/** Makes a saved card the subscription's own default (what the billing page shows). */
+export async function setSubscriptionDefaultPaymentMethod(
+  subscriptionId: string,
+  paymentMethodId: string,
+  deps?: BillingDeps,
+): Promise<StripeResult<StripeSubscription>> {
+  const r = await req(deps)<unknown>("POST", `/subscriptions/${subscriptionId}`, {
+    default_payment_method: paymentMethodId,
+    expand: ["default_payment_method"],
+  });
+  return mapData(r, parseSubscription);
+}
+
+/**
+ * Resumes a subscription Stripe paused because the trial ended with no card.
+ * The billing period restarts today and the first invoice is charged now.
+ */
+export async function resumeSubscription(subscriptionId: string, deps?: BillingDeps): Promise<StripeResult<StripeSubscription>> {
+  const r = await req(deps)<unknown>("POST", `/subscriptions/${subscriptionId}/resume`, { billing_cycle_anchor: "now" });
   return mapData(r, parseSubscription);
 }
 

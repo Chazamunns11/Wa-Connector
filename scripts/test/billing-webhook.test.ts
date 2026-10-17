@@ -24,7 +24,7 @@ function account(over: Partial<Account> = {}): Account {
   } as Account;
 }
 
-function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Account | null } = {}) {
+function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Account | null; session?: Partial<StripeCheckoutSession> } = {}) {
   const log: string[] = [];
   const patches: Array<{ id: string; patch: unknown }> = [];
   const notes: string[] = [];
@@ -43,11 +43,15 @@ function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Ac
       patches.push({ id, patch });
     },
   };
-  const session = { id: "cs_1", status: "complete", customer: "cus", subscription: null, metadata: { account_id: "acc-1" } } as StripeCheckoutSession;
+  const session = { id: "cs_1", status: "complete", customer: "cus", subscription: null, metadata: { account_id: "acc-1" }, ...opts.session } as StripeCheckoutSession;
   const deps: WebhookDeps = {
     applyCheckout: async () => {
       log.push("apply");
       return { applied: true };
+    },
+    applyCardSetup: async () => {
+      log.push("card");
+      return { kind: "resumed" };
     },
     retrieveCheckoutSession: (async (id: string) => {
       log.push(`retrieve:${id}`);
@@ -334,4 +338,49 @@ test("a cancelled account that restarts via Checkout is repointed and its new su
   const out = await run(repointed, { id: "evt_n", type: "customer.subscription.updated", data: { object: { ...newSub, status: "active" } } });
   assert.deepEqual(out, { kind: "handled", type: "customer.subscription.updated" });
   assert.equal(repointed.patches.length, 1);
+});
+
+test("trial ended with no card: subscription.paused writes paused and keeps the trial end date", async () => {
+  const h = harness();
+  const out = await run(h, {
+    id: "evt_p",
+    type: "customer.subscription.paused",
+    data: { object: sub({ status: "paused", trial_end: 1_800_000_000 }) },
+  });
+  assert.deepEqual(out, { kind: "handled", type: "customer.subscription.paused" });
+  assert.deepEqual(h.patches, [
+    {
+      id: "acc-1",
+      patch: { billingStatus: "paused", trialEndsAt: "2027-01-15T08:00:00.000Z", cancelledAt: null, cleanedUpAt: null, stripeSubscriptionId: "sub" },
+    },
+  ]);
+});
+
+test("unpaid also maps to paused but carries no trial end date", async () => {
+  const h = harness();
+  await run(h, { id: "evt_u", type: "customer.subscription.updated", data: { object: sub({ status: "unpaid", trial_end: 1_800_000_000 }) } });
+  assert.deepEqual(h.patches[0].patch, { billingStatus: "paused", trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, stripeSubscriptionId: "sub" });
+});
+
+test("adding a card: subscription.resumed writes active from the live subscription and re-syncs quantity", async () => {
+  const h = harness({ byId: account({ billingStatus: "paused", trialEndsAt: "2027-01-15T08:00:00.000Z" }) });
+  h.state.live = sub({ status: "active" });
+  const out = await run(h, { id: "evt_res", type: "customer.subscription.resumed", data: { object: sub({ status: "paused" }) } });
+  assert.deepEqual(out, { kind: "handled", type: "customer.subscription.resumed" });
+  assert.deepEqual(h.patches[0].patch, { billingStatus: "active", trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, stripeSubscriptionId: "sub" });
+  assert.ok(h.log.includes("sync"));
+});
+
+test("a setup-mode checkout (add a card) goes to applyCardSetup, not the signup apply", async () => {
+  const h = harness({ session: { mode: "setup", setupPaymentMethod: "pm_1", metadata: { account_id: "acc-1", purpose: "add_card" } } });
+  const out = await run(h, { id: "evt_s", type: "checkout.session.completed", data: { object: { id: "cs_1" } } });
+  assert.deepEqual(out, { kind: "handled", type: "checkout.session.completed" });
+  assert.deepEqual(h.log, ["record", "retrieve:cs_1", "card"]);
+  assert.deepEqual(h.patches, []);
+});
+
+test("trial_will_end is ignored: there is no email to send yet", async () => {
+  const h = harness();
+  const out = await run(h, { id: "evt_w", type: "customer.subscription.trial_will_end", data: { object: sub({ status: "trialing" }) } });
+  assert.deepEqual(out, { kind: "ignored", type: "customer.subscription.trial_will_end" });
 });
