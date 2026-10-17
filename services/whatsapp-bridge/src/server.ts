@@ -78,6 +78,30 @@ const MAX_ATTACHMENT_URL_LENGTH = 2048;
 /** Media plan (docs/MEDIA-PLAN.md §5.3) — display name for documents. */
 const MAX_ATTACHMENT_FILENAME_LENGTH = 128;
 
+const ROUTE_WORDS = new Set(["sessions", "connect", "logout", "send", "messages", "groups", "refresh", "participants", "invite", "reset", "leave"]);
+
+/** The route's shape with every id replaced, e.g. "/sessions/:id/groups/:jid/invite", safe to log. */
+function redactedRoute(rawUrl: string | undefined): string {
+  let path = "";
+  try {
+    path = new URL(rawUrl ?? "/", "http://bridge.internal").pathname;
+  } catch {
+    return "/?";
+  }
+  const parts = path.split("/").filter(Boolean);
+  return (
+    "/" +
+    parts
+      .map((part, i) => {
+        if (i === 1) return ":id";
+        if (i === 3 && parts[2] === "groups" && part !== "refresh") return ":jid";
+        if (i === 3 && parts[2] === "messages") return ":key";
+        return ROUTE_WORDS.has(part) ? part : ":x";
+      })
+      .join("/")
+  );
+}
+
 export interface ServerDeps {
   manager: SessionManager;
   store: BridgeStore;
@@ -96,7 +120,8 @@ export function createBridgeServer(deps: ServerDeps): Server {
     void handle(req, res).catch((err) => {
       // Last-resort catch: fixed string out, details to logs only — an
       // unexpected throw must never leak internals into a response.
-      log.error({ err: (err as Error).message, url: req.url }, "unhandled route error");
+      // Never the raw URL or message: either can carry a group JID or phone.
+      log.error({ err: (err as Error)?.name ?? "Error", route: redactedRoute(req.url) }, "unhandled route error");
       if (!res.headersSent) sendError(res, 500, "internal", "internal error");
     });
   });

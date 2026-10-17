@@ -28,7 +28,11 @@ const AUTH = { authorization: `Bearer ${SECRET}`, "content-type": "application/j
 
 type Calls = { method: string; args: unknown[] }[];
 
-async function withServer(outcome: GroupOpOutcome<unknown>, fn: (base: string, calls: Calls) => Promise<void>): Promise<void> {
+async function withServer(
+  outcome: GroupOpOutcome<unknown>,
+  fn: (base: string, calls: Calls) => Promise<void>,
+  opts: { throwOnDetail?: boolean; log?: ReturnType<typeof pino> } = {}
+): Promise<void> {
   const calls: Calls = [];
   const rec = (method: string) => async (...args: unknown[]) => {
     calls.push({ method, args });
@@ -36,7 +40,11 @@ async function withServer(outcome: GroupOpOutcome<unknown>, fn: (base: string, c
   };
   const manager = {
     createGroup: rec("createGroup"),
-    getGroupDetail: rec("getGroupDetail"),
+    getGroupDetail: opts.throwOnDetail
+      ? async (_c: string, jid: string) => {
+          throw new Error(`boom ${jid}`);
+        }
+      : rec("getGroupDetail"),
     updateGroup: rec("updateGroup"),
     updateGroupParticipants: rec("updateGroupParticipants"),
     getGroupInviteLink: rec("getGroupInviteLink"),
@@ -48,7 +56,7 @@ async function withServer(outcome: GroupOpOutcome<unknown>, fn: (base: string, c
     },
   } as unknown as SessionManager;
   const store = { tenantExists: async () => true } as unknown as BridgeStore;
-  const server = createBridgeServer({ manager, store, bridgeSecret: SECRET, log: pino({ level: "silent" }) });
+  const server = createBridgeServer({ manager, store, bridgeSecret: SECRET, log: opts.log ?? pino({ level: "silent" }) });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const { port } = server.address() as AddressInfo;
   try {
@@ -220,4 +228,51 @@ test("POST /groups/refresh still reaches refreshEnabledGroups; unknown group sub
     assert.deepEqual(calls.map((c) => c.method), ["refreshEnabledGroups"]);
     assert.equal((await fetch(`${base}/${encodeURIComponent(JID)}/nope`, { headers: AUTH })).status, 404);
   });
+});
+
+test("GET /groups/refresh (not POST) stays a 404", async () => {
+  await withServer(OK, async (base, calls) => {
+    assert.equal((await fetch(`${base}/refresh`, { headers: AUTH })).status, 404);
+    assert.equal((await fetch(`${base}/refresh`, { method: "PATCH", headers: AUTH, body: "{}" })).status, 404);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("more body validation: patch names, remove with both lists, invalid JSON", async () => {
+  await withServer(OK, async (base, calls) => {
+    const j = encodeURIComponent(JID);
+    for (const name of ["   ", "a".repeat(101), "😀".repeat(101)]) {
+      const res = await patch(`${base}/${j}`, { name });
+      assert.equal(res.status, 400);
+      assert.equal(await errCode(res), "invalid_body");
+    }
+    const both = await post(`${base}/${j}/participants`, { action: "remove", memberIds: [MEMBER], phones: ["+447700900123"] });
+    assert.equal(both.status, 400);
+    assert.equal(await errCode(both), "invalid_body");
+    for (const [method, url] of [["POST", base], ["PATCH", `${base}/${j}`], ["POST", `${base}/${j}/participants`]]) {
+      const res = await fetch(url, { method, headers: AUTH, body: "{not json" });
+      assert.equal(res.status, 400, `${method} ${url}`);
+      assert.equal(await errCode(res), "invalid_body");
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("a throwing manager is a 500 and nothing logged contains the JID", async () => {
+  const lines: string[] = [];
+  const log = pino({ level: "debug" }, { write: (l: string) => void lines.push(l) });
+  await withServer(
+    OK,
+    async (base) => {
+      const res = await fetch(`${base}/${encodeURIComponent(JID)}`, { headers: AUTH });
+      assert.equal(res.status, 500);
+      assert.ok(!JSON.stringify(await res.json()).includes("120363025246125486"));
+    },
+    { throwOnDetail: true, log }
+  );
+  const logged = lines.join("\n");
+  assert.match(logged, /unhandled route error/);
+  assert.match(logged, /\/sessions\/:id\/groups\/:jid/);
+  assert.ok(!logged.includes("120363025246125486"));
+  assert.ok(!logged.includes(COACH));
 });

@@ -152,7 +152,7 @@ export async function handleGroupManagementRoute(req: IncomingMessage, res: Serv
   }
 
   // Everything below is /sessions/:id/groups/:jid[/…]. "refresh" is its own route in server.ts.
-  if (parts[3] === "refresh" && method === "POST" && parts.length === 4) return false;
+  if (parts[3] === "refresh") return false;
   const sub = parts.slice(4).join("/");
   const known =
     (sub === "" && (method === "GET" || method === "PATCH")) ||
