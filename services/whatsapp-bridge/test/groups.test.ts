@@ -238,6 +238,7 @@ function makeHarness(opts: {
     stopping: false,
     pendingWrites: new PendingWrites(),
     mediaAbuseGate: null,
+    recentlyCreated: new Map<string, number>(),
     enabledGroups: new Set(opts.enabledGroups ?? [GROUP_JID]),
     enabledGroupsLoad: 0,
     inFlightUnits: 0,

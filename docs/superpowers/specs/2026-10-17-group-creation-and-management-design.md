@@ -90,3 +90,4 @@ A one-off script, `services/whatsapp-bridge/scripts/group-sandbox.ts`, run by ha
 ## Decisions log
 
 - 17 Oct, Charlie: test the empty-group create (built to handle either result); at least 50 direct adds a day; the invite message is editable.
+- Limits count attempts: a create or add that reached WhatsApp is never refunded, even if it failed.

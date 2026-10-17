@@ -138,6 +138,7 @@ import {
   leaveGroup as leaveManagedGroup,
   updateGroup as updateManagedGroup,
   updateGroupParticipants as updateManagedGroupParticipants,
+  withRecentlyCreated,
   type CreateGroupInput,
   type CreatedGroup,
   type GroupOpContext,
@@ -283,6 +284,8 @@ interface Session {
   groupLimits: GroupActionLimits;
   /** Create `requestId`s seen in the last 10 minutes (src/group-management.ts) — a retried create replays, never makes a second group. */
   groupCreateRequests: CreateRequestCache;
+  /** Groups this session created in the last 10 minutes (JID -> created at, ms). `loadEnabledGroups` keeps them in the enabled set until the app's record and refresh have surely landed. */
+  recentlyCreated: Map<string, number>;
   /**
    * The group JIDs this number's owner has enabled (src/groups.ts) — the
    * ONLY groups inbound accepts and outbound sends to. Starts EMPTY (fail
@@ -858,6 +861,7 @@ export class SessionManager {
       }),
       groupLimits: new GroupActionLimits(this.store, { createDaily: this.config.groupCreateDaily, addDaily: this.config.groupAddDaily }),
       groupCreateRequests: new CreateRequestCache(),
+      recentlyCreated: new Map(),
       enabledGroups: new Set(),
       enabledGroupsLoad: 0,
       inFlightUnits: 0,
@@ -1676,7 +1680,7 @@ export class SessionManager {
     const generation = ++session.enabledGroupsLoad;
     try {
       const jids = await this.store.listEnabledGroupJids(session.coachId);
-      if (session.enabledGroupsLoad === generation) session.enabledGroups = new Set(jids.filter(isGroupJid));
+      if (session.enabledGroupsLoad === generation) session.enabledGroups = withRecentlyCreated(jids.filter(isGroupJid), session.recentlyCreated, Date.now());
       return true;
     } catch (err) {
       this.log.error({ coachId: session.coachId, err: (err as Error).message }, "enabled-groups load failed — group traffic dropped until the next load");
@@ -1731,6 +1735,7 @@ export class SessionManager {
       store: this.store,
       createRequests: session.groupCreateRequests,
       log: this.log,
+      now: Date.now,
     };
   }
 

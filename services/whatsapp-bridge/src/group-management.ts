@@ -31,6 +31,8 @@
  * only (a Baileys error message can quote any of those).
  */
 import type { Logger } from "pino";
+import { isBoom } from "@hapi/boom";
+import { jidNormalizedUser } from "@whiskeysockets/baileys";
 import type { BridgeStore, GroupActionKind } from "./store.js";
 import type { GroupActionLimits } from "./group-limits.js";
 import {
@@ -51,7 +53,7 @@ import { isE164 } from "./phone.js";
 export type ParticipantResult = {
   phone?: string;
   memberId?: string;
-  result: "ok" | "invite_required" | "not_eligible" | "not_on_whatsapp" | "already_member" | "limit_reached" | "warmup" | "self" | "last_admin" | "not_member" | "failed";
+  result: "ok" | "invite_required" | "not_eligible" | "not_on_whatsapp" | "already_member" | "limit_reached" | "warmup" | "self" | "last_admin" | "not_member" | "duplicate" | "failed";
 };
 
 export type GroupRefusalCode = "create_limit" | "add_limit" | "warmup" | "needs_member" | "not_admin" | "limits_unavailable";
@@ -61,6 +63,7 @@ export type GroupOpOutcome<T> =
   | { kind: "session_not_connected" }
   | { kind: "group_not_enabled" }
   | { kind: "refused"; code: GroupRefusalCode; message: string }
+  | { kind: "too_many" }
   | { kind: "failed" };
 
 export interface CreateGroupInput {
@@ -116,6 +119,7 @@ export interface GroupSocket {
   groupInviteCode(jid: string): Promise<string | undefined>;
   groupRevokeInvite(jid: string): Promise<string | undefined>;
   groupLeave(jid: string): Promise<void>;
+  groupFetchAllParticipating(): Promise<Record<string, { id: string; subject: string; owner?: string; ownerPn?: string; creation?: number }>>;
   onWhatsApp(...phoneNumbers: string[]): Promise<{ jid: string; exists: boolean }[] | undefined>;
 }
 
@@ -123,13 +127,14 @@ export interface GroupSocket {
 export interface GroupOpContext {
   coachId: string;
   sock: GroupSocket;
-  groups: { enabledGroups: Set<string> };
+  groups: { enabledGroups: Set<string>; recentlyCreated: Map<string, number> };
   limits: Pick<GroupActionLimits, "reserveCreate" | "reserveAdds">;
   createDaily: number;
   inWarmup: () => boolean;
   store: Pick<BridgeStore, "hasInboundFromPhone" | "recordGroupAction">;
   createRequests: CreateRequestCache;
   log: Logger;
+  now: () => number;
 }
 
 const CREATE_REPLAY_MS = 10 * 60 * 1000;
@@ -176,7 +181,12 @@ function logFailure(ctx: GroupOpContext, op: string, err: unknown): void {
   ctx.log.error({ coachId: ctx.coachId, op, err: (err as Error)?.name ?? "Error" }, "group action failed");
 }
 
-/** Audit row for a non-limited action. Best effort: the action already happened, so a failed write is logged and swallowed. */
+/**
+ * Audit row for a non-limited action (remove, promote, demote, update,
+ * invite_reset, leave). Written BEFORE the Baileys call, so it records the
+ * ATTEMPT, whether or not WhatsApp then carries it out. Best effort: a
+ * failed write is logged and swallowed, never blocking the action.
+ */
 async function audit(ctx: GroupOpContext, action: GroupActionKind, count: number, groupJid: string): Promise<void> {
   try {
     await ctx.store.recordGroupAction(ctx.coachId, action, Math.min(count, MAX_PARTICIPANTS_PER_CALL), groupJid);
@@ -216,6 +226,70 @@ async function resolveOnWhatsApp(sock: GroupSocket, phone: string): Promise<stri
 // Create.
 // ---------------------------------------------------------------------------
 
+type CreateResult = { id: string; subject?: string };
+
+/**
+ * True iff `err` is WhatsApp answering the IQ with an error node — Baileys
+ * 7.0.0-rc14 throws those as `new Boom(text, { data: +code })`
+ * (WABinary/generic-utils.js `assertNodeErrorFree`). Only then do we know
+ * WhatsApp refused and made nothing. A timeout (408), "Connection Closed",
+ * or a reply missing its <group> node carries no numeric `data`.
+ */
+function isWhatsAppErrorNode(err: unknown): boolean {
+  return isBoom(err) && typeof err.data === "number";
+}
+
+/** How recently a group must have been created to count as the one an ambiguous create made. */
+const JUST_CREATED_WINDOW_S = 120;
+
+/**
+ * After an ambiguous create error: one `groupFetchAllParticipating` scan for
+ * a group with exactly this subject, owned by our own number, created in
+ * the last 2 minutes. Found -> that is the group the call made. Not found
+ * (or the scan fails) -> null, and the caller reports `failed`. Logs the
+ * error name only — never the subject.
+ */
+async function findJustCreatedGroup(ctx: GroupOpContext, subject: string, err: unknown): Promise<CreateResult | null> {
+  try {
+    const all = await ctx.sock.groupFetchAllParticipating();
+    const nowS = ctx.now() / 1000;
+    const match = Object.values(all).find(
+      (g) =>
+        isGroupJid(g.id) &&
+        g.subject === subject &&
+        typeof g.creation === "number" &&
+        nowS - g.creation <= JUST_CREATED_WINDOW_S &&
+        g.creation - nowS <= JUST_CREATED_WINDOW_S &&
+        isOwnNumberAParticipant([{ id: g.owner ?? "", phoneNumber: g.ownerPn }], ctx.sock.user)
+    );
+    if (match) {
+      ctx.log.warn({ coachId: ctx.coachId, op: "create", err: (err as Error)?.name ?? "Error" }, "group create errored but the group was made — using it");
+      return { id: match.id, subject: match.subject };
+    }
+    ctx.log.error({ coachId: ctx.coachId, op: "create", err: (err as Error)?.name ?? "Error" }, "group create failed ambiguously and no new group was found");
+  } catch (scanErr) {
+    ctx.log.error({ coachId: ctx.coachId, op: "create", err: (err as Error)?.name ?? "Error", scanErr: (scanErr as Error)?.name ?? "Error" }, "group create failed ambiguously and the group scan failed");
+  }
+  return null;
+}
+
+/**
+ * The enabled set a load returned, plus every group this session created in
+ * the last 10 minutes — the app records a new group and refreshes shortly
+ * after the create, and a socket bounce or an older in-flight load before
+ * that must not switch it off. Prunes expired entries.
+ */
+export function withRecentlyCreated(loaded: Iterable<string>, recentlyCreated: Map<string, number>, now: number): Set<string> {
+  const set = new Set(loaded);
+  for (const [jid, at] of recentlyCreated) {
+    if (now - at >= RECENTLY_CREATED_MS) recentlyCreated.delete(jid);
+    else if (isGroupJid(jid)) set.add(jid);
+  }
+  return set;
+}
+
+const RECENTLY_CREATED_MS = 10 * 60 * 1000;
+
 export function createGroup(ctx: GroupOpContext, input: CreateGroupInput): Promise<GroupOpOutcome<CreatedGroup>> {
   return ctx.createRequests.run(input.requestId, (markReached) => doCreateGroup(ctx, input, markReached));
 }
@@ -226,13 +300,23 @@ async function doCreateGroup(ctx: GroupOpContext, input: CreateGroupInput, markR
   if (reservation === "limit") return refused("create_limit", groupCreateLimitReason(ctx.createDaily));
   if (reservation === "unavailable") return refused("limits_unavailable", GROUP_LIMITS_UNAVAILABLE_REASON);
 
-  let created: { id: string; subject?: string } | null = null;
+  // From here a group may exist on WhatsApp, so this requestId replays
+  // whatever happens next — a retry must never make a second group.
+  markReached();
+  let created: CreateResult | null = null;
   let addedPhone: string | null = null;
   try {
     created = await ctx.sock.groupCreate(input.name, []);
   } catch (err) {
-    // WhatsApp refused an empty group (or the call failed). No group was made.
-    ctx.log.warn({ coachId: ctx.coachId, op: "create", err: (err as Error)?.name ?? "Error" }, "empty group create refused — trying with one eligible member");
+    if (!isWhatsAppErrorNode(err)) {
+      // Ambiguous (timeout, closed connection, malformed reply): the group
+      // may have been made. Look for it rather than risk a second one.
+      created = await findJustCreatedGroup(ctx, input.name, err);
+      if (!created) return { kind: "failed" };
+    } else {
+      // WhatsApp answered with an error: it refused the empty group. None was made.
+      ctx.log.warn({ coachId: ctx.coachId, op: "create", err: (err as Error).name, code: (err as { data: number }).data }, "empty group create refused — trying with one eligible member");
+    }
   }
 
   if (!created) {
@@ -255,16 +339,16 @@ async function doCreateGroup(ctx: GroupOpContext, input: CreateGroupInput, markR
     const grant = await ctx.limits.reserveAdds(ctx.coachId, 1, null);
     if ("unavailable" in grant) return refused("limits_unavailable", GROUP_LIMITS_UNAVAILABLE_REASON);
     if (grant.granted < 1) return refused("add_limit", GROUP_ADD_LIMIT_REASON);
-    markReached();
     try {
       created = await ctx.sock.groupCreate(input.name, [member.jid]);
     } catch (err) {
-      logFailure(ctx, "create", err);
-      return { kind: "failed" };
+      created = isWhatsAppErrorNode(err) ? null : await findJustCreatedGroup(ctx, input.name, err);
+      if (!created) {
+        if (isWhatsAppErrorNode(err)) logFailure(ctx, "create", err);
+        return { kind: "failed" };
+      }
     }
     addedPhone = member.phone;
-  } else {
-    markReached();
   }
 
   if (!isGroupJid(created.id)) {
@@ -272,8 +356,10 @@ async function doCreateGroup(ctx: GroupOpContext, input: CreateGroupInput, markR
     return { kind: "failed" };
   }
   const jid = created.id;
-  // Manageable at once, before the app's record + refresh lands.
+  // Manageable at once, before the app's record + refresh lands — and kept
+  // in through any reload for the next 10 minutes (`withRecentlyCreated`).
   ctx.groups.enabledGroups.add(jid);
+  ctx.groups.recentlyCreated.set(jid, ctx.now());
 
   if (input.description !== undefined && input.description !== "") {
     try {
@@ -352,7 +438,7 @@ function statusesFor(sent: string[], response: { status: string; jid?: string }[
 export async function updateGroupParticipants(ctx: GroupOpContext, jid: string, req: ParticipantsRequest): Promise<GroupOpOutcome<ParticipantResult[]>> {
   if (!isEnabled(ctx, jid)) return { kind: "group_not_enabled" };
   const count = req.action === "add" ? req.phones.length : req.memberIds.length;
-  if (count > MAX_PARTICIPANTS_PER_CALL) return { kind: "failed" };
+  if (count > MAX_PARTICIPANTS_PER_CALL) return { kind: "too_many" };
   const checked = await adminMetadata(ctx, jid, req.action);
   if ("outcome" in checked) return checked.outcome;
   return req.action === "add" ? addParticipants(ctx, jid, req.phones) : changeMembers(ctx, jid, req.action, req.memberIds, checked.ok.participants ?? []);
@@ -360,34 +446,48 @@ export async function updateGroupParticipants(ctx: GroupOpContext, jid: string, 
 
 async function addParticipants(ctx: GroupOpContext, groupJid: string, phones: string[]): Promise<GroupOpOutcome<ParticipantResult[]>> {
   const results: ParticipantResult[] = phones.map((phone) => ({ phone, result: "failed" }));
-  // index in `phones` -> the JID WhatsApp returned for it
-  const candidates: { index: number; jid: string }[] = [];
-  const seen = new Set<string>();
+  const eligible: number[] = [];
   try {
     for (const [index, phone] of phones.entries()) {
-      if (!isE164(phone) || !(await ctx.store.hasInboundFromPhone(ctx.coachId, phone))) {
-        results[index]!.result = "not_eligible";
-        continue;
-      }
-      const waJid = await resolveOnWhatsApp(ctx.sock, phone);
-      if (!waJid) {
-        results[index]!.result = "not_on_whatsapp";
-        continue;
-      }
-      if (ctx.inWarmup()) {
-        results[index]!.result = "warmup";
-        continue;
-      }
-      if (seen.has(waJid)) {
-        results[index]!.result = "already_member";
-        continue;
-      }
-      seen.add(waJid);
-      candidates.push({ index, jid: waJid });
+      if (isE164(phone) && (await ctx.store.hasInboundFromPhone(ctx.coachId, phone))) eligible.push(index);
+      else results[index]!.result = "not_eligible";
+    }
+  } catch (err) {
+    logFailure(ctx, "add_eligibility", err);
+    return { kind: "failed" };
+  }
+  if (eligible.length === 0) return { kind: "ok", value: results };
+  // Warm-up: no direct adds, and no contact-discovery lookups either. The
+  // caller sends these an invite link.
+  if (ctx.inWarmup()) {
+    for (const index of eligible) results[index]!.result = "warmup";
+    return { kind: "ok", value: results };
+  }
+
+  // One batched existence check (hard rule 3): each phone is added by the
+  // JID WhatsApp returns for it, matched back by its phone-number JID.
+  let found: Map<string, string>;
+  try {
+    const lookup = await ctx.sock.onWhatsApp(...eligible.map((i) => phones[i]!));
+    found = new Map();
+    for (const r of lookup ?? []) {
+      const key = r.exists ? jidNormalizedUser(r.jid) : "";
+      if (key && !found.has(key)) found.set(key, r.jid);
     }
   } catch (err) {
     logFailure(ctx, "add_lookup", err);
     return { kind: "failed" };
+  }
+  const candidates: { index: number; jid: string }[] = [];
+  const queued = new Set<string>();
+  for (const index of eligible) {
+    const waJid = found.get(`${phones[index]!.slice(1)}@s.whatsapp.net`);
+    if (!waJid) results[index]!.result = "not_on_whatsapp";
+    else if (queued.has(waJid)) results[index]!.result = "duplicate";
+    else {
+      queued.add(waJid);
+      candidates.push({ index, jid: waJid });
+    }
   }
   if (candidates.length === 0) return { kind: "ok", value: results };
 
@@ -502,5 +602,6 @@ export async function leaveGroup(ctx: GroupOpContext, jid: string): Promise<Grou
     return { kind: "failed" };
   }
   ctx.groups.enabledGroups.delete(jid);
+  ctx.groups.recentlyCreated.delete(jid);
   return { kind: "ok", value: null };
 }

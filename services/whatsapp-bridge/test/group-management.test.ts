@@ -8,6 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pino } from "pino";
+import { Boom } from "@hapi/boom";
 import {
   GROUP_LAST_ADMIN_REASON,
   GROUP_NOT_ADMIN_REASON,
@@ -89,6 +90,10 @@ function makeHarness(opts: {
   seed?: { creates: number; adds: number };
   /** How many leading groupCreate calls throw. */
   createThrows?: number;
+  /** What they throw: by default a WhatsApp error node (Baileys' `new Boom(text, { data: code })`). */
+  createError?: () => Error;
+  /** What groupFetchAllParticipating returns (the ambiguous-create scan). */
+  allGroups?: Record<string, { id: string; subject: string; owner?: string; ownerPn?: string; creation?: number }>;
   participantsUpdate?: (jid: string, jids: string[], action: string) => { status: string; jid?: string }[];
   enabledGroups?: string[];
   log?: ReturnType<typeof pino>;
@@ -127,7 +132,7 @@ function makeHarness(opts: {
       calls.push({ method: "groupCreate", args: [subject, participants] });
       if (createThrowsLeft > 0) {
         createThrowsLeft -= 1;
-        throw new Error(`refused create of ${subject}`);
+        throw opts.createError ? opts.createError() : new Boom(`not-acceptable ${subject}`, { data: 406 });
       }
       return { id: NEW_GROUP_JID, subject, participants: [] };
     },
@@ -147,6 +152,10 @@ function makeHarness(opts: {
     groupRevokeInvite: async (jid: string) => {
       calls.push({ method: "groupRevokeInvite", args: [jid] });
       return "NewCode987654321Xyz";
+    },
+    groupFetchAllParticipating: async () => {
+      calls.push({ method: "groupFetchAllParticipating", args: [] });
+      return opts.allGroups ?? {};
     },
     onWhatsApp: async (...phones: string[]) => {
       calls.push({ method: "onWhatsApp", args: phones });
@@ -173,13 +182,15 @@ function makeHarness(opts: {
     mediaAbuseGate: null,
     groupLimits: new GroupActionLimits(store, { createDaily: config.groupCreateDaily, addDaily: config.groupAddDaily }),
     groupCreateRequests: new CreateRequestCache(),
+    recentlyCreated: new Map<string, number>(),
     enabledGroups: new Set(opts.enabledGroups ?? [GROUP_JID]),
     enabledGroupsLoad: 0,
     inFlightUnits: 0,
   };
   (manager as unknown as { sessions: Map<string, unknown> }).sessions.set(TENANT, session);
   const called = (method: string) => calls.filter((c) => c.method === method);
-  const mutations = () => calls.filter((c) => c.method !== "groupMetadata" && c.method !== "hasInboundFromPhone" && c.method !== "onWhatsApp" && c.method !== "groupInviteCode");
+  const reads = new Set(["groupMetadata", "hasInboundFromPhone", "onWhatsApp", "groupInviteCode", "groupFetchAllParticipating"]);
+  const mutations = () => calls.filter((c) => !reads.has(c.method));
   return { manager, session, calls, called, mutations, actions, pacer };
 }
 
@@ -276,11 +287,69 @@ test("create: the same requestId twice makes one group", async () => {
   assert.equal(h.actions.filter((a) => a.action === "create").length, 1, "one of the day's creates, not two");
 });
 
-test("create: a refusal is not replayed — the same requestId may try again", async () => {
-  const h = makeHarness({ createThrows: 1, inbound: [] });
-  const input = { requestId: "req-00008", name: GROUP_NAME, participants: [PHONE_A] };
+test("create: a refusal before WhatsApp is reached is not replayed — the same requestId may try again", async () => {
+  const h = makeHarness();
+  h.pacer.setLinkedAt(Date.now());
+  const input = { requestId: "req-00008", name: GROUP_NAME, participants: [] };
   assert.equal((await h.manager.createGroup(TENANT, input)).kind, "refused");
+  h.pacer.setLinkedAt(null);
   assert.equal((await h.manager.createGroup(TENANT, input)).kind, "ok");
+});
+
+test("create: once the empty create was sent, even a needs_member refusal is replayed", async () => {
+  const h = makeHarness({ createThrows: 1, inbound: [] });
+  const input = { requestId: "req-00012", name: GROUP_NAME, participants: [PHONE_A] };
+  assert.equal((await h.manager.createGroup(TENANT, input)).kind, "refused");
+  assert.equal((await h.manager.createGroup(TENANT, input)).kind, "refused");
+  assert.equal(h.called("groupCreate").length, 1);
+});
+
+const timeout = () => new Boom("Timed Out", { statusCode: 408, data: { stack: "x" } });
+
+test("create: a 408 timeout with no matching group -> one groupCreate, failed, and the requestId replays failed", async () => {
+  const h = makeHarness({
+    createThrows: 1,
+    createError: timeout,
+    inbound: [PHONE_A],
+    // Same subject but not ours, and ours but too old: neither counts.
+    allGroups: {
+      "120363000000000001@g.us": { id: "120363000000000001@g.us", subject: GROUP_NAME, owner: "447700900999@s.whatsapp.net", creation: Math.floor(Date.now() / 1000) },
+      "120363000000000002@g.us": { id: "120363000000000002@g.us", subject: GROUP_NAME, owner: "200000000000001@lid", creation: Math.floor(Date.now() / 1000) - 600 },
+    },
+  });
+  const input = { requestId: "req-00013", name: GROUP_NAME, participants: [PHONE_A] };
+  assert.deepEqual(await h.manager.createGroup(TENANT, input), { kind: "failed" });
+  assert.deepEqual(await h.manager.createGroup(TENANT, input), { kind: "failed" });
+  assert.equal(h.called("groupCreate").length, 1, "no fallback create after an ambiguous error");
+  assert.equal(h.called("groupFetchAllParticipating").length, 1);
+});
+
+test("create: a 408 timeout where the scan finds our new group -> ok with that jid, no second create", async () => {
+  const h = makeHarness({
+    createThrows: 1,
+    createError: () => new Error("Connection Closed"),
+    allGroups: {
+      [NEW_GROUP_JID]: { id: NEW_GROUP_JID, subject: GROUP_NAME, owner: "200000000000001@lid", ownerPn: "447700900001@s.whatsapp.net", creation: Math.floor(Date.now() / 1000) - 5 },
+    },
+  });
+  const outcome = await h.manager.createGroup(TENANT, { requestId: "req-00014", name: GROUP_NAME, description: GROUP_DESC, participants: [] });
+  assert.deepEqual(outcome, { kind: "ok", value: { jid: NEW_GROUP_JID, name: GROUP_NAME, addedPhone: null, path: "empty" } });
+  assert.equal(h.called("groupCreate").length, 1);
+  assert.ok(h.session.enabledGroups.has(NEW_GROUP_JID));
+  assert.deepEqual(h.called("groupUpdateDescription").map((c) => c.args), [[NEW_GROUP_JID, GROUP_DESC]]);
+});
+
+test("create: a just-created group stays enabled across a reconnect's reload, for 10 minutes", async () => {
+  const h = makeHarness();
+  assert.equal((await h.manager.createGroup(TENANT, { requestId: "req-00015", name: GROUP_NAME, participants: [] })).kind, "ok");
+  const load = (h.manager as unknown as { loadEnabledGroups: (s: unknown) => Promise<boolean> }).loadEnabledGroups.bind(h.manager);
+  // The store does not list it yet (the app has not recorded it).
+  assert.equal(await load(h.session), true);
+  assert.ok(h.session.enabledGroups.has(NEW_GROUP_JID), "still enabled after the reload");
+  h.session.recentlyCreated.set(NEW_GROUP_JID, Date.now() - 10 * 60_000 - 1);
+  await load(h.session);
+  assert.equal(h.session.enabledGroups.has(NEW_GROUP_JID), false, "no longer forced in after 10 minutes");
+  assert.equal(h.session.recentlyCreated.size, 0, "the expired entry is pruned");
 });
 
 test("create: a create that throws on the fallback too is failed and replayed", async () => {
@@ -364,6 +433,24 @@ test("add: a privacy refusal comes back as invite_required", async () => {
   assert.deepEqual(h.actions, [{ action: "add", count: 2, groupJid: GROUP_JID }]);
 });
 
+test("add: the onWhatsApp lookups are one batched call; a repeated phone is duplicate", async () => {
+  const h = makeHarness({ inbound: [PHONE_A, PHONE_B] });
+  const outcome = await h.manager.updateGroupParticipants(TENANT, GROUP_JID, { action: "add", phones: [PHONE_A, PHONE_B, PHONE_A] });
+  assert.deepEqual(outcome, {
+    kind: "ok",
+    value: [{ phone: PHONE_A, result: "ok" }, { phone: PHONE_B, result: "ok" }, { phone: PHONE_A, result: "duplicate" }],
+  });
+  assert.deepEqual(h.called("onWhatsApp").map((c) => c.args), [[PHONE_A, PHONE_B, PHONE_A]]);
+  assert.deepEqual(h.called("groupParticipantsUpdate").map((c) => c.args[1]), [["447700900311@s.whatsapp.net", "447700900322@s.whatsapp.net"]]);
+});
+
+test("add / remove: more than 50 in one call is too_many, nothing looked up", async () => {
+  const h = makeHarness();
+  const phones = Array.from({ length: 51 }, (_, i) => `+4477009${String(i).padStart(5, "0")}`);
+  assert.deepEqual(await h.manager.updateGroupParticipants(TENANT, GROUP_JID, { action: "add", phones }), { kind: "too_many" });
+  assert.equal(h.calls.length, 0);
+});
+
 test("add: a phone with no inbound row is not_eligible and never reaches onWhatsApp", async () => {
   const h = makeHarness({ inbound: [PHONE_B] });
   const outcome = await h.manager.updateGroupParticipants(TENANT, GROUP_JID, { action: "add", phones: [PHONE_A, PHONE_B] });
@@ -385,6 +472,7 @@ test("add: during warm-up, eligible phones are warmup and nothing is added", asy
   h.pacer.setLinkedAt(Date.now());
   const outcome = await h.manager.updateGroupParticipants(TENANT, GROUP_JID, { action: "add", phones: [PHONE_A] });
   assert.deepEqual(outcome, { kind: "ok", value: [{ phone: PHONE_A, result: "warmup" }] });
+  assert.equal(h.called("onWhatsApp").length, 0, "no contact-discovery lookups on a warming number");
   assert.equal(h.called("groupParticipantsUpdate").length, 0);
   assert.equal(h.actions.length, 0);
 });
@@ -508,6 +596,14 @@ test("leave: no admin check; leaves and drops the group from the enabled set", a
   assert.deepEqual(h.called("groupLeave").map((c) => c.args), [[GROUP_JID]]);
   assert.equal(h.session.enabledGroups.has(GROUP_JID), false);
   assert.deepEqual(h.actions, [{ action: "leave", count: 1, groupJid: GROUP_JID }]);
+});
+
+test("leave: a just-created group that is left is not forced back in by a reload", async () => {
+  const h = makeHarness();
+  await h.manager.createGroup(TENANT, { requestId: "req-00016", name: GROUP_NAME, participants: [] });
+  assert.deepEqual(await h.manager.leaveGroup(TENANT, NEW_GROUP_JID), { kind: "ok", value: null });
+  await (h.manager as unknown as { loadEnabledGroups: (s: unknown) => Promise<boolean> }).loadEnabledGroups(h.session);
+  assert.equal(h.session.enabledGroups.has(NEW_GROUP_JID), false);
 });
 
 test("every op: a disabled or malformed JID is group_not_enabled", async () => {
