@@ -146,7 +146,7 @@ This is judgement built on the findings above.
 ## Still open
 
 - Which advertised features actually work: buttons over WhatsApp Web, group sync, proxies and warm-up. Only hands-on trials will tell.
-- Whether Wazzap's 7-day trial takes a card. Its sign-up funnel has a Stripe step but the page shows no card field.
+- Whether Wazzap's 7-day trial takes a card. Probably yes: its sign-up funnel's settings include `"requireCreditCard": true` and a Stripe step, though the page shows no card field. Only a real sign-up would confirm it.
 - Whether GHL ships multiple numbers per sub-account soon. It's "in progress" with 607 votes and has already slipped once.
 
 ## Sources
