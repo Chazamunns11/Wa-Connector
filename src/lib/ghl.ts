@@ -953,6 +953,8 @@ async function postGhlContactUpsert(accessToken: string, payload: Record<string,
 export type GhlContactLite = { id: string; firstName: string | null; name: string | null; phone: string | null; tags: string[] };
 
 const GHL_CONTACT_SEARCH_PAGE_SIZE = 100;
+/** Paging stops here even if GHL keeps returning full pages; hitting it sets `truncated`. */
+const GHL_CONTACT_SEARCH_MAX_PAGES = 20;
 
 function strOrNull(v: unknown): string | null {
   return typeof v === "string" && v.trim() !== "" ? v : null;
@@ -975,7 +977,7 @@ function toGhlContactLite(raw: unknown): GhlContactLite | null {
  * `GET /contacts/{id}`. Same headers and version as the upserts. Never throws;
  * failures are fixed strings (no response body, no contact data in logs).
  */
-export async function getGhlContact(accessToken: string, contactId: string): Promise<{ ok: true; contact: GhlContactLite } | { ok: false; error: string }> {
+export async function getGhlContact(accessToken: string, contactId: string): Promise<{ ok: true; contact: GhlContactLite } | { ok: false; error: string; notFound?: true }> {
   try {
     const res = await fetch(`${API_BASE}/contacts/${encodeURIComponent(contactId)}`, {
       method: "GET",
@@ -984,7 +986,9 @@ export async function getGhlContact(accessToken: string, contactId: string): Pro
     });
     if (!res.ok) {
       console.error(`[ghl] contact read rejected: HTTP ${res.status}`);
-      return { ok: false, error: `GHL contact read rejected (HTTP ${res.status})` };
+      return res.status === 404
+        ? { ok: false, error: `GHL contact read rejected (HTTP ${res.status})`, notFound: true }
+        : { ok: false, error: `GHL contact read rejected (HTTP ${res.status})` };
     }
     const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     const contact = toGhlContactLite(json?.contact ?? json);
@@ -999,7 +1003,7 @@ export async function getGhlContact(accessToken: string, contactId: string): Pro
 /**
  * `POST /contacts/search` for a location, by tag (a `tags` filter, matched
  * case-insensitively — also re-checked here) and/or free text, paged up to
- * `limit` contacts. `truncated` is true when more matched than `limit`.
+ * `limit` contacts (and at most 20 pages). `truncated` is true when more matched than `limit`.
  * Never throws; failures are fixed strings (no response body, no contact data
  * in logs).
  */
@@ -1015,6 +1019,10 @@ export async function searchGhlContacts(
   let truncated = false;
   try {
     for (let page = 1; ; page++) {
+      if (page > GHL_CONTACT_SEARCH_MAX_PAGES) {
+        truncated = true;
+        break;
+      }
       const body: Record<string, unknown> = { locationId, page, pageLimit: GHL_CONTACT_SEARCH_PAGE_SIZE };
       if (text) body.query = text;
       if (tag) body.filters = [{ field: "tags", operator: "contains", value: [tag] }];

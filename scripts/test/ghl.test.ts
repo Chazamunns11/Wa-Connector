@@ -3700,3 +3700,16 @@ test("getGhlContact: maps a contact; a non-2xx is { ok: false } without the body
   const bad = await withCapturedFetch(async () => jsonResponse(404, { message: "secret" }), () => getGhlContact("token", "c1"));
   assert.deepEqual(bad.result, { ok: false, error: "GHL contact read rejected (HTTP 404)" });
 });
+
+test("searchGhlContacts: stops at 20 pages when GHL ignores `page` and sets truncated", async () => {
+  const full = Array.from({ length: 100 }, (_, n) => ({ id: `c${n}`, tags: [] }));
+  const { result, requests } = await withCapturedFetch(async () => jsonResponse(200, { contacts: full }), () => searchGhlContacts("token", "loc-1", { text: "x" }, 100000));
+  assert.equal(requests.length, 20);
+  assert.ok(result.ok);
+  assert.equal(result.truncated, true);
+});
+
+test("getGhlContact: a 404 is flagged notFound", async () => {
+  const { result } = await withCapturedFetch(async () => jsonResponse(404, {}), () => getGhlContact("token", "c1"));
+  assert.deepEqual(result, { ok: false, error: "GHL contact read rejected (HTTP 404)", notFound: true });
+});

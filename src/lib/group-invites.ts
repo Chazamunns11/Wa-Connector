@@ -25,6 +25,7 @@ export const MAX_INVITE_TEMPLATE = 500;
 export const MAX_INVITEES_PER_REQUEST = 100;
 /** The bridge accepts at most this many phones in one direct-add call. */
 const MAX_ADD_PHONES_PER_CALL = 50;
+const CONTACT_LOOKUP_CONCURRENCY = 5;
 
 export const INVITE_LINK_UNAVAILABLE = "Couldn't get the group's invite link — try again";
 export const INVITE_SEND_FAILED = "Couldn't send the invite — try again";
@@ -54,7 +55,7 @@ export function renderInviteMessage(
 }
 
 export type Invitee = { contactId: string; firstName: string | null; phone: string };
-export type SkippedInvitee = { contactId: string; name: string | null; reason: "no_phone" | "group_contact" | "duplicate_phone" | "opted_out" };
+export type SkippedInvitee = { contactId: string; name: string | null; reason: "no_phone" | "group_contact" | "duplicate_phone" | "opted_out" | "not_found" };
 
 export interface ResolveInviteesDeps {
   getContact: typeof getGhlContact;
@@ -87,10 +88,15 @@ export async function resolveInvitees(
     contacts.push(c);
   };
   let truncated = ids.length > MAX_INVITEES_PER_REQUEST;
-  for (const id of ids.slice(0, MAX_INVITEES_PER_REQUEST)) {
-    const got = await deps.getContact(input.accessToken, id);
-    if (!got.ok) return { ok: false, message: INVITEE_LOOKUP_FAILED };
-    add(got.contact);
+  const notFound: SkippedInvitee[] = [];
+  const wanted = ids.slice(0, MAX_INVITEES_PER_REQUEST);
+  for (let at = 0; at < wanted.length; at += CONTACT_LOOKUP_CONCURRENCY) {
+    const batch = await Promise.all(wanted.slice(at, at + CONTACT_LOOKUP_CONCURRENCY).map((id) => deps.getContact(input.accessToken, id).then((got) => ({ id, got }))));
+    for (const { id, got } of batch) {
+      if (got.ok) add(got.contact);
+      else if (got.notFound) notFound.push({ contactId: id, name: null, reason: "not_found" });
+      else return { ok: false, message: INVITEE_LOOKUP_FAILED };
+    }
   }
   if (tag) {
     const found = await deps.searchContacts(input.accessToken, input.locationId, { tag }, MAX_INVITEES_PER_REQUEST);
@@ -104,7 +110,7 @@ export async function resolveInvitees(
   }
 
   const invitees: Invitee[] = [];
-  const skipped: SkippedInvitee[] = [];
+  const skipped: SkippedInvitee[] = [...notFound];
   const seenPhones = new Set<string>();
   try {
     for (const c of contacts) {
@@ -165,27 +171,31 @@ export function defaultSendGroupInvitesDeps(
 
 /**
  * What happened to each invitee.
- *  - `added`: contact ids added straight to the group (no message sent).
+ *  - `added`: contact ids newly added straight to the group (no message sent).
+ *  - `alreadyMember`: contact ids the bridge reported as already in the group (nothing sent).
  *  - `sent`: invite messages accepted by the bridge, plus those queued for retry.
  *  - `held`: invite messages held until the number reconnects.
  *  - `refused`: contact id and a reason GHL can show as-is.
  *  - `delivered`: one entry per message counted in `sent` or `held`, in send
- *    order, with the rendered text. The route posts each into the contact's
- *    GHL conversation, once. Never contains added, refused or skipped contacts.
+ *    order, with the rendered text and what the bridge did with it. Task 8
+ *    posts to GHL ONLY entries with outcome "accepted" (once each); "held" and
+ *    "pending_retry" have not gone out yet. Never contains added, already-member,
+ *    refused or skipped contacts.
  */
 export type SendGroupInvitesResult = {
   added: string[];
+  alreadyMember: string[];
   sent: number;
   held: number;
   refused: { contactId: string; reason: string }[];
-  delivered: { contactId: string; text: string }[];
+  delivered: { contactId: string; text: string; outcome: "accepted" | "pending_retry" | "held" }[];
 };
 
 export async function sendGroupInvites(
   deps: SendGroupInvitesDeps,
   input: { account: GhlAccount; tenantId: string; group: { jid: string; name: string }; invitees: Invitee[]; directAdd: boolean; coachName: string }
 ): Promise<SendGroupInvitesResult> {
-  const result: SendGroupInvitesResult = { added: [], sent: 0, held: 0, refused: [], delivered: [] };
+  const result: SendGroupInvitesResult = { added: [], alreadyMember: [], sent: 0, held: 0, refused: [], delivered: [] };
   const { account, tenantId, group, invitees } = input;
   if (invitees.length === 0) return result;
 
@@ -232,7 +242,7 @@ export async function sendGroupInvites(
         const r = res.results.find((x) => x.phone === c.phone);
         if (r && (r.result === "ok" || r.result === "already_member")) {
           addedPhones.add(c.phone);
-          result.added.push(c.contactId);
+          (r.result === "ok" ? result.added : result.alreadyMember).push(c.contactId);
         }
       }
       if (res.results.some((x) => x.result === "limit_reached" || x.result === "warmup")) break;
@@ -247,11 +257,11 @@ export async function sendGroupInvites(
       case "accepted":
       case "pending_retry":
         result.sent += 1;
-        result.delivered.push({ contactId: i.contactId, text });
+        result.delivered.push({ contactId: i.contactId, text, outcome: outcome.kind });
         break;
       case "held":
         result.held += 1;
-        result.delivered.push({ contactId: i.contactId, text });
+        result.delivered.push({ contactId: i.contactId, text, outcome: "held" });
         break;
       case "refused":
         result.refused.push({ contactId: i.contactId, reason: outcome.reason });

@@ -162,7 +162,7 @@ test("send: each invite goes through sendAppOriginatedText on the group's tenant
   assert.deepEqual(deps.texts.map((t) => [t.contactId, t.tenantId]), [["a", "tenant-1"], ["b", "tenant-1"]]);
   assert.equal(deps.texts[0].text, `Hi a, Coach Jo invited you to join Spring Cohort on WhatsApp: ${LINK}`);
   assert.equal(res.sent, 2);
-  assert.deepEqual(res.delivered, deps.texts.map((t) => ({ contactId: t.contactId, text: t.text })));
+  assert.deepEqual(res.delivered, deps.texts.map((t) => ({ contactId: t.contactId, text: t.text, outcome: "accepted" })));
   assert.deepEqual(deps.adds, []);
 });
 
@@ -241,7 +241,7 @@ test("send: a held invite is counted in held, not refused", async () => {
   assert.equal(res.held, 1);
   assert.equal(res.sent, 0);
   assert.deepEqual(res.refused, []);
-  assert.equal(res.delivered.length, 1);
+  assert.deepEqual(res.delivered.map((d) => d.outcome), ["held"]);
 });
 
 test("send: outcome mapping — pending_retry is sent, refused keeps its reason, error is a fixed string", async () => {
@@ -250,7 +250,7 @@ test("send: outcome mapping — pending_retry is sent, refused keeps its reason,
   const deps = sendDeps({ sendText: async () => outcomes[n++] });
   const res = await sendGroupInvites(deps, { ...SEND_INPUT, invitees: [invitee("a", "+447700900001"), invitee("b", "+447700900002"), invitee("c", "+447700900003")] });
   assert.equal(res.sent, 1);
-  assert.deepEqual(res.delivered.map((d) => d.contactId), ["a"]);
+  assert.deepEqual(res.delivered.map((d) => [d.contactId, d.outcome]), [["a", "pending_retry"]]);
   assert.deepEqual(res.refused, [
     { contactId: "b", reason: "Opted out" },
     { contactId: "c", reason: "Couldn't send the invite — try again" },
@@ -265,4 +265,51 @@ test("send: no invite link → everyone refused, nothing added or sent", async (
   assert.equal(res.refused.length, 2);
   assert.equal(res.refused[0].reason, res.refused[1].reason);
   assert.equal(res.sent + res.held + res.added.length + res.delivered.length, 0);
+});
+
+test("resolve: a 404 contact is skipped as not_found; any other lookup error fails the whole resolve", async () => {
+  const deps = resolveDeps([contact("a", { phone: "+447700900123" })]);
+  deps.getContact = async (_t, id) => {
+    if (id === "a") return { ok: true, contact: contact("a", { phone: "+447700900123" }) };
+    if (id === "gone") return { ok: false, error: "x", notFound: true };
+    return { ok: false, error: "x" };
+  };
+  const res = await resolveInvitees(deps, { ...RESOLVE_INPUT, contactIds: ["gone", "a"] });
+  assert.ok(res.ok);
+  assert.deepEqual(res.skipped, [{ contactId: "gone", name: null, reason: "not_found" }]);
+  assert.deepEqual(res.invitees.map((i) => i.contactId), ["a"]);
+  const bad = await resolveInvitees(deps, { ...RESOLVE_INPUT, contactIds: ["a", "boom"] });
+  assert.equal(bad.ok, false);
+});
+
+test("resolve: contact lookups run at most 5 at a time and keep input order", async () => {
+  const all = Array.from({ length: 12 }, (_, n) => contact(`c${n}`, { phone: `+4477009${String(10000 + n)}` }));
+  const deps = resolveDeps(all);
+  let active = 0;
+  let peak = 0;
+  deps.getContact = async (_t, id) => {
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise((r) => setTimeout(r, id === "c0" ? 15 : 1));
+    active--;
+    return { ok: true, contact: all.find((c) => c.id === id)! };
+  };
+  const res = await resolveInvitees(deps, { ...RESOLVE_INPUT, contactIds: all.map((c) => c.id) });
+  assert.ok(res.ok);
+  assert.deepEqual(res.invitees.map((i) => i.contactId), all.map((c) => c.id));
+  assert.equal(peak, 5);
+});
+
+test("send: already_member is reported separately from added", async () => {
+  const deps = sendDeps({
+    hasInboundFromPhone: async () => true,
+    updateParticipants: async (_c, _j, req) => ({
+      ok: true,
+      results: (req.action === "add" ? req.phones : []).map((phone): BridgeParticipantResult => ({ phone, result: phone.endsWith("1") ? "ok" : "already_member" })),
+    }),
+  });
+  const res = await sendGroupInvites(deps, { ...SEND_INPUT, directAdd: true, invitees: [invitee("a", "+447700900001"), invitee("b", "+447700900002")] });
+  assert.deepEqual(res.added, ["a"]);
+  assert.deepEqual(res.alreadyMember, ["b"]);
+  assert.deepEqual(deps.texts, []);
 });
