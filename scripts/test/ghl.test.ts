@@ -3698,7 +3698,7 @@ test("getGhlContact: maps a contact; a non-2xx is { ok: false } without the body
   assert.equal(ok.requests[0].url, "https://services.leadconnectorhq.com/contacts/c1");
   assert.deepEqual(ok.result, { ok: true, contact: { id: "c1", firstName: "Sam", name: "Sam", phone: "+447700900123", tags: ["a"] } });
   const bad = await withCapturedFetch(async () => jsonResponse(404, { message: "secret" }), () => getGhlContact("token", "c1"));
-  assert.deepEqual(bad.result, { ok: false, error: "GHL contact read rejected (HTTP 404)" });
+  assert.deepEqual(bad.result, { ok: false, error: "GHL contact read rejected (HTTP 404)", notFound: true });
 });
 
 test("searchGhlContacts: stops at 20 pages when GHL ignores `page` and sets truncated", async () => {
