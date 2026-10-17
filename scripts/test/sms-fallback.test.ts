@@ -74,12 +74,12 @@ function makeWorld(accountOverrides: Partial<GhlAccount> = {}) {
   const attachments: GhlOutboundAttachment[] = [];
   const ledger = new Map<string, { status: string; error: string | null }>();
   /** Keyed `${locationId}|${contactId}` (one echo per contact). */
-  const echoes = new Map<string, { textSha256: string; outboundMessageId: string; ghlMessageId: string | null; expiresAt: string }>();
+  const echoes = new Map<string, { textSha256: string; outboundMessageId: string; ghlMessageId: string | null; sentAt: string | null; expiresAt: string }>();
   const optOuts = new Set<string>();
   const remembered = new Map<string, string>();
   const groups = new Map<string, { tenantId: string; groupJid: string; enabled: boolean; left: boolean }>();
   const calls: string[] = [];
-  const fail = { find: false };
+  const fail = { find: false, optOutReads: 0 };
   let nextId = 1;
 
   const impl: Record<string, (...args: never[]) => Promise<unknown>> = {
@@ -105,6 +105,10 @@ function makeWorld(accountOverrides: Partial<GhlAccount> = {}) {
       return true;
     },
     async isOptedOut(tenantId: string, phone: string) {
+      if (fail.optOutReads > 0) {
+        fail.optOutReads--;
+        throw new Error("db down");
+      }
       return optOuts.has(`${tenantId}:${phone}`);
     },
     async isRememberedNotOnWhatsapp(locationId: string, phone: string, nowIso: string) {
@@ -174,12 +178,15 @@ function makeWorld(accountOverrides: Partial<GhlAccount> = {}) {
       const key = `${echo.locationId}|${echo.contactId}`;
       const existing = echoes.get(key);
       if (existing && existing.expiresAt > nowIso) return false;
-      echoes.set(key, { textSha256: echo.textSha256, outboundMessageId: echo.outboundMessageId, ghlMessageId: null, expiresAt: echo.expiresIso });
+      echoes.set(key, { textSha256: echo.textSha256, outboundMessageId: echo.outboundMessageId, ghlMessageId: null, sentAt: null, expiresAt: echo.expiresIso });
       return true;
     },
-    async setSmsFallbackEchoMessageId(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string) {
+    async markSmsFallbackEchoSent(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string | null) {
       const e = echoes.get(`${locationId}|${contactId}`);
-      if (e && e.outboundMessageId === outboundMessageId) e.ghlMessageId = ghlMessageId;
+      if (e && e.outboundMessageId === outboundMessageId) {
+        e.sentAt = new Date().toISOString();
+        e.ghlMessageId = ghlMessageId;
+      }
     },
     async findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string) {
       if (fail.find) throw new Error("db down");
@@ -198,7 +205,9 @@ function makeWorld(accountOverrides: Partial<GhlAccount> = {}) {
     },
     async failSmsFallback(id: string) {
       const row = rows.get(id);
-      if (row && (row.smsFallback === "claimed" || row.smsFallback === "sent")) row.smsFallback = "failed";
+      if (!row || (row.smsFallback !== "claimed" && row.smsFallback !== "sent")) return false;
+      row.smsFallback = "failed";
+      return true;
     },
     async blockSmsFallback(locationId: string) {
       if (locationId === LOCATION && account.smsFallbackBlockedAt === null) account.smsFallbackBlockedAt = new Date().toISOString();
@@ -346,7 +355,7 @@ test("drain: sent as SMS -> the status says so, no trigger fires, the echo holds
   assert.ok(w.remembered.has(`${LOCATION}:${PHONE}`), "the contact is still remembered as not on WhatsApp");
   const [[key, echo]] = [...w.echoes.entries()];
   assert.equal(key, `${LOCATION}|${CONTACT}`);
-  assert.deepEqual({ ...echo, expiresAt: "" }, { textSha256: smsFallbackTextSha256("Your class is at 6pm"), outboundMessageId: row.id, ghlMessageId: null, expiresAt: "" });
+  assert.deepEqual({ ...echo, expiresAt: "", sentAt: echo.sentAt ? "set" : null }, { textSha256: smsFallbackTextSha256("Your class is at 6pm"), outboundMessageId: row.id, ghlMessageId: null, sentAt: "set", expiresAt: "" });
   assert.ok(!JSON.stringify(echo).includes("class"), "never the text itself");
   const ttl = Date.parse(echo.expiresAt) - Date.now();
   assert.ok(ttl > 9 * 60 * 1000 && ttl <= 10 * 60 * 1000);
@@ -600,7 +609,7 @@ test("echo: GHL hands our SMS back -> refused with the loop reason, never sent o
 test("echo: a different text or a different contact is a normal send", async () => {
   flags();
   const w = makeWorld();
-  w.echoes.set(`${LOCATION}|${CONTACT}`, { textSha256: smsFallbackTextSha256("Your class is at 6pm"), outboundMessageId: "row-x", ghlMessageId: null, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  w.echoes.set(`${LOCATION}|${CONTACT}`, { textSha256: smsFallbackTextSha256("Your class is at 6pm"), outboundMessageId: "row-x", ghlMessageId: null, sentAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() });
   const d = makeDeps();
   assert.deepEqual(await handleProviderOutboundMessage(w.repo, payload({ messageId: "m-a", message: "Something else" }), d.deps), { kind: "accepted" });
   assert.deepEqual(await handleProviderOutboundMessage(w.repo, payload({ messageId: "m-b", contactId: "contact-other" }), d.deps), { kind: "accepted" });
@@ -611,7 +620,7 @@ test("echo: a different text or a different contact is a normal send", async () 
 test("echo: an expired echo is not a match", async () => {
   flags();
   const w = makeWorld();
-  w.echoes.set(`${LOCATION}|${CONTACT}`, { textSha256: smsFallbackTextSha256("Your class is at 6pm"), outboundMessageId: "row-x", ghlMessageId: null, expiresAt: new Date(Date.now() - 1000).toISOString() });
+  w.echoes.set(`${LOCATION}|${CONTACT}`, { textSha256: smsFallbackTextSha256("Your class is at 6pm"), outboundMessageId: "row-x", ghlMessageId: null, sentAt: new Date().toISOString(), expiresAt: new Date(Date.now() - 1000).toISOString() });
   const d = makeDeps();
   assert.deepEqual(await handleProviderOutboundMessage(w.repo, payload(), d.deps), { kind: "accepted" });
 });
@@ -631,7 +640,7 @@ test("echo: the guard still checks with the flag off (echoes may still be pendin
   const d = makeDeps();
   assert.deepEqual(await handleProviderOutboundMessage(w.repo, payload(), d.deps), { kind: "accepted" });
   assert.ok(w.calls.includes("findSmsFallbackEcho"));
-  w.echoes.set(`${LOCATION}|${CONTACT}`, { textSha256: smsFallbackTextSha256("Your class is at 6pm"), outboundMessageId: "row-gone", ghlMessageId: null, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  w.echoes.set(`${LOCATION}|${CONTACT}`, { textSha256: smsFallbackTextSha256("Your class is at 6pm"), outboundMessageId: "row-gone", ghlMessageId: null, sentAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() });
   assert.deepEqual(await handleProviderOutboundMessage(w.repo, payload({ messageId: "m-flag-off" }), d.deps), { kind: "refused", reason: LOOP_REASON });
   assert.equal(d.bridgeCalls.length, 1, "only the first message reached the bridge");
 });
@@ -671,7 +680,7 @@ test("trySmsFallback skips an app-originated row (a WhatsApp group invite)", asy
 // ---------------------------------------------------------------------------
 
 function seedEcho(w: ReturnType<typeof makeWorld>, text: string, outboundMessageId: string, ghlMessageId: string | null = null) {
-  w.echoes.set(`${LOCATION}|${CONTACT}`, { textSha256: smsFallbackTextSha256(text), outboundMessageId, ghlMessageId, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  w.echoes.set(`${LOCATION}|${CONTACT}`, { textSha256: smsFallbackTextSha256(text), outboundMessageId, ghlMessageId, sentAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() });
 }
 
 test("C1: a drain that lists the row while another pass's SMS is in flight leaves it: no report, no trigger", async () => {
@@ -893,4 +902,116 @@ test("M4: an opted-out contact never fires the trigger and gets no SMS, with the
     assert.deepEqual(d.statusCalls, [{ messageId: row.ghlMessageId, status: "failed", errorMessage: "recipient has no WhatsApp account" }]);
     assert.equal(await trySmsFallback(w.repo, d.deps, { account: w.account, row: { ...row, reportedStatus: null, smsFallback: null }, text: "hi" }), "opted_out");
   }
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 2
+// ---------------------------------------------------------------------------
+
+test("R2-1: GHL rejects the SMS -> the echo is deleted, so the coach's retry of the same text is not taken as the echo", async () => {
+  flags();
+  const w = makeWorld();
+  w.seedNotOnWhatsapp();
+  const d = makeDeps({ sendSms: async () => ({ ok: false, status: 422 }) });
+  await drainGhlOutboundStatuses(w.repo, d.deps);
+  assert.equal(w.echoes.size, 0, "nothing was sent: no echo, no cooldown");
+  const retry = await handleProviderOutboundMessage(w.repo, payload({ messageId: "coach-retry" }), d.deps);
+  await settle(d.deferred);
+  assert.notDeepEqual(retry, { kind: "refused", reason: LOOP_REASON });
+  assert.equal(w.account.smsFallbackBlockedAt, null);
+});
+
+test("R2-1: no token for the SMS (nothing attempted) -> the echo is deleted too", async () => {
+  flags();
+  const w = makeWorld({ accessTokenExpiresAt: new Date(Date.now() - 1000).toISOString() });
+  w.seedNotOnWhatsapp();
+  await drainGhlOutboundStatuses(w.repo, makeDeps().deps);
+  assert.equal(w.echoes.size, 0);
+});
+
+test("R2-1: a network or timeout error keeps the echo (the SMS may have gone)", async () => {
+  flags();
+  const w = makeWorld();
+  const row = w.seedNotOnWhatsapp();
+  const d = makeDeps({ sendSms: async () => ({ ok: false, status: null }) });
+  await drainGhlOutboundStatuses(w.repo, d.deps);
+  const echo = w.echoes.get(`${LOCATION}|${CONTACT}`);
+  assert.ok(echo, "kept");
+  assert.equal(echo!.outboundMessageId, row.id);
+  assert.equal(echo!.sentAt, null);
+});
+
+test("R2-1: the guard matches the hash only after a successful POST, or for an unsent echo younger than 30 s", async () => {
+  flags();
+  for (const [label, sentAt, ageMs, expected] of [
+    ["sent, any age", "2026-10-17T10:00:00Z", 9 * 60 * 1000, "refused"],
+    ["unsent, 5 s old (POST in flight)", null, 5_000, "refused"],
+    ["unsent, 60 s old (network error)", null, 60_000, "accepted"],
+  ] as const) {
+    const w = makeWorld();
+    w.echoes.set(`${LOCATION}|${CONTACT}`, {
+      textSha256: smsFallbackTextSha256("Your class is at 6pm"),
+      outboundMessageId: "row-x",
+      ghlMessageId: null,
+      sentAt,
+      expiresAt: new Date(Date.now() - ageMs + SMS_FALLBACK_ECHO_MS).toISOString(),
+    });
+    const outcome = await handleProviderOutboundMessage(w.repo, payload({ messageId: `m-${label}` }), makeDeps().deps);
+    assert.equal(outcome.kind, expected, label);
+  }
+});
+
+test("R2-2: an original already failed, then the echo matches -> no second trigger and no second report", async () => {
+  flags();
+  const w = makeWorld();
+  const original = w.seedNotOnWhatsapp({ smsFallback: "failed" });
+  seedEcho(w, "Your class is at 6pm", original.id);
+  const d = makeDeps();
+  const outcome = await handleProviderOutboundMessage(w.repo, payload({ messageId: "echo-after-failed" }), d.deps);
+  await settle(d.deferred);
+  assert.deepEqual(outcome, { kind: "refused", reason: LOOP_REASON });
+  assert.deepEqual(d.fired, []);
+  assert.equal(d.statusCalls.filter((c) => c.messageId === original.ghlMessageId).length, 0);
+});
+
+test("R2-3: an opt-out read error in the drain leaves the row (busy): no SMS, no trigger, retried next pass", async () => {
+  flags();
+  const w = makeWorld();
+  const row = w.seedNotOnWhatsapp();
+  w.fail.optOutReads = 1;
+  const d = makeDeps();
+  const first = await drainGhlOutboundStatuses(w.repo, d.deps);
+  assert.equal(first.unresolved, 1);
+  assert.deepEqual(d.statusCalls, []);
+  assert.deepEqual(d.fired, []);
+  assert.deepEqual(d.smsCalls, []);
+  await drainGhlOutboundStatuses(w.repo, d.deps);
+  assert.equal(d.smsCalls.length, 1, "the next pass reads the opt-outs and sends");
+  assert.deepEqual(d.statusCalls.map((c) => c.messageId), [row.ghlMessageId]);
+});
+
+test("R2-3: an opt-out read error on the fast path reports no WhatsApp account and fires no trigger", async () => {
+  flags();
+  const w = makeWorld();
+  w.remembered.set(`${LOCATION}:${PHONE}`, new Date(Date.now() + 60_000).toISOString());
+  // The send's own STOP check reads first; the fallback's read is the one that fails.
+  const d = makeDeps();
+  let reads = 0;
+  const flaky = new Proxy(w.repo as unknown as Record<string, unknown>, {
+    get(target, prop: string) {
+      if (prop === "isOptedOut") {
+        return async (...args: unknown[]) => {
+          reads++;
+          if (reads > 1) throw new Error("db down");
+          return (target[prop] as (...a: unknown[]) => Promise<boolean>)(...args);
+        };
+      }
+      return target[prop];
+    },
+  }) as unknown as GhlProviderRepo;
+  const outcome = await handleProviderOutboundMessage(flaky, payload(), d.deps);
+  await settle(d.deferred);
+  assert.deepEqual(outcome, { kind: "refused", reason: "recipient has no WhatsApp account" });
+  assert.deepEqual(d.smsCalls, []);
+  assert.deepEqual(d.fired, []);
 });

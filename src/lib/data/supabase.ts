@@ -2237,6 +2237,7 @@ export class SupabaseGhlRepository implements GhlRepository {
           text_sha256: echo.textSha256,
           outbound_message_id: echo.outboundMessageId,
           ghl_message_id: null,
+          sent_at: null,
           expires_at: echo.expiresIso,
         },
         { onConflict: "location_id,contact_id", ignoreDuplicates: true }
@@ -2246,11 +2247,11 @@ export class SupabaseGhlRepository implements GhlRepository {
     return (data ?? []).length > 0;
   }
 
-  async setSmsFallbackEchoMessageId(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string) {
+  async markSmsFallbackEchoSent(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string | null) {
     const supabase = getServiceClient();
     const { error } = await supabase
       .from("ghl_sms_fallback_echoes")
-      .update({ ghl_message_id: ghlMessageId })
+      .update({ sent_at: new Date().toISOString(), ghl_message_id: ghlMessageId })
       .eq("location_id", locationId)
       .eq("contact_id", contactId)
       .eq("outbound_message_id", outboundMessageId);
@@ -2261,15 +2262,15 @@ export class SupabaseGhlRepository implements GhlRepository {
     const supabase = getServiceClient();
     const { data, error } = await supabase
       .from("ghl_sms_fallback_echoes")
-      .select("text_sha256, outbound_message_id, ghl_message_id, expires_at")
+      .select("text_sha256, outbound_message_id, ghl_message_id, sent_at, expires_at")
       .eq("location_id", locationId)
       .eq("contact_id", contactId)
       .gt("expires_at", nowIso)
       .maybeSingle();
     if (error) throw error;
     if (!data) return null;
-    const row = data as { text_sha256: string; outbound_message_id: string; ghl_message_id: string | null; expires_at: string };
-    return { textSha256: row.text_sha256, outboundMessageId: row.outbound_message_id, ghlMessageId: row.ghl_message_id, expiresAt: row.expires_at };
+    const row = data as { text_sha256: string; outbound_message_id: string; ghl_message_id: string | null; sent_at: string | null; expires_at: string };
+    return { textSha256: row.text_sha256, outboundMessageId: row.outbound_message_id, ghlMessageId: row.ghl_message_id, sentAt: row.sent_at, expiresAt: row.expires_at };
   }
 
   async deleteSmsFallbackEcho(locationId: string, contactId: string, outboundMessageId: string) {
@@ -2331,8 +2332,14 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async failSmsFallback(id: string) {
     const supabase = getServiceClient();
-    const { error } = await supabase.from("ghl_outbound_messages").update({ sms_fallback: "failed" }).eq("id", id).in("sms_fallback", ["claimed", "sent"]);
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update({ sms_fallback: "failed" })
+      .eq("id", id)
+      .in("sms_fallback", ["claimed", "sent"])
+      .select("id");
     if (error) throw error;
+    return (data ?? []).length > 0;
   }
 
   async getGhlOutboundMessage(id: string) {

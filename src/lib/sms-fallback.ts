@@ -44,7 +44,8 @@ export type SmsFallbackRepo = GhlTokenRefreshRepo &
     | "isOptedOut"
     | "listLocationNumbers"
     | "recordSmsFallbackEcho"
-    | "setSmsFallbackEchoMessageId"
+    | "markSmsFallbackEchoSent"
+    | "deleteSmsFallbackEcho"
     | "claimSmsFallback"
     | "setSmsFallbackResult"
     | "getGhlOutboundMessage"
@@ -69,7 +70,7 @@ export type SmsFallbackDeps = GhlTokenRefreshDeps & {
  *   corrected the row while this pass was sending). Report "no WhatsApp
  *   account"; the guard already fired the trigger.
  * - `busy`: another pass holds this row's SMS right now (or already reported
- *   it). Leave the row: no report, no trigger.
+ *   it), or the opt-out read failed. Leave the row: no report, no trigger.
  */
 export type SmsFallbackOutcome = "sent" | "skipped" | "opted_out" | "failed" | "echoed" | "busy";
 
@@ -90,9 +91,11 @@ export async function trySmsFallback(
     try {
       if (await optedOutReason(repo, row.locationId, row.tenantId, row.toPhone)) return "opted_out";
     } catch {
-      // Fail closed on the SMS; the trigger path behaves as without the fallback.
-      console.error("[sms-fallback] opt-out read failed (no SMS)");
-      return "skipped";
+      // The contact may have opted out: no SMS and no trigger now. "busy"
+      // leaves a drain row for the next pass; the fast path reports "no
+      // WhatsApp account" without firing.
+      console.error("[sms-fallback] opt-out read failed (no SMS, no trigger)");
+      return "busy";
     }
   }
 
@@ -124,13 +127,23 @@ export async function trySmsFallback(
       return "skipped";
     }
     const accessToken = await resolveGhlAccessToken(repo, deps, account);
-    const sent = accessToken ? await (deps.sendSms ?? sendGhlSms)(accessToken, { contactId: row.ghlContactId, message }) : { ok: false as const, status: null };
+    if (!accessToken) {
+      // Nothing was attempted: no echo to watch for, and no cooldown.
+      await dropEcho(repo, account.locationId, row.ghlContactId, row.id);
+      await storeResult(repo, row.id, "failed");
+      return "failed";
+    }
+    const sent = await (deps.sendSms ?? sendGhlSms)(accessToken, { contactId: row.ghlContactId, message });
     if (!sent.ok) {
+      // A definite rejection sent nothing: drop the echo, so the coach's retry
+      // of the same text isn't taken for it. A network or timeout error
+      // (status null) may have sent it: keep the echo.
+      if (sent.status !== null) await dropEcho(repo, account.locationId, row.ghlContactId, row.id);
       await storeResult(repo, row.id, "failed");
       return "failed";
     }
     await storeResult(repo, row.id, "sent");
-    if (sent.messageId) await stampEchoMessageId(repo, account.locationId, row.ghlContactId, row.id, sent.messageId);
+    await stampEchoSent(repo, account.locationId, row.ghlContactId, row.id, sent.messageId);
     // Just before the caller reports: did the echo come back while we sent?
     return (await wasEchoed(repo, row.id)) ? "echoed" : "sent";
   } catch {
@@ -155,12 +168,21 @@ async function storeResult(repo: SmsFallbackRepo, id: string, result: "sent" | "
   }
 }
 
-async function stampEchoMessageId(repo: SmsFallbackRepo, locationId: string, contactId: string, rowId: string, ghlMessageId: string): Promise<void> {
+async function stampEchoSent(repo: SmsFallbackRepo, locationId: string, contactId: string, rowId: string, ghlMessageId: string | null): Promise<void> {
   try {
-    await repo.setSmsFallbackEchoMessageId(locationId, contactId, rowId, ghlMessageId);
+    await repo.markSmsFallbackEchoSent(locationId, contactId, rowId, ghlMessageId);
   } catch {
-    // The guard still matches on the text hash.
-    console.error("[sms-fallback] could not store the SMS message id on the echo (non-fatal)");
+    // The guard still matches on the text hash for 30 seconds.
+    console.error("[sms-fallback] could not mark the echo sent (non-fatal)");
+  }
+}
+
+async function dropEcho(repo: SmsFallbackRepo, locationId: string, contactId: string, rowId: string): Promise<void> {
+  try {
+    await repo.deleteSmsFallbackEcho(locationId, contactId, rowId);
+  } catch {
+    // Left in place it only matches for 30 seconds, and expires in 10 minutes.
+    console.error("[sms-fallback] could not drop the echo of an unsent SMS (non-fatal)");
   }
 }
 

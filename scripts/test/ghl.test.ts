@@ -469,8 +469,8 @@ function createFakeRepo(
       calls.push({ method: "recordSmsFallbackEcho", args: [echo, nowIso] });
       return true;
     },
-    async setSmsFallbackEchoMessageId(...args: unknown[]) {
-      calls.push({ method: "setSmsFallbackEchoMessageId", args });
+    async markSmsFallbackEchoSent(...args: unknown[]) {
+      calls.push({ method: "markSmsFallbackEchoSent", args });
     },
     async deleteSmsFallbackEcho(...args: unknown[]) {
       calls.push({ method: "deleteSmsFallbackEcho", args });
@@ -488,6 +488,7 @@ function createFakeRepo(
     },
     async failSmsFallback(id: string) {
       calls.push({ method: "failSmsFallback", args: [id] });
+      return false;
     },
     async getGhlOutboundMessage(id: string) {
       calls.push({ method: "getGhlOutboundMessage", args: [id] });

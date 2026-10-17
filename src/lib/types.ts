@@ -317,6 +317,8 @@ export interface SmsFallbackEcho {
   outboundMessageId: string;
   /** GHL's message id from the send's response; null until (or unless) GHL returned one. */
   ghlMessageId: string | null;
+  /** When GHL accepted the send; null while it is in flight, or after a network error. */
+  sentAt: string | null;
   expiresAt: string;
 }
 

@@ -860,8 +860,8 @@ export interface GhlRepository {
     echo: { locationId: string; contactId: string; textSha256: string; outboundMessageId: string; expiresIso: string },
     nowIso: string
   ): Promise<boolean>;
-  /** Stamps GHL's message id (from the send's response) on the echo of that outbound row. */
-  setSmsFallbackEchoMessageId(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string): Promise<void>;
+  /** After GHL accepted the send: stamps `sent_at` and GHL's message id (null when the response had none) on the echo of that outbound row. */
+  markSmsFallbackEchoSent(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string | null): Promise<void>;
   /** The contact's echo unexpired at `nowIso`, or null. */
   findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string): Promise<SmsFallbackEcho | null>;
   /** Deletes the contact's echo if it is still the one for `outboundMessageId`; true when it did. */
@@ -876,8 +876,8 @@ export interface GhlRepository {
   claimSmsFallback(id: string): Promise<boolean>;
   /** Stores the outcome of a claimed row's fallback SMS (only while it is still `claimed`). */
   setSmsFallbackResult(id: string, result: "sent" | "failed"): Promise<void>;
-  /** The loop guard's correction: a `claimed` or `sent` row becomes `failed` (its SMS came back through PingWren). */
-  failSmsFallback(id: string): Promise<void>;
+  /** The loop guard's correction: a `claimed` or `sent` row becomes `failed` (its SMS came back through PingWren). True when the row changed. */
+  failSmsFallback(id: string): Promise<boolean>;
   /** One outbound row by id, or null. */
   getGhlOutboundMessage(id: string): Promise<GhlOutboundMessage | null>;
   /**

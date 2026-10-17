@@ -96,7 +96,7 @@ const METHODS = [
   "stampSessionTriggerPhone",
   "listSessionsForTriggers",
   "recordSmsFallbackEcho",
-  "setSmsFallbackEchoMessageId",
+  "markSmsFallbackEchoSent",
   "findSmsFallbackEcho",
   "deleteSmsFallbackEcho",
   "purgeExpiredSmsFallbackEchoes",
@@ -254,24 +254,24 @@ test("recordSmsFallbackEcho: one echo per (location, contact), a conditional ins
   assert.match(body, /\.delete\(\)\s*\.eq\("location_id", echo\.locationId\)\s*\.eq\("contact_id", echo\.contactId\)\s*\.lte\("expires_at", nowIso\)/);
   assert.match(
     body,
-    /\{\s*location_id: echo\.locationId,\s*contact_id: echo\.contactId,\s*text_sha256: echo\.textSha256,\s*outbound_message_id: echo\.outboundMessageId,\s*ghl_message_id: null,\s*expires_at: echo\.expiresIso,\s*\}/
+    /\{\s*location_id: echo\.locationId,\s*contact_id: echo\.contactId,\s*text_sha256: echo\.textSha256,\s*outbound_message_id: echo\.outboundMessageId,\s*ghl_message_id: null,\s*sent_at: null,\s*expires_at: echo\.expiresIso,\s*\}/
   );
   assert.match(body, /onConflict: "location_id,contact_id", ignoreDuplicates: true/);
   assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
   assert.doesNotMatch(body, /message:|text:/);
 });
 
-test("setSmsFallbackEchoMessageId stamps GHL's message id on that row's echo only", () => {
-  const body = methodSource("setSmsFallbackEchoMessageId");
+test("markSmsFallbackEchoSent stamps sent_at and GHL's message id on that row's echo only", () => {
+  const body = methodSource("markSmsFallbackEchoSent");
   assert.match(
     body,
-    /\.update\(\{ ghl_message_id: ghlMessageId \}\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.eq\("outbound_message_id", outboundMessageId\)/
+    /\.update\(\{ sent_at: new Date\(\)\.toISOString\(\), ghl_message_id: ghlMessageId \}\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.eq\("outbound_message_id", outboundMessageId\)/
   );
 });
 
 test("findSmsFallbackEcho reads one unexpired echo by its key", () => {
   const body = methodSource("findSmsFallbackEcho");
-  assert.match(body, /\.select\("text_sha256, outbound_message_id, ghl_message_id, expires_at"\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.gt\("expires_at", nowIso\)/);
+  assert.match(body, /\.select\("text_sha256, outbound_message_id, ghl_message_id, sent_at, expires_at"\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.gt\("expires_at", nowIso\)/);
 });
 
 test("deleteSmsFallbackEcho deletes only the echo it read and says whether it did", () => {
@@ -287,7 +287,8 @@ test("purgeExpiredSmsFallbackEchoes deletes every expired echo", () => {
 
 test("failSmsFallback marks a claimed or sent row failed (the loop guard's correction)", () => {
   const body = methodSource("failSmsFallback");
-  assert.match(body, /\.update\(\{ sms_fallback: "failed" \}\)\s*\.eq\("id", id\)\s*\.in\("sms_fallback", \["claimed", "sent"\]\)/);
+  assert.match(body, /\.update\(\{ sms_fallback: "failed" \}\)\s*\.eq\("id", id\)\s*\.in\("sms_fallback", \["claimed", "sent"\]\)\s*\.select\("id"\)/);
+  assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
 });
 
 test("getGhlOutboundMessage reads one row by id", () => {
@@ -330,6 +331,7 @@ test("0014: the SMS fallback switch is on by default, blocked_at is nullable, th
   assert.match(sql, /add column if not exists sms_fallback_claimed_at timestamptz/);
   assert.match(sql, /outbound_message_id\s+uuid not null references public\.ghl_outbound_messages \(id\) on delete cascade/);
   assert.match(sql, /ghl_message_id\s+text,/);
+  assert.match(sql, /sent_at\s+timestamptz,/);
   assert.match(sql, /create index ghl_sms_fallback_echoes_expires_idx on public\.ghl_sms_fallback_echoes \(expires_at\)/);
   assert.match(sql, /create table public\.ghl_sms_fallback_echoes \(/);
   assert.match(sql, /location_id\s+text not null references public\.ghl_accounts \(location_id\) on delete cascade/);

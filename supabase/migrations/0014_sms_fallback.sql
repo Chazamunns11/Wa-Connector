@@ -44,7 +44,10 @@ alter table public.ghl_outbound_messages
 -- one fallback SMS per contact per 10 minutes, a conditional insert), so a
 -- missed echo costs one hop, never a loop. The provider webhook recognises the
 -- SMS if GoHighLevel hands it back to us: by GHL's message id once the POST
--- has answered (ghl_message_id), else by the sha256 of the normalised text.
+-- has answered (ghl_message_id), else by the sha256 of the normalised text,
+-- and by the hash only once the POST succeeded (sent_at) or while it may
+-- still be in flight (an unsent echo younger than 30 seconds). A send GHL
+-- rejected deletes its echo; one that hit a network error keeps it.
 -- outbound_message_id is the original message, corrected when the echo comes
 -- back. Only the hash is stored, never the text.
 create table public.ghl_sms_fallback_echoes (
@@ -53,6 +56,7 @@ create table public.ghl_sms_fallback_echoes (
   text_sha256         text not null,
   outbound_message_id uuid not null references public.ghl_outbound_messages (id) on delete cascade,
   ghl_message_id      text,
+  sent_at             timestamptz,
   expires_at          timestamptz not null,
   primary key (location_id, contact_id)
 );

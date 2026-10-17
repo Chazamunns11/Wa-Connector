@@ -121,7 +121,7 @@ import { decideNotConnected, REASON_NUMBER_BANNED, type NotConnectedDecision } f
 import type { TriggerKey } from "@/lib/ghl-trigger-keys";
 import { isWorkflowTriggersEnabled, type TriggerPayloads, type TriggerRepo } from "@/lib/ghl-triggers";
 import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, LocationNumber, SmsFallbackEcho } from "@/lib/types";
-import { REASON_SENT_AS_SMS, REASON_SMS_FALLBACK_LOOP, smsFallbackTextSha256 } from "@/lib/sms-fallback-shared";
+import { REASON_SENT_AS_SMS, REASON_SMS_FALLBACK_LOOP, smsFallbackEchoMatches } from "@/lib/sms-fallback-shared";
 import type { SmsFallbackOutcome } from "@/lib/sms-fallback";
 
 /** Repo slice this module needs — every method it touches is already on `GhlRepository` (Phase 2's extension of Phase 1's interface — see that Pick list's own comment, src/lib/data/index.ts). Both entry points are only ever driven via `webhookRepo` (the webhook route, the poke route, the reminders cron — none carry a user session). */
@@ -164,7 +164,7 @@ export type GhlProviderRepo = Pick<
   // SMS fallback B (0014) — the text sent as an SMS (`src/lib/sms-fallback.ts`)
   // and the loop guard in `handleProviderOutboundMessage`.
   | "recordSmsFallbackEcho"
-  | "setSmsFallbackEchoMessageId"
+  | "markSmsFallbackEchoSent"
   | "findSmsFallbackEcho"
   | "deleteSmsFallbackEcho"
   | "blockSmsFallback"
@@ -1138,7 +1138,8 @@ export async function handleProviderOutboundMessage(
  * echo of a fallback SMS we asked GHL to send, it is that SMS coming back
  * through our own provider webhook (PingWren is this sub-account's SMS
  * provider). A match is GHL's message id once the send's response gave one,
- * else the hash of the normalised text. Checked whatever the flag (an echo
+ * else the hash of the normalised text, once the send succeeded or while it
+ * may still be in flight (`smsFallbackEchoMatches`). Checked whatever the flag (an echo
  * may still be pending after it is switched off).
  *
  * On a match: the row is stamped refused FIRST (so no later pass can send it),
@@ -1164,8 +1165,7 @@ async function refuseIfSmsFallbackEcho(
     return null;
   }
   if (!echo) return null;
-  const isEcho = echo.ghlMessageId ? row.ghlMessageId === echo.ghlMessageId : smsFallbackTextSha256(rawMessage) === echo.textSha256;
-  if (!isEcho) return null;
+  if (!smsFallbackEchoMatches(echo, { ghlMessageId: row.ghlMessageId, text: rawMessage }, Date.now())) return null;
 
   console.error("[ghl-provider] SMS fallback echo came back through PingWren — refused, and the fallback is switched off for this sub-account");
   await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_SMS_FALLBACK_LOOP });
@@ -1187,13 +1187,16 @@ async function refuseIfSmsFallbackEcho(
 
 /**
  * The original message whose fallback SMS came back did not reach the contact:
- * mark its fallback failed (its own pass re-reads this just before reporting),
- * fire `whatsapp_not_on_whatsapp` for it with the text, and report "recipient
- * has no WhatsApp account" when it has not been reported yet. Best effort.
+ * mark its fallback failed (its own pass re-reads this just before reporting)
+ * and, only when that moved it from claimed or sent, fire
+ * `whatsapp_not_on_whatsapp` for it with the text and report "recipient has no
+ * WhatsApp account" when it has not been reported yet. Best effort.
  */
 async function correctEchoedOriginal(repo: GhlProviderRepo, deps: GhlProviderDeps, account: GhlAccount, originalId: string, text: string): Promise<void> {
   try {
-    await repo.failSmsFallback(originalId);
+    // Only the call that moved it to failed fires and reports, so an original
+    // already failed (its own pass fired) never fires twice.
+    if (!(await repo.failSmsFallback(originalId))) return;
     const original = await repo.getGhlOutboundMessage(originalId);
     if (!original) return;
     fireNotOnWhatsappFromSend(repo, deps, original, text);

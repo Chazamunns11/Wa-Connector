@@ -635,7 +635,8 @@ sub-account's. Apply migration 0014 first (0001 to 0014 apply on Postgres 16).
   message in that window fires the trigger instead). Text only: attachments
   and their links are not sent; a message with no text gets no SMS. Group
   sends never fall back. A contact who sent STOP gets nothing, and no trigger,
-  whether or not the fallback is on.
+  whether or not the fallback is on. If the opt-out read fails, nothing is
+  sent or fired (the drain retries the message next pass).
 - When the SMS was sent, GHL shows the original as failed with `Not on
   WhatsApp — sent as SMS instead`, and the `whatsapp_not_on_whatsapp` trigger
   is not fired (so a workflow doesn't send a second SMS). When it wasn't sent,
@@ -646,7 +647,10 @@ sub-account's. Apply migration 0014 first (0001 to 0014 apply on Postgres 16).
   records a pending echo for 10 minutes: sub-account, contact, the original
   message, the sha256 of the normalised text (never the text) and, once GHL's
   send answers, GHL's message id. The webhook matches on that id when it is
-  known, else on the hash. The hourly cron purges expired echoes. If our SMS
+  known, else on the hash: once the send succeeded, or within 30 seconds while
+  it may still be in flight. A send GHL rejected (or never attempted for want
+  of a token) drops its echo, so a coach's retry isn't taken for it; one that
+  hit a network error keeps it. The hourly cron purges expired echoes. If our SMS
   comes back through the provider webhook, it is refused with `This sub-account sends SMS through PingWren, so
   the SMS fallback can't be used — not sent`, never sent over WhatsApp, and
   the fallback is turned off for that sub-account
