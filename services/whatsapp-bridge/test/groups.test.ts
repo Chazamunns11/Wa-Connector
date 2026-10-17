@@ -10,6 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { Boom } from "@hapi/boom";
 import { pino } from "pino";
 import {
   GROUP_SEND_CAP_UNITS,
@@ -167,6 +168,8 @@ function makeHarness(opts: {
   leaseHeld?: boolean;
   participants?: { id: string }[];
   groupMetadataThrows?: boolean;
+  /** When set, groupMetadata throws this (overrides groupMetadataThrows). */
+  groupMetadataError?: Error;
   enabledGroups?: string[];
   listEnabledGroupJids?: () => Promise<string[]>;
   /** When set, groupMetadata waits for this before answering — holds a group send in flight. */
@@ -203,6 +206,7 @@ function makeHarness(opts: {
     groupMetadata: async (jid: string) => {
       calls.push({ method: "groupMetadata", args: [jid] });
       if (opts.groupMetadataGate) await opts.groupMetadataGate;
+      if (opts.groupMetadataError) throw opts.groupMetadataError;
       if (opts.groupMetadataThrows) throw new Error("timed out");
       return { id: jid, subject: "x", participants: opts.participants ?? [{ id: "447700900001@s.whatsapp.net" }] };
     },
@@ -357,6 +361,15 @@ test("drain: groupMetadata throwing fails NOT dispatched, like the existing exis
   assert.equal(h.sent.length, 0);
 });
 
+test("drain: groupMetadata refused because we left (Baileys 403 forbidden) fails NOT dispatched with the not-in-group string", async () => {
+  const h = makeHarness({ groupMetadataError: new Boom("forbidden", { data: 403 }) });
+  await h.manager.sendToGroup(TENANT, GROUP_JID, "hi all", "g-1");
+  await h.terminal;
+  const failed = h.calls.find((c) => c.method === "markMessageFailed");
+  assert.deepEqual(failed?.args, ["id-g-1", NOT_IN_GROUP_REASON, false]);
+  assert.equal(h.sent.length, 0);
+});
+
 test("drain: a member group send goes to the stored group JID and records 5 cap units", async () => {
   const h = makeHarness({});
   await h.manager.sendToGroup(TENANT, GROUP_JID, "hi all", "g-1");
@@ -487,4 +500,36 @@ test("store.acceptMessage: a group target writes group_jid with no to_phone; a m
   const before = touched();
   await assert.rejects(store.acceptMessage(TENANT, "g-2", { groupJid: "447700900123@s.whatsapp.net" }));
   assert.equal(touched(), before);
+});
+
+// Baileys 7.0.0-rc14 throws an IQ error node as `new Boom(text, { data: +code })`
+// (WABinary/generic-utils.js `assertNodeErrorFree`): statusCode stays 500, the
+// WhatsApp code is in `data`, the text is the message.
+function baileysIqError(code: number, text: string): Boom {
+  return new Boom(text, { data: code });
+}
+
+test("checkGroupMembership: WhatsApp refusing the lookup because we left (403 forbidden / 404 item-not-found) is not_member", async () => {
+  for (const err of [
+    baileysIqError(403, "forbidden"),
+    baileysIqError(404, "item-not-found"),
+    new Boom("forbidden", { statusCode: 403 }),
+    new Boom("item-not-found", { statusCode: 404 }),
+  ]) {
+    const result = await checkGroupMembership({ user: ME, groupMetadata: async () => { throw err; } }, GROUP_JID);
+    assert.equal(result.kind, "not_member", `${err.message} -> not_member`);
+  }
+});
+
+test("checkGroupMembership: other lookup errors stay check_failed (timeout, closed connection, other codes)", async () => {
+  for (const err of [
+    new Boom("Timed Out", { statusCode: 408 }),
+    new Boom("Connection Closed", { statusCode: 428 }),
+    baileysIqError(500, "internal-server-error"),
+    baileysIqError(429, "rate-overlimit"),
+    new Error("socket hang up"),
+  ]) {
+    const result = await checkGroupMembership({ user: ME, groupMetadata: async () => { throw err; } }, GROUP_JID);
+    assert.equal(result.kind, "check_failed", `${err.message} -> check_failed`);
+  }
 });

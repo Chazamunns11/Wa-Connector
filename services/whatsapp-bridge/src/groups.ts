@@ -23,6 +23,7 @@
  * tenant ids and message ids only.
  */
 import { jidNormalizedUser } from "@whiskeysockets/baileys";
+import { isBoom } from "@hapi/boom";
 
 /** The one group-JID shape this bridge accepts — byte-identical to whatsapp_groups.group_jid's CHECK (0004) and whatsapp_messages.group_jid's (0005). */
 export const GROUP_JID_RE = /^[0-9]+(-[0-9]+)?@g\.us$/;
@@ -123,18 +124,38 @@ export interface GroupMembershipSocket {
 
 export type GroupMembershipCheck = { kind: "member" } | { kind: "not_member" } | { kind: "check_failed"; err: Error };
 
+/** WhatsApp's IQ error codes for "you are not in this group": 403 forbidden (left or removed), 404 item-not-found. */
+const NOT_IN_GROUP_CODES: ReadonlySet<number> = new Set([403, 404]);
+
+/**
+ * True iff `err` is WhatsApp refusing a group lookup because our number is
+ * no longer in the group. Baileys 7.0.0-rc14 throws an IQ error node as
+ * `new Boom(text, { data: +code })` (WABinary/generic-utils.js
+ * `assertNodeErrorFree`), so the WhatsApp code is in `data` and statusCode
+ * stays 500; a Boom built with the code as its statusCode counts too.
+ * Anything else (timeouts, a closed connection, other codes, a non-Boom
+ * error) is not this.
+ */
+export function isNotInGroupError(err: unknown): boolean {
+  if (!isBoom(err)) return false;
+  return (typeof err.data === "number" && NOT_IN_GROUP_CODES.has(err.data)) || NOT_IN_GROUP_CODES.has(err.output.statusCode);
+}
+
 /**
  * The group counterpart of the `onWhatsApp` existence check (sessions.ts's
  * `drainQueue`): ask WhatsApp for the group's current members and confirm
- * our own number is one. Never throws — a failed lookup is `check_failed`,
- * which the caller fails as NOT dispatched, exactly like a failed
- * existence check.
+ * our own number is one. Once the number has left or been removed,
+ * WhatsApp usually refuses the lookup (403/404, `isNotInGroupError`) rather
+ * than listing members without us; both mean `not_member`. Never throws —
+ * any other failed lookup is `check_failed`, which the caller fails as NOT
+ * dispatched, exactly like a failed existence check.
  */
 export async function checkGroupMembership(sock: GroupMembershipSocket, groupJid: string): Promise<GroupMembershipCheck> {
   try {
     const metadata = await sock.groupMetadata(groupJid);
     return isOwnNumberAParticipant(metadata.participants ?? [], sock.user) ? { kind: "member" } : { kind: "not_member" };
   } catch (err) {
+    if (isNotInGroupError(err)) return { kind: "not_member" };
     return { kind: "check_failed", err: err as Error };
   }
 }
