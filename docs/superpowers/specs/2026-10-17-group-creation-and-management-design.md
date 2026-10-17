@@ -34,8 +34,8 @@ From GHL workflows (later, see "Workflow actions"):
 |---|---|---|
 | How people join | **Invite link sent by WhatsApp message**, by default | WhatsApp blocks direct adds for anyone whose privacy setting is "My contacts", and adding strangers is a strong spam signal. A link respects their choice and protects the number. |
 | Direct add | Allowed only for a contact who has **messaged that number before** (there is a row for them in `whatsapp_inbound_messages` on that tenant) | Someone already talking to the coach is the lowest-risk add. If WhatsApp refuses the add (privacy setting), fall back to sending the invite link. |
-| Members on creation | WhatsApp needs at least one participant to create a group. Use the first eligible direct-add contact; if there is none, creation is refused with "Add at least one person who has messaged this number before, then invite the rest by link." | Confirm against Baileys rc14 in a sandbox: if `groupCreate(subject, [])` works, drop this rule. |
-| Limits per number per day | 3 groups created, 20 direct adds, invite messages count as normal sends against the daily cap | Mass group creation and mass adds are classic ban triggers. Numbers are proposals; config like the other pacing values (`WA_GROUP_CREATE_DAILY`, `WA_GROUP_ADD_DAILY`). |
+| Members on creation | **Try creating with nobody first** (`groupCreate(subject, [])`). If WhatsApp refuses, retry with the first contact eligible for a direct add; if there is none, refuse with "Add at least one person who has messaged this number before, then invite the rest by link." | Charlie, 17 Oct: test it. Built to work either way, and the sandbox script below records which path WhatsApp takes. |
+| Limits per number per day | 3 groups created, **50 direct adds** (Charlie, 17 Oct: at least 50), invite messages count as normal sends against the daily cap | Mass group creation and mass adds are classic ban triggers. Config like the other pacing values (`WA_GROUP_CREATE_DAILY` default 3, `WA_GROUP_ADD_DAILY` default 50). |
 | Warm-up | While a number is in warm-up (`WA_WARMUP_ENABLED`, first 14 days), group creation and direct adds are refused | A new number creating groups is the riskiest pattern there is. |
 | Who can manage | Only groups where our number is an admin; the buttons don't show otherwise | WhatsApp refuses admin actions from non-admins anyway. |
 | Leaving | Asks for confirmation in the page, then leaves and marks the group left (`left_at`) | |
@@ -60,7 +60,8 @@ Group names, descriptions, invite codes and member numbers are never logged (sam
 
 - **Repository:** `whatsapp_groups` gains `created_by_us boolean default false`. A small `whatsapp_group_actions` log table (tenant, group, action, count, created_at) backs the daily limits and the owner admin view. Migration `0006_group_management.sql`.
 - **Embed route** `src/app/api/crm/embed/groups/manage/route.ts`: slot-guarded like the existing groups route; never returns tenant ids; validates names (≤100) and descriptions (≤512).
-- **Invites:** the app resolves picked contacts or a tag to E.164 numbers through the GHL contacts API (location token), then sends each invite as a normal outbound message on that number: "<Coach name> invited you to join <group name> on WhatsApp: <link>". These go through the usual pacing, typing and daily cap.
+- **Invites:** the app resolves picked contacts or a tag to E.164 numbers through the GHL contacts API (location token), then sends each invite as a normal outbound message on that number. These go through the usual pacing, typing and daily cap.
+- **Editable invite message** (Charlie, 17 Oct): per account, up to 500 characters, with placeholders `{first_name}`, `{group_name}`, `{coach_name}` and a required `{link}`; saving without `{link}` is refused with the fixed string below. Default: "Hi {first_name}, {coach_name} invited you to join {group_name} on WhatsApp: {link}". Stored on `accounts` (new column `group_invite_template text null`, in 0006).
 - **UI:** in each number's Groups section, a "Create group" button and, per group where we're an admin, a "Manage" panel (rename, settings toggles, members list with Remove / Make admin, invite link with Copy and Reset, Leave). Confirmations in the page, never `confirm()`.
 
 ## Workflow actions (phase 2)
@@ -72,6 +73,7 @@ Once the GHL workflow triggers (`docs/superpowers/specs/2026-10-17-ghl-workflow-
 - `Add at least one person who has messaged this number before, then invite the rest by link.`
 - `This number has created its 3 groups for today. Try again tomorrow.`
 - `This number has reached today's limit for adding people. Invite the rest by link.`
+- `The invite message must include {link}.`
 - `New numbers can't create groups during their first 14 days.`
 - `This number isn't an admin of that group.`
 - `You can't remove the group's last admin.`
@@ -81,8 +83,10 @@ Once the GHL workflow triggers (`docs/superpowers/specs/2026-10-17-ghl-workflow-
 - Bridge: each route refuses a disabled or malformed group JID; participants go through `onWhatsApp`; a privacy-refused add returns `invite_required`; limits refuse past 3 creates or 20 adds and survive a restart; warm-up refuses creates and adds; nothing logs names, links or numbers.
 - App: tag → contacts → invites goes through normal outbound with pacing; a created group is enabled and synced; no tenant ids in responses; admin-only actions hidden and refused for non-admin groups; last-admin and self-removal refused.
 
-## Open questions
+## Sandbox test (before planning)
 
-1. Does `groupCreate(subject, [])` work on rc14, or is one participant required? (Sandbox test.)
-2. Are 3 creates and 20 direct adds a day the right limits? A guess at safe numbers; worth watching ban reports in the soft launch.
-3. Should the invite message text be editable per account? Proposed: yes, with the link required in it.
+A one-off script, `services/whatsapp-bridge/scripts/group-sandbox.ts`, run by hand against a spare test number (never a client's): link by QR, call `groupCreate('PingWren sandbox', [])`, record whether it succeeds or the exact error, then create with one test participant, add a second by `groupParticipantsUpdate`, fetch the invite link, set announcement mode, and leave and clean up. It prints a pass/fail line per step. Needs a real phone to scan, so it runs on Charlie's machine or a Railway shell, not in CI.
+
+## Decisions log
+
+- 17 Oct, Charlie: test the empty-group create (built to handle either result); at least 50 direct adds a day; the invite message is editable.
