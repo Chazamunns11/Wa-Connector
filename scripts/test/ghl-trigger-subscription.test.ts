@@ -2,12 +2,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { decideTriggerSubscription, type TriggerSubscriptionRepo } from "@/app/api/webhooks/ghl-trigger-subscription/logic";
+import { authorizeTriggerSubscription, decideTriggerSubscription, type TriggerSubscriptionRepo } from "@/app/api/webhooks/ghl-trigger-subscription/logic";
 import { isAllowedTriggerTargetUrl } from "@/lib/ghl-trigger-keys";
 import type { GhlAccount } from "@/lib/types";
 
 const SECRET = "test-webhook-secret";
 const URL_OK = "https://services.leadconnectorhq.com/workflows-trigger/abc";
+const quiet = () => {
+  const original = console.error;
+  console.error = () => {};
+  return () => {
+    console.error = original;
+  };
+};
 
 function fakeRepo(knownLocations: string[] = ["loc-1"]) {
   const subs = new Map<string, { id: string; locationId: string; targetUrl: string; triggerKey: string }>();
@@ -16,10 +23,13 @@ function fakeRepo(knownLocations: string[] = ["loc-1"]) {
       return knownLocations.includes(locationId) ? ({ locationId } as GhlAccount) : null;
     },
     async upsertTriggerSubscription(sub) {
+      const existing = subs.get(sub.id);
+      if (existing && existing.locationId !== sub.locationId) return "location_mismatch";
       subs.set(sub.id, { id: sub.id, locationId: sub.locationId, targetUrl: sub.targetUrl, triggerKey: sub.triggerKey });
+      return "ok";
     },
-    async deleteTriggerSubscription(id: string) {
-      subs.delete(id);
+    async deleteTriggerSubscription(id: string, locationId: string) {
+      if (subs.get(id)?.locationId === locationId) subs.delete(id);
     },
   };
   return { repo, subs };
@@ -70,6 +80,14 @@ test("non-https or foreign target hosts -> 400", async () => {
     "https://evil.example/?h=services.leadconnectorhq.com",
     "https://services.leadconnectorhq.com@evil.example/x",
     "https://notleadconnectorhq.com/x",
+    "https://services.leadconnectorhq.com:8443/x",
+    "https://services.leadconnectorhq.com:443/x",
+    "https://services..leadconnectorhq.com/x",
+    "https://a..services.leadconnectorhq.com/x",
+    "https://services.leadconnectorhq.com./x",
+    "https://eu.leadconnectorhq.com/x",
+    "https://leadconnectorhq.com/x",
+    "https://" + "a".repeat(2100) + ".services.leadconnectorhq.com/x",
     "not a url",
     undefined,
     42,
@@ -80,10 +98,76 @@ test("non-https or foreign target hosts -> 400", async () => {
   assert.equal(subs.size, 0);
 });
 
-test("host rule accepts the exact host and subdomains only", () => {
+test("host rule accepts the exact host and its subdomains only, normalised", () => {
   assert.equal(isAllowedTriggerTargetUrl("https://services.leadconnectorhq.com/a"), true);
-  assert.equal(isAllowedTriggerTargetUrl("https://eu.leadconnectorhq.com/a"), true);
+  assert.equal(isAllowedTriggerTargetUrl("https://eu.services.leadconnectorhq.com/a"), true);
+  assert.equal(isAllowedTriggerTargetUrl("https://eu.leadconnectorhq.com/a"), false);
   assert.equal(isAllowedTriggerTargetUrl("https://leadconnectorhq.com/a"), false);
+});
+
+test("uppercase host is accepted and stored normalised", async () => {
+  const { repo, subs } = fakeRepo();
+  const r = await decideTriggerSubscription(repo, SECRET, body({ targetUrl: "https://SERVICES.LeadConnectorHQ.com/Path" }), env);
+  assert.equal(r.status, 200);
+  assert.equal(subs.get("sub-1")?.targetUrl, "https://services.leadconnectorhq.com/Path");
+});
+
+test("a different location cannot take over or delete a subscription id", async () => {
+  const { repo, subs } = fakeRepo(["loc-1", "loc-2"]);
+  await decideTriggerSubscription(repo, SECRET, body(), env);
+  const take = await decideTriggerSubscription(repo, SECRET, body({ locationId: "loc-2", eventType: "UPDATED" }), env);
+  assert.equal(take.status, 409);
+  assert.equal(take.body.error, "location_mismatch");
+  assert.equal((await decideTriggerSubscription(repo, SECRET, body({ locationId: "loc-2", eventType: "DELETED" }), env)).status, 200);
+  assert.equal(subs.get("sub-1")?.locationId, "loc-1");
+});
+
+test("DELETED for an unknown location is 200", async () => {
+  const { repo } = fakeRepo();
+  assert.equal((await decideTriggerSubscription(repo, SECRET, body({ locationId: "nope", eventType: "DELETED" }), env)).status, 200);
+});
+
+test("repository errors -> 500 internal", async () => {
+  const restore = quiet();
+  try {
+    const { repo } = fakeRepo();
+    repo.upsertTriggerSubscription = async () => {
+      throw new Error("db down");
+    };
+    const r = await decideTriggerSubscription(repo, SECRET, body(), env);
+    assert.equal(r.status, 500);
+    assert.deepEqual(r.body, { ok: false, error: "internal" });
+  } finally {
+    restore();
+  }
+});
+
+test("auth gate runs on its own, before any body", () => {
+  assert.equal(authorizeTriggerSubscription(null, env)?.status, 401);
+  assert.equal(authorizeTriggerSubscription(SECRET, { secret: undefined })?.status, 503);
+  assert.equal(authorizeTriggerSubscription(SECRET, env), null);
+});
+
+test("oversized fields and filters -> 400", async () => {
+  const { repo, subs } = fakeRepo(["loc-1", "x".repeat(129)]);
+  const long = "x".repeat(129);
+  const withFilters = (filters: unknown) => {
+    const b = body();
+    (b.triggerData as Record<string, unknown>).filters = filters;
+    return b;
+  };
+  const cases: unknown[] = [
+    body({ id: long }),
+    body({ locationId: long }),
+    { ...body(), extras: { locationId: "loc-1", workflowId: long } },
+    body({ targetUrl: "https://services.leadconnectorhq.com/" + "a".repeat(2048) }),
+    withFilters("not an array"),
+    withFilters(Array.from({ length: 51 }, () => 1)),
+    withFilters([{ v: "y".repeat(9000) }]),
+  ];
+  for (const c of cases) assert.equal((await decideTriggerSubscription(repo, SECRET, c, env)).status, 400);
+  assert.equal(subs.size, 0);
+  assert.equal((await decideTriggerSubscription(repo, SECRET, withFilters([{ a: 1 }]), env)).status, 200);
 });
 
 test("CREATED then DELETED leaves nothing; DELETED again is fine", async () => {

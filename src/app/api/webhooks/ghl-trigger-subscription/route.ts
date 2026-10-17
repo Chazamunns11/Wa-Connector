@@ -7,17 +7,21 @@
  */
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
-import { decideTriggerSubscription } from "./logic";
+import { authorizeTriggerSubscription, decideTriggerSubscription } from "./logic";
 
 export async function POST(request: Request) {
+  const env = { secret: process.env.GHL_WORKFLOW_WEBHOOK_SECRET };
+  const secretHeader = request.headers.get("x-pingwren-secret");
+  // Auth before the body is read.
+  const refusal = authorizeTriggerSubscription(secretHeader, env);
+  if (refusal) return NextResponse.json(refusal.body, { status: refusal.status });
+
   let body: unknown = null;
   try {
     body = await request.json();
   } catch {
     body = null;
   }
-  const decision = await decideTriggerSubscription(repo, request.headers.get("x-pingwren-secret"), body, {
-    secret: process.env.GHL_WORKFLOW_WEBHOOK_SECRET,
-  });
+  const decision = await decideTriggerSubscription(repo, secretHeader, body, env);
   return NextResponse.json(decision.body, { status: decision.status });
 }

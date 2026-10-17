@@ -805,7 +805,7 @@ export interface GhlRepository {
   isOptedOut(tenantId: string, phone: string): Promise<boolean>;
   /** Opt-out counts per tenant; every requested id appears (0 when none). */
   countOptOutsByTenant(tenantIds: string[]): Promise<Map<string, number>>;
-  /** Stores (or replaces, by GHL triggerData.id) a workflow trigger subscription. */
+  /** Stores (or replaces, by GHL triggerData.id) a workflow trigger subscription. Refuses with `"location_mismatch"` (writing nothing) when that id already belongs to a different location. */
   upsertTriggerSubscription(sub: {
     id: string;
     locationId: string;
@@ -813,9 +813,9 @@ export interface GhlRepository {
     triggerKey: TriggerKey;
     targetUrl: string;
     filters: unknown;
-  }): Promise<void>;
-  /** Removes a workflow trigger subscription; a no-op when absent. */
-  deleteTriggerSubscription(id: string): Promise<void>;
+  }): Promise<"ok" | "location_mismatch">;
+  /** Removes a workflow trigger subscription of this location; a no-op when absent or when it belongs to another location. */
+  deleteTriggerSubscription(id: string, locationId: string): Promise<void>;
   /** The subscriptions of this location for this trigger key. */
   listTriggerSubscriptions(locationId: string, key: TriggerKey): Promise<{ id: string; targetUrl: string }[]>;
   /** Locations that have at least one subscription for any of these keys. */

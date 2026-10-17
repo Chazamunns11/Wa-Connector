@@ -9,11 +9,13 @@
  */
 import { API_VERSION } from "@/lib/ghl";
 import { resolveGhlAccessToken, type GhlTokenRefreshDeps, type GhlTokenRefreshRepo } from "@/lib/ghl-provider";
-import { isAllowedTriggerTargetUrl, type TriggerKey } from "@/lib/ghl-trigger-keys";
+import { normalizeTriggerTargetUrl, type TriggerKey } from "@/lib/ghl-trigger-keys";
 import type { GhlRepository } from "@/lib/data/repository";
 
 /** Per-fire time limit. */
 export const TRIGGER_FIRE_TIMEOUT_MS = 5_000;
+/** At most this many targets are POSTed to at once. */
+export const TRIGGER_FIRE_CONCURRENCY = 5;
 
 type Number_ = { number: string; numberLabel: string | null };
 
@@ -42,6 +44,8 @@ export type TriggerRepo = GhlTokenRefreshRepo & Pick<GhlRepository, "listTrigger
 export interface TriggerDeps extends GhlTokenRefreshDeps {
   /** Whether firing is switched on. */
   enabled(): boolean;
+  /** Time budget for resolving the location token; defaults to `TRIGGER_FIRE_TIMEOUT_MS`. */
+  tokenTimeoutMs?: number;
   postTriggerEvent(targetUrl: string, accessToken: string, payload: object): Promise<{ ok: boolean; status: number | null }>;
 }
 
@@ -98,8 +102,20 @@ export function defaultTriggerDeps(base: GhlTokenRefreshDeps): TriggerDeps {
   };
 }
 
+/** Resolves to the promise's value, or null if it takes longer than `ms` (or rejects). */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), ms)))]);
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
- * Fires `payload` to every subscription of `locationId` for `key`.
+ * Fires `payload` to every subscription of `locationId` for `key`, up to 5 at a time.
  * Returns how many fires succeeded and how many did not (including ones skipped
  * for a bad host or no usable token). Never throws.
  */
@@ -116,31 +132,39 @@ export async function fireWorkflowTrigger<K extends TriggerKey>(
     const subscriptions = await repo.listTriggerSubscriptions(locationId, key);
     if (subscriptions.length === 0) return result;
 
-    const account = await repo.getGhlAccountByLocationId(locationId);
-    const accessToken = account ? await resolveGhlAccessToken(repo, deps, account) : null;
+    const accessToken = await withTimeout(
+      (async () => {
+        const account = await repo.getGhlAccountByLocationId(locationId);
+        return account ? resolveGhlAccessToken(repo, deps, account) : null;
+      })(),
+      deps.tokenTimeoutMs ?? TRIGGER_FIRE_TIMEOUT_MS
+    );
     if (!accessToken) {
       console.error("[ghl-triggers] no usable token, trigger not fired");
       result.failed = subscriptions.length;
       return result;
     }
 
-    for (const sub of subscriptions) {
-      try {
-        if (!isAllowedTriggerTargetUrl(sub.targetUrl)) {
-          console.error("[ghl-triggers] target host not allowed, trigger skipped");
+    for (let i = 0; i < subscriptions.length; i += TRIGGER_FIRE_CONCURRENCY) {
+      const batch = subscriptions.slice(i, i + TRIGGER_FIRE_CONCURRENCY);
+      const outcomes = await Promise.allSettled(
+        batch.map(async (sub) => {
+          const target = normalizeTriggerTargetUrl(sub.targetUrl);
+          if (!target) {
+            console.error("[ghl-triggers] target host not allowed, trigger skipped");
+            return false;
+          }
+          const posted = await deps.postTriggerEvent(target, accessToken, payload);
+          if (!posted.ok) console.error(`[ghl-triggers] trigger fire failed (status ${posted.status ?? "none"})`);
+          return posted.ok;
+        })
+      );
+      for (const outcome of outcomes) {
+        if (outcome.status === "fulfilled" && outcome.value) result.fired++;
+        else {
+          if (outcome.status === "rejected") console.error("[ghl-triggers] trigger fire failed (status none)");
           result.failed++;
-          continue;
         }
-        const posted = await deps.postTriggerEvent(sub.targetUrl, accessToken, payload);
-        if (posted.ok) {
-          result.fired++;
-        } else {
-          console.error(`[ghl-triggers] trigger fire failed (status ${posted.status ?? "none"})`);
-          result.failed++;
-        }
-      } catch {
-        console.error("[ghl-triggers] trigger fire failed (status none)");
-        result.failed++;
       }
     }
   } catch {
@@ -150,10 +174,8 @@ export async function fireWorkflowTrigger<K extends TriggerKey>(
 }
 
 /**
- * Maps the bridge's stored inbound message type to the trigger's `messageType`.
- * The bridge records Baileys content keys (`conversation`, `extendedTextMessage`,
- * `audioMessage`, ...). It does not record `ptt` in that string, so a caller that
- * knows an audio message is a voice note passes `"audioMessage:ptt"`; plain audio
+ * Maps the bridge's stored inbound message type (Baileys content keys) to the
+ * trigger's `messageType`. `audioMessage` is a voice note; anything unrecognised
  * is `other`.
  */
 export function toTriggerMessageType(bridgeMessageType: string): TriggerPayloads["whatsapp_message_received"]["messageType"] {
@@ -161,7 +183,7 @@ export function toTriggerMessageType(bridgeMessageType: string): TriggerPayloads
     case "conversation":
     case "extendedTextMessage":
       return "text";
-    case "audioMessage:ptt":
+    case "audioMessage":
       return "voice_note";
     case "imageMessage":
       return "image";

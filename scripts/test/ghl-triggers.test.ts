@@ -1,9 +1,22 @@
 /** Workflow trigger firing — offline, fake repo and fake fetch. */
-import test from "node:test";
+import test, { afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 import { fireWorkflowTrigger, postTriggerEvent, toTriggerMessageType, type TriggerDeps, type TriggerRepo } from "@/lib/ghl-triggers";
 import type { GhlAccount } from "@/lib/types";
+
+const quiet = () => {
+  const original = console.error;
+  console.error = () => {};
+  return () => {
+    console.error = original;
+  };
+};
+let restoreConsole: (() => void) | null = null;
+beforeEach(() => {
+  restoreConsole = quiet();
+});
+afterEach(() => restoreConsole?.());
 
 const OK_URL_A = "https://services.leadconnectorhq.com/workflows-trigger/a";
 const OK_URL_B = "https://services.leadconnectorhq.com/workflows-trigger/b";
@@ -142,6 +155,44 @@ test("fire timeout never blocks", async () => {
   assert.ok(Date.now() - started < 2000);
 });
 
+test("6 slow targets finish in about 2 timeouts, not 6", async () => {
+  const urls = Array.from({ length: 6 }, (_, i) => `https://services.leadconnectorhq.com/t/${i}`);
+  const { repo } = fakeRepo(urls.map((targetUrl, i) => ({ id: String(i), targetUrl })));
+  const never = (() => new Promise(() => {})) as unknown as typeof fetch;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const { deps } = fakeDeps({
+    postTriggerEvent: async (url, token, p) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        return await postTriggerEvent(url, token, p, { fetchImpl: never, timeoutMs: 100 });
+      } finally {
+        inFlight--;
+      }
+    },
+  });
+  const started = Date.now();
+  const r = await fireWorkflowTrigger(repo, deps, "loc-1", "whatsapp_reconnected", payload);
+  const elapsed = Date.now() - started;
+  assert.deepEqual(r, { fired: 0, failed: 6 });
+  assert.equal(maxInFlight, 5);
+  assert.ok(elapsed >= 190 && elapsed < 450, `elapsed ${elapsed}`);
+});
+
+test("token resolution is under the same time budget", async () => {
+  const { repo } = fakeRepo([{ id: "1", targetUrl: OK_URL_A }], makeAccount({ accessToken: "stale", accessTokenExpiresAt: new Date(0).toISOString() }));
+  const { deps, posts } = fakeDeps({
+    tokenTimeoutMs: 40,
+    refreshToken: () => new Promise(() => {}),
+  });
+  const started = Date.now();
+  const r = await fireWorkflowTrigger(repo, deps, "loc-1", "whatsapp_reconnected", payload);
+  assert.deepEqual(r, { fired: 0, failed: 1 });
+  assert.equal(posts.length, 0);
+  assert.ok(Date.now() - started < 1000);
+});
+
 test("no token -> failed, no throw, nothing posted", async () => {
   const { repo } = fakeRepo([{ id: "1", targetUrl: OK_URL_A }], makeAccount({ status: "needs_reauth", accessToken: null, accessTokenExpiresAt: null }));
   const { deps, posts } = fakeDeps();
@@ -190,8 +241,7 @@ test("postTriggerEvent: a 500 is not ok; a network error is status null", async 
 test("toTriggerMessageType mapping", () => {
   assert.equal(toTriggerMessageType("conversation"), "text");
   assert.equal(toTriggerMessageType("extendedTextMessage"), "text");
-  assert.equal(toTriggerMessageType("audioMessage:ptt"), "voice_note");
-  assert.equal(toTriggerMessageType("audioMessage"), "other");
+  assert.equal(toTriggerMessageType("audioMessage"), "voice_note");
   assert.equal(toTriggerMessageType("imageMessage"), "image");
   assert.equal(toTriggerMessageType("videoMessage"), "video");
   assert.equal(toTriggerMessageType("documentMessage"), "document");

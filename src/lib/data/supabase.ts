@@ -2078,8 +2078,15 @@ export class SupabaseGhlRepository implements GhlRepository {
     triggerKey: TriggerKey;
     targetUrl: string;
     filters: unknown;
-  }) {
+  }): Promise<"ok" | "location_mismatch"> {
     const supabase = getServiceClient();
+    const { data: existing, error: readError } = await supabase
+      .from("ghl_workflow_trigger_subscriptions")
+      .select("location_id")
+      .eq("id", sub.id)
+      .maybeSingle();
+    if (readError) throw readError;
+    if (existing && (existing as { location_id: string }).location_id !== sub.locationId) return "location_mismatch";
     const { error } = await supabase.from("ghl_workflow_trigger_subscriptions").upsert(
       {
         id: sub.id,
@@ -2093,11 +2100,12 @@ export class SupabaseGhlRepository implements GhlRepository {
       { onConflict: "id" }
     );
     if (error) throw error;
+    return "ok";
   }
 
-  async deleteTriggerSubscription(id: string) {
+  async deleteTriggerSubscription(id: string, locationId: string) {
     const supabase = getServiceClient();
-    const { error } = await supabase.from("ghl_workflow_trigger_subscriptions").delete().eq("id", id);
+    const { error } = await supabase.from("ghl_workflow_trigger_subscriptions").delete().eq("id", id).eq("location_id", locationId);
     if (error) throw error;
   }
 

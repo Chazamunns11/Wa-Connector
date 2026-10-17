@@ -8,10 +8,11 @@
  * against `GHL_WORKFLOW_WEBHOOK_SECRET`; an unset secret refuses everything
  * (503). Only `https` targets on `services.leadconnectorhq.com` or
  * `*.leadconnectorhq.com` are stored, because we later POST to that URL with
- * a location token. Nothing here logs the body, the target URL or any id.
+ * a location token. Hosts must be `services.leadconnectorhq.com` or below it.
+ * Writes are scoped to the location. Nothing here logs the body, the target URL or any id.
  */
-import { timingSafeEqual } from "crypto";
-import { isAllowedTriggerTargetUrl, isTriggerKey } from "@/lib/ghl-trigger-keys";
+import { createHash, timingSafeEqual } from "crypto";
+import { isTriggerKey, normalizeTriggerTargetUrl } from "@/lib/ghl-trigger-keys";
 import type { GhlRepository } from "@/lib/data/repository";
 
 export type TriggerSubscriptionRepo = Pick<
@@ -24,14 +25,32 @@ export interface TriggerSubscriptionDecision {
   body: Record<string, unknown>;
 }
 
-function constantTimeEqualStr(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a, "utf8");
-  const bBuf = Buffer.from(b, "utf8");
-  return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
+const MAX_ID_LENGTH = 128;
+const MAX_FILTERS = 50;
+const MAX_FILTERS_BYTES = 8 * 1024;
+
+/** Compares SHA-256 digests, so neither length nor content short-circuits. */
+function secretsEqual(a: string, b: string): boolean {
+  return timingSafeEqual(createHash("sha256").update(a, "utf8").digest(), createHash("sha256").update(b, "utf8").digest());
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+/**
+ * The auth gate, run before the body is read. Returns a refusal (503 when the
+ * secret is unset, 401 when the header is missing or wrong) or null when allowed.
+ */
+export function authorizeTriggerSubscription(
+  secretHeader: string | null,
+  env: { secret: string | undefined }
+): TriggerSubscriptionDecision | null {
+  if (!env.secret) return { status: 503, body: { ok: false, error: "not_configured" } };
+  if (!secretHeader || !secretsEqual(secretHeader, env.secret)) {
+    return { status: 401, body: { ok: false, error: "unauthorized" } };
+  }
+  return null;
+}
+
+function isIdString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -46,35 +65,46 @@ export async function decideTriggerSubscription(
   body: unknown,
   env: { secret: string | undefined }
 ): Promise<TriggerSubscriptionDecision> {
-  if (!env.secret) return { status: 503, body: { ok: false, error: "not_configured" } };
-  if (!secretHeader || !constantTimeEqualStr(secretHeader, env.secret)) {
-    return { status: 401, body: { ok: false, error: "unauthorized" } };
-  }
+  const refusal = authorizeTriggerSubscription(secretHeader, env);
+  if (refusal) return refusal;
 
   if (!isRecord(body) || !isRecord(body.triggerData) || !isRecord(body.extras)) return bad("malformed_body");
   const { id, key, filters, eventType, targetUrl } = body.triggerData;
   const { locationId, workflowId } = body.extras;
 
-  if (!isNonEmptyString(id) || !isNonEmptyString(locationId)) return bad("malformed_body");
+  if (!isIdString(id) || !isIdString(locationId)) return bad("malformed_body");
+  if (workflowId !== undefined && workflowId !== null && !isIdString(workflowId)) return bad("malformed_body");
   if (eventType !== "CREATED" && eventType !== "UPDATED" && eventType !== "DELETED") return bad("malformed_body");
   if (!isTriggerKey(key)) return bad("unknown_trigger_key");
-  if (eventType !== "DELETED" && !isAllowedTriggerTargetUrl(targetUrl)) return bad("invalid_target_url");
 
-  const account = await repo.getGhlAccountByLocationId(locationId);
-  if (!account) return { status: 404, body: { ok: false, error: "unknown_location" } };
+  try {
+    if (eventType === "DELETED") {
+      await repo.deleteTriggerSubscription(id, locationId);
+      return { status: 200, body: { ok: true } };
+    }
 
-  if (eventType === "DELETED") {
-    await repo.deleteTriggerSubscription(id);
+    const normalizedUrl = normalizeTriggerTargetUrl(targetUrl);
+    if (!normalizedUrl) return bad("invalid_target_url");
+    if (filters !== undefined && filters !== null) {
+      if (!Array.isArray(filters) || filters.length > MAX_FILTERS) return bad("invalid_filters");
+      if (Buffer.byteLength(JSON.stringify(filters), "utf8") > MAX_FILTERS_BYTES) return bad("invalid_filters");
+    }
+
+    const account = await repo.getGhlAccountByLocationId(locationId);
+    if (!account) return { status: 404, body: { ok: false, error: "unknown_location" } };
+
+    const stored = await repo.upsertTriggerSubscription({
+      id,
+      locationId,
+      workflowId: typeof workflowId === "string" ? workflowId : null,
+      triggerKey: key,
+      targetUrl: normalizedUrl,
+      filters: filters ?? [],
+    });
+    if (stored === "location_mismatch") return { status: 409, body: { ok: false, error: "location_mismatch" } };
     return { status: 200, body: { ok: true } };
+  } catch {
+    console.error("[ghl-trigger-subscription] repository error");
+    return { status: 500, body: { ok: false, error: "internal" } };
   }
-
-  await repo.upsertTriggerSubscription({
-    id,
-    locationId,
-    workflowId: isNonEmptyString(workflowId) ? workflowId : null,
-    triggerKey: key,
-    targetUrl: targetUrl as string,
-    filters: filters ?? [],
-  });
-  return { status: 200, body: { ok: true } };
 }

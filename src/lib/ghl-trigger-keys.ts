@@ -15,22 +15,31 @@ export function isTriggerKey(value: unknown): value is TriggerKey {
 }
 
 /**
- * True only for an https URL whose host is `services.leadconnectorhq.com` or a
- * subdomain of `leadconnectorhq.com`. Parsed with `URL` (never substring
- * matching), so `leadconnectorhq.com.evil.example` and userinfo tricks fail.
- * Used both when a subscription is stored and again at fire time, because we
- * POST to this URL with a location token.
+ * Normalises a workflow target URL, or returns null if it is not allowed.
+ * Allowed: https, host exactly `services.leadconnectorhq.com` or ending
+ * `.services.leadconnectorhq.com`, no userinfo, no explicit port (checked on
+ * the raw authority, because `URL` silently drops `:443`), no empty label, no
+ * trailing dot, at most 2048 characters. Parsed with `URL`, never substring
+ * matching. Returns `url.href` (host lowercased) so what we store is what we
+ * later POST to. Used when a subscription is stored and again at fire time.
  */
-export function isAllowedTriggerTargetUrl(value: unknown): value is string {
-  if (typeof value !== "string") return false;
+export function normalizeTriggerTargetUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048) return null;
+  const authority = /^https:\/\/([^/?#\\]*)/i.exec(value)?.[1];
+  if (authority === undefined || authority.includes("@") || authority.includes(":")) return null;
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    return false;
+    return null;
   }
-  if (url.protocol !== "https:") return false;
-  if (url.username || url.password) return false;
-  const host = url.hostname.toLowerCase();
-  return host === "services.leadconnectorhq.com" || host.endsWith(".leadconnectorhq.com");
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+  const host = url.hostname;
+  if (host.endsWith(".") || host.split(".").some((label) => label === "")) return null;
+  if (host !== "services.leadconnectorhq.com" && !host.endsWith(".services.leadconnectorhq.com")) return null;
+  return url.href;
+}
+
+export function isAllowedTriggerTargetUrl(value: unknown): value is string {
+  return normalizeTriggerTargetUrl(value) !== null;
 }
