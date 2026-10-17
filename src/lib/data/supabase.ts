@@ -27,9 +27,18 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  GroupJobOutcome,
+  GroupJobStatus,
+  GroupMemberState,
   LocationStats,
   Role,
   Scope,
+  WhatsappGroup,
+  WhatsappGroupDraft,
+  WhatsappGroupJob,
+  WhatsappGroupMember,
+  WhatsappGroupMemberDraft,
+  WhatsappGroupPost,
   WhatsappInboundMessage,
   WhatsappSessionStatus,
   WhatsappSessionSummary,
@@ -486,6 +495,106 @@ async function getWhatsappSentTodayByCoach(supabase: SupabaseClient, coachIds: s
   }
   return counts;
 }
+
+// ---------------------------------------------------------------------------
+// WhatsApp groups (migration 0005) — row shapes + mappers.
+// ---------------------------------------------------------------------------
+
+interface WhatsappGroupRow {
+  id: string;
+  tenant_id: string;
+  location_id: string;
+  account_id: string;
+  wa_group_jid: string;
+  subject: string;
+  description: string | null;
+  invite_code: string | null;
+  announce_only: boolean;
+  admin_add_only: boolean;
+  participant_count: number;
+  we_are_admin: boolean;
+  created_by_profile_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapWhatsappGroup(r: WhatsappGroupRow): WhatsappGroup {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    locationId: r.location_id,
+    accountId: r.account_id,
+    waGroupJid: r.wa_group_jid,
+    subject: r.subject,
+    description: r.description,
+    inviteCode: r.invite_code,
+    announceOnly: r.announce_only,
+    adminAddOnly: r.admin_add_only,
+    participantCount: r.participant_count,
+    weAreAdmin: r.we_are_admin,
+    createdByProfileId: r.created_by_profile_id,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+interface WhatsappGroupMemberRow {
+  id: string;
+  group_id: string;
+  phone: string;
+  ghl_contact_id: string | null;
+  display_name: string | null;
+  state: GroupMemberState;
+  job_id: string | null;
+  invite_idempotency_key: string | null;
+  consent_confirmed_at: string;
+  added_by_profile_id: string | null;
+  last_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapWhatsappGroupMember(r: WhatsappGroupMemberRow): WhatsappGroupMember {
+  return {
+    id: r.id,
+    groupId: r.group_id,
+    phone: r.phone,
+    ghlContactId: r.ghl_contact_id,
+    displayName: r.display_name,
+    state: r.state,
+    jobId: r.job_id,
+    inviteIdempotencyKey: r.invite_idempotency_key,
+    consentConfirmedAt: r.consent_confirmed_at,
+    addedByProfileId: r.added_by_profile_id,
+    lastReason: r.last_reason,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+interface WhatsappGroupJobRow {
+  id: string;
+  coach_id: string;
+  group_jid: string;
+  status: GroupJobStatus;
+  requested_count: number;
+  results: { phone: string; code: string; outcome: GroupJobOutcome }[] | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+interface WhatsappGroupPostRow {
+  id: string;
+  coach_id: string;
+  group_jid: string;
+  idempotency_key: string;
+  status: WhatsappGroupPost["status"];
+  wa_message_id: string | null;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
 
 export class SupabaseGhlRepository implements GhlRepository {
   async getGhlAccountByLocationId(locationId: string) {
@@ -1466,6 +1575,190 @@ export class SupabaseGhlRepository implements GhlRepository {
       if (page.length < PAGE_SIZE) break;
     }
     return counts;
+  }
+
+  // ---- WhatsApp groups (migration 0005) ----
+
+  async createWhatsappGroup(draft: WhatsappGroupDraft) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_groups")
+      .insert({
+        tenant_id: draft.tenantId,
+        location_id: draft.locationId,
+        account_id: draft.accountId,
+        wa_group_jid: draft.waGroupJid,
+        subject: draft.subject,
+        description: draft.description,
+        invite_code: draft.inviteCode,
+        announce_only: draft.announceOnly,
+        admin_add_only: draft.adminAddOnly,
+        participant_count: draft.participantCount,
+        we_are_admin: draft.weAreAdmin,
+        created_by_profile_id: draft.createdByProfileId,
+      })
+      .select("*")
+      .single();
+    if (error) throw error;
+    return mapWhatsappGroup(data as WhatsappGroupRow);
+  }
+
+  async getWhatsappGroup(id: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("whatsapp_groups").select("*").eq("id", id).limit(1);
+    if (error) throw error;
+    const row = (data ?? [])[0] as WhatsappGroupRow | undefined;
+    return row ? mapWhatsappGroup(row) : null;
+  }
+
+  async listWhatsappGroupsForAccount(accountId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_groups")
+      .select("*")
+      .eq("account_id", accountId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return ((data ?? []) as WhatsappGroupRow[]).map(mapWhatsappGroup);
+  }
+
+  async updateWhatsappGroup(
+    id: string,
+    patch: { inviteCode?: string | null; participantCount?: number; weAreAdmin?: boolean; subject?: string; description?: string | null }
+  ) {
+    const update: Record<string, unknown> = {};
+    if (patch.inviteCode !== undefined) update.invite_code = patch.inviteCode;
+    if (patch.participantCount !== undefined) update.participant_count = patch.participantCount;
+    if (patch.weAreAdmin !== undefined) update.we_are_admin = patch.weAreAdmin;
+    if (patch.subject !== undefined) update.subject = patch.subject;
+    if (patch.description !== undefined) update.description = patch.description;
+    if (Object.keys(update).length === 0) return;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("whatsapp_groups").update(update).eq("id", id);
+    if (error) throw error;
+  }
+
+  async insertWhatsappGroupMembers(drafts: WhatsappGroupMemberDraft[]) {
+    if (drafts.length === 0) return [];
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_group_members")
+      .upsert(
+        drafts.map((d) => ({
+          group_id: d.groupId,
+          phone: d.phone,
+          ghl_contact_id: d.ghlContactId,
+          display_name: d.displayName,
+          state: d.state,
+          job_id: d.jobId,
+          consent_confirmed_at: d.consentConfirmedAt,
+          added_by_profile_id: d.addedByProfileId,
+          last_reason: d.lastReason,
+        })),
+        { onConflict: "group_id,phone", ignoreDuplicates: true }
+      )
+      .select("*");
+    if (error) throw error;
+    return ((data ?? []) as WhatsappGroupMemberRow[]).map(mapWhatsappGroupMember);
+  }
+
+  async listWhatsappGroupMembers(groupId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_group_members")
+      .select("*")
+      .eq("group_id", groupId)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as WhatsappGroupMemberRow[]).map(mapWhatsappGroupMember);
+  }
+
+  async updateWhatsappGroupMember(id: string, patch: { state: GroupMemberState; lastReason: string | null; inviteIdempotencyKey?: string }) {
+    const update: Record<string, unknown> = { state: patch.state, last_reason: patch.lastReason };
+    if (patch.inviteIdempotencyKey !== undefined) update.invite_idempotency_key = patch.inviteIdempotencyKey;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("whatsapp_group_members").update(update).eq("id", id);
+    if (error) throw error;
+  }
+
+  async listPendingGroupJobIds(accountId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_group_members")
+      .select("job_id, group_id, whatsapp_groups!inner(account_id)")
+      .eq("state", "pending")
+      .not("job_id", "is", null)
+      .eq("whatsapp_groups.account_id", accountId);
+    if (error) throw error;
+    const seenKeys = new Set<string>();
+    const out: { jobId: string; groupId: string }[] = [];
+    for (const r of (data ?? []) as unknown as { job_id: string | null; group_id: string }[]) {
+      if (!r.job_id || seenKeys.has(r.job_id)) continue;
+      seenKeys.add(r.job_id);
+      out.push({ jobId: r.job_id, groupId: r.group_id });
+    }
+    return out;
+  }
+
+  async listAccountsWithPendingGroupMembers(limit = 50) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_group_members")
+      .select("whatsapp_groups!inner(account_id)")
+      .eq("state", "pending")
+      .limit(Math.max(1, limit) * 20);
+    if (error) throw error;
+    const ids = new Set<string>();
+    for (const r of (data ?? []) as unknown as { whatsapp_groups: { account_id: string } | { account_id: string }[] }[]) {
+      const g = Array.isArray(r.whatsapp_groups) ? r.whatsapp_groups[0] : r.whatsapp_groups;
+      if (g?.account_id) ids.add(g.account_id);
+      if (ids.size >= limit) break;
+    }
+    return [...ids];
+  }
+
+  async getWhatsappGroupJob(id: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("whatsapp_group_jobs").select("*").eq("id", id).limit(1);
+    if (error) throw error;
+    const r = (data ?? [])[0] as WhatsappGroupJobRow | undefined;
+    if (!r) return null;
+    const job: WhatsappGroupJob = {
+      id: r.id,
+      coachId: r.coach_id,
+      groupJid: r.group_jid,
+      status: r.status,
+      requestedCount: r.requested_count,
+      results: Array.isArray(r.results) ? r.results : [],
+      createdAt: r.created_at,
+      finishedAt: r.finished_at,
+    };
+    return job;
+  }
+
+  async listWhatsappGroupPosts(tenantId: string, groupJid: string, limit = 20) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_group_posts")
+      .select("*")
+      .eq("coach_id", tenantId)
+      .eq("group_jid", groupJid)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return ((data ?? []) as WhatsappGroupPostRow[]).map(
+      (r): WhatsappGroupPost => ({
+        id: r.id,
+        coachId: r.coach_id,
+        groupJid: r.group_jid,
+        idempotencyKey: r.idempotency_key,
+        status: r.status,
+        waMessageId: r.wa_message_id,
+        error: r.error,
+        createdAt: r.created_at,
+        sentAt: r.sent_at,
+      })
+    );
   }
 
   async recordStripeEvent(eventId: string, type: string) {
