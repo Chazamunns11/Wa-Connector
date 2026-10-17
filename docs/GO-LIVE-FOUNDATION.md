@@ -558,6 +558,7 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_INBOUND_MEDIA_MAX_BYTES` | No | `26214400` | Inbound per-file cap |
 | `WA_INBOUND_MEDIA_PER_SENDER_DAILY` | No | `20` | Inbound media per sender per tenant per day |
 | `WA_INBOUND_MEDIA_PER_TENANT_DAILY` | No | `300` | Inbound media per tenant per day |
+| `WA_VOICE_TRANSCODE_ENABLED` | No | `false` | Send non-opus GHL audio as voice notes via ffmpeg. Turn on only after `ffmpeg -version` works in a Railway shell; see the bridge README, "Voice notes" |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Storage bucket for inbound media |
 
 That is 28 variables, all read in `config.ts`.

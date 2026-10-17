@@ -60,7 +60,7 @@ npm start         # node dist/index.js
 
 Railway: root directory `services/whatsapp-bridge`, build `npm install && npm
 run build`, start `npm start`, healthcheck path `/health` (unauthenticated,
-liveness only). Set every variable in `.env.example`; the service refuses to
+liveness only). For voice notes the image also needs ffmpeg; see "Voice notes" below. Set every variable in `.env.example`; the service refuses to
 boot with any secret missing. **One Railway service, one replica** — the
 session lease (`src/lock.ts`) makes an accidental second replica harmless
 (it idles, unable to claim), but it is waste, not capacity.
@@ -78,6 +78,56 @@ both directions). The app is different: its build must not go live before
 0006 to 0008 are applied, or every GHL outbound message fails before it is
 recorded, the GHL inbound drain fails on every pass, and a GHL install
 (OAuth) errors after it has already written the account.
+
+## Voice notes (ffmpeg)
+
+Audio that GHL sends and that is not ogg/opus (an mp3, an m4a, GHL's own
+browser recording as webm or wav) can be transcoded to ogg/opus and sent with
+`ptt: true`, so it shows on the phone as a voice note with duration and
+waveform. It is off by default.
+
+- **Flag:** `WA_VOICE_TRANSCODE_ENABLED` (default `false`). Off, outbound media
+  behaves as before, except that m4a is now sent as an audio file rather than
+  as a video.
+- **ffmpeg** must be in the image. `nixpacks.toml` (Nixpacks) and
+  `railpack.json` (Railpack) both add it; each builder ignores the other's
+  file. To see which builder the service uses: Railway dashboard, the service,
+  **Settings**, **Build**, **Builder**. Deploy logs also name it at the top of
+  the build. A Dockerfile, if one is ever added, has to install `ffmpeg` itself.
+- **Boot probe:** with the flag on, startup runs one `ffmpeg` probe (10 s
+  limit) before listening. If ffmpeg or libopus is missing it logs
+  `voice transcode enabled but ffmpeg with libopus was not found` once and the
+  bridge carries on exactly as with the flag off. It never fails the boot.
+- **Limits:** ffmpeg gets a 10 second hard timeout (`VOICE_TRANSCODE_TIMEOUT_MS`,
+  a constant), at most 2 run at once, and input is capped at
+  `WA_MEDIA_MAX_AUDIO_BYTES` (default 16777216). Oversized input is refused
+  before ffmpeg runs. A voice note longer than 15 minutes is not cut short; it
+  falls back. ffmpeg reads a private temp file the bridge wrote, never a URL.
+- **Fallback:** any transcode failure (timeout, busy, too long, bad output,
+  ffmpeg missing) sends the original and never fails the message:
+
+  | Input | Flag off | Flag on, transcode fails |
+  | --- | --- | --- |
+  | ogg/opus | voice note | voice note (never transcoded) |
+  | ogg Vorbis | audio file | audio file |
+  | mp3 | audio file | audio file |
+  | m4a | audio file | audio file |
+  | webm, wav | refused | document `voice-note.webm` / `.wav` |
+
+- **Logs:** tenant id, message id, mime, outcome and elapsed ms only. Never
+  audio bytes, ffmpeg output or the attachment URL.
+
+Flip order:
+
+1. Deploy with the flag off (the default) so ffmpeg is in the image.
+2. Open a Railway shell on the service and run `ffmpeg -version`.
+3. Set `WA_VOICE_TRANSCODE_ENABLED=true` and redeploy.
+4. Check the boot log: there must be no `ffmpeg with libopus was not found`
+   warning.
+5. Run the real-device check in
+   `docs/superpowers/specs/2026-10-17-voice-notes-real-device-check.md`.
+
+To turn it off, set the flag to `false` and redeploy.
 
 ## Routes added for groups
 

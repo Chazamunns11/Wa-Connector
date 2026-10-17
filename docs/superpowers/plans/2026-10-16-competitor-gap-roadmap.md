@@ -59,7 +59,7 @@ Order of work from the design spec (`docs/superpowers/specs/2026-10-12-brand-wha
 - **Why it matters:** 325 votes on GHL's board, native can't do it, coaches run accountability groups.
 
 ### F. Voice notes, then reactions, quoted replies, edits and deletes
-- Voice notes: outbound audio already goes through the media path, and `services/whatsapp-bridge/src/media.ts` sends genuine ogg/opus as a push-to-talk voice note (`ptt: true`). Other formats (GHL's own recordings may be webm or mp3; check) go as plain audio files. Showing them as voice notes means transcoding to opus, which means ffmpeg on Railway.
+- Voice notes: outbound audio already goes through the media path, and `services/whatsapp-bridge/src/media.ts` sends genuine ogg/opus as a push-to-talk voice note (`ptt: true`). Other formats are not voice notes today: mp3 and m4a go as plain audio files, and webm and wav (GHL's own recordings may be either; check) are refused. Showing them as voice notes means transcoding to opus, which means ffmpeg on Railway. That is built behind `WA_VOICE_TRANSCODE_ENABLED` (default off); with it on, a failed transcode sends mp3/m4a as audio files and webm/wav as documents.
 - Reactions, replies, edits and deletes: inbound handling in `services/whatsapp-bridge/src/inbound.ts`. GHL has no native reaction or edit type, so the likely rendering is a short text note in the conversation ("Reacted 👍 to: …"). No rival claims this, so it's a differentiator.
 
 ### G. Later
