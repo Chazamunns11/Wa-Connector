@@ -193,3 +193,16 @@
   - Plain words, no hype.
 - [ ] **Step 4:** In the SMS fallback docs, say: option A is the `whatsapp_not_on_whatsapp` trigger plus the 30-day memory, built; option B (automatic SMS) waits for customer demand and Charlie's answer on cost (calls spec open question 3).
 - [ ] **Step 5:** Run `npm run check` and the production build. **Commit** `docs: workflow triggers, SMS fallback and AI replies`.
+
+## Decisions during the build
+
+- The `target_url` host allow-list is exactly `services.leadconnectorhq.com` or its subdomains. It is https only, with no port, userinfo or empty labels, and the URL is stored normalised. Widen it only if the sandbox shows another host.
+- The subscription webhook checks the secret before reading the body, caps body sizes, and ties each subscription to its location (409 `location_mismatch`).
+- Fires run in the background with an 8 s cap per drain pass. After the first failure in a pass, further fires are skipped. The session-trigger drain uses one pass per location.
+- The send-path "not on WhatsApp" fire uses Next `after()`.
+- `pending_text` is now kept on accepted rows until reported (migration 0013, comment-only), so the not-on-WhatsApp trigger carries the unsent text. Accepted rows never reported have it cleared after 7 days.
+- STOP/START keyword rows do not fire `whatsapp_message_received`. Plain audio maps to `voice_note`.
+- The "not on WhatsApp" memory clears on any one-to-one inbound row, including rows that are not posted.
+- Disconnected: a never-linked number never fires. The number survives logout or ban via `whatsapp_sessions.trigger_phone`. The state is compare-and-set, so each alert fires once. Lost fires are not retried.
+- Migrations 0001 to 0013 apply on Postgres 16.
+- SMS fallback: option A (the trigger plus the 30-day memory) is built. Option B (automatic SMS) waits for customer demand and Charlie's answer on cost (calls spec open question 3).

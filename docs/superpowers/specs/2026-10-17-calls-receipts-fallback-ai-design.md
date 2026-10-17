@@ -72,6 +72,13 @@ Items 5, 6 and 8 lean on item 3 (custom triggers). Each section says what works 
 
 Items 5 (missed-call logging) and 8 (read receipts) are built without triggers, behind flags that are off by default. They stay off until the checks in `2026-10-17-calls-receipts-real-device-check.md` pass. Plan: `docs/superpowers/plans/2026-10-17-missed-calls-and-read-receipts.md`.
 
+Items 6 (SMS fallback) and 7 (AI replies) were built on 17 Oct, pending the sandbox:
+
+- **SMS fallback, option A: built.** The `whatsapp_not_on_whatsapp` trigger carries the contact and the unsent text, and "not on WhatsApp" is remembered for 30 days per (location, phone), cleared when that phone messages us one-to-one. STOP still wins. Workflow setup: `docs/GHL-WORKFLOW-TRIGGERS-SETUP.md`.
+- **SMS fallback, option B (automatic SMS): not built.** It waits for customer demand and for Charlie's answer on cost (open question 3).
+- **AI replies: documented, not built.** Website guide at `/docs/ai-replies`. Pending the live check in `2026-10-17-workflow-triggers-sandbox-check.md` section C.
+- The trigger halves of items 5 (missed call) and 8 (read) are built as `whatsapp_missed_call` and `whatsapp_message_read`, pending the same sandbox check.
+
 ## Build order
 
 1. **Voice notes** (item 1): small and visible.

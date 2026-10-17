@@ -2,6 +2,8 @@
 
 17 Oct 2026. Roadmap item D (`docs/superpowers/plans/2026-10-16-competitor-gap-roadmap.md`). Draft for Charlie's review.
 
+**Build status (17 Oct):** built on branch `claude/eloquent-mccarthy-m60n6c`, migrations 0012 and 0013, firing behind `GHL_WORKFLOW_TRIGGERS_ENABLED` (off). Six triggers were built, not three: disconnected, reconnected, message received, missed call, message read and not on WhatsApp. Pending the sandbox check in `2026-10-17-workflow-triggers-sandbox-check.md`; how `targetUrl` is called is still unverified. Portal entries: `docs/GHL-WORKFLOW-TRIGGERS-SETUP.md`.
+
 ## What GHL's docs say (checked 17 Oct)
 
 - **Configured in the developer portal** under the app's Modules → Workflow. Each trigger and action has an immutable key, a name, an icon and descriptions. Changes ship as a new app version that goes through GHL review ([custom actions](https://marketplace.gohighlevel.com/docs/marketplace-modules/CustomActions), [custom triggers](https://marketplace.gohighlevel.com/docs/marketplace-modules/CustomTriggers)).

@@ -37,7 +37,7 @@ test("setup guide: disclosure troubleshooting, Ink numerals, slab sample chrome"
 
 test("docs pages: coral top band and slab tiles", () => {
   assert.ok(read("src/components/site/PageTop.tsx").includes("surface-coral"));
-  for (const p of ["docs/page", "docs/faq/page", "docs/billing/page", "docs/privacy-and-data/page", "docs/setup/page"]) {
+  for (const p of ["docs/page", "docs/faq/page", "docs/billing/page", "docs/ai-replies/page", "docs/privacy-and-data/page", "docs/setup/page"]) {
     assert.ok(read(`src/app/(site)/${p}.tsx`).includes("<PageTop"), `${p} uses PageTop`);
   }
   assert.ok(read("src/app/(site)/docs/page.tsx").includes("slab"));
