@@ -47,6 +47,28 @@ if (!hasFfmpeg) {
     });
   }
 
+  test("integration: a 16 minute recording is too_long, not truncated to 15", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "voice-transcode-it-"));
+    try {
+      const src = path.join(dir, "long.mp3");
+      const gen = spawnSync("ffmpeg", [
+        "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=960",
+        "-ac", "1", "-ar", "8000", "-c:a", "libmp3lame", "-b:a", "8k", "-f", "mp3", src,
+      ]);
+      assert.equal(gen.status, 0, "fixture generation");
+      const input = await readFile(src);
+      // A generous timeout: this checks the cap, not speed (15 min of audio takes ~7 s to encode here).
+      const result = await transcodeToVoiceNote(input, "audio/mpeg", {
+        maxInputBytes: 16 * 1024 * 1024,
+        run: realFfmpegRunner,
+        timeoutMs: 60_000,
+      });
+      assert.deepEqual(result, { ok: false, reason: "too_long" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("integration: realFfmpegRunner kills ffmpeg at the timeout", async () => {
     const started = Date.now();
     const result = await realFfmpegRunner(

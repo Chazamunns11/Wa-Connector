@@ -30,11 +30,16 @@ import { isOggOpus, type SniffedMime } from "./media.js";
 
 export const VOICE_TRANSCODE_TIMEOUT_MS = 10_000;
 export const MAX_CONCURRENT_TRANSCODES = 2;
-/** Longest voice note we make: ffmpeg stops reading input after this (`-t` before `-i`). */
+/**
+ * Longest voice note we make. `-t` before `-i` makes ffmpeg stop reading there
+ * (the hard resource bound), and a run that reached it is refused as
+ * `too_long` so the caller sends the untouched original file instead: a
+ * longer message is never cut short.
+ */
 export const MAX_VOICE_NOTE_SECONDS = 900;
 /** Sample rate of the mono s16le side output used for duration + waveform. */
 export const PCM_RATE = 2000;
-/** Largest PCM side output a capped run can produce; anything bigger is refused before it is read. */
+/** PCM size of exactly MAX_VOICE_NOTE_SECONDS: reaching it means ffmpeg stopped at `-t` (too_long); more is bad_output. */
 const MAX_PCM_BYTES = MAX_VOICE_NOTE_SECONDS * PCM_RATE * 2;
 
 export type FfmpegRunResult = { kind: "exited"; code: number } | { kind: "timeout" } | { kind: "spawn_failed" };
@@ -112,7 +117,7 @@ export function waveformFromPcm(pcm: Buffer, bars = 64): Uint8Array {
 
 export type TranscodeResult =
   | { ok: true; buffer: Buffer; seconds: number; waveform: Uint8Array }
-  | { ok: false; reason: "too_large" | "unsupported" | "busy" | "unavailable" | "timeout" | "ffmpeg_failed" | "bad_output" };
+  | { ok: false; reason: "too_large" | "too_long" | "unsupported" | "busy" | "unavailable" | "timeout" | "ffmpeg_failed" | "bad_output" };
 
 export type TranscodeFailureReason = Extract<TranscodeResult, { ok: false }>["reason"];
 
@@ -163,6 +168,8 @@ export async function transcodeToVoiceNote(
     if (oggSize === 0 || oggSize > opts.maxInputBytes || pcmSize === 0 || pcmSize > MAX_PCM_BYTES) {
       return { ok: false, reason: "bad_output" };
     }
+    // At the cap = ffmpeg stopped at -t, so the transcode is missing the end of the recording.
+    if (pcmSize >= MAX_PCM_BYTES) return { ok: false, reason: "too_long" };
 
     const read = opts.readOutput ?? readFile;
     let ogg: Buffer;

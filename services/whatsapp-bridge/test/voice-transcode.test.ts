@@ -226,14 +226,27 @@ test("transcode: an oversized pcm output is refused without ever being read", as
   });
 });
 
-test("transcode: a pcm output at exactly the 15 minute cap is accepted", async () => {
+function pcmSizedRunner(pcmBytes: number): FakeRunner {
+  return fakeRunner(async (args) => {
+    const { ogg, pcm } = outputPaths(args);
+    await writeFile(ogg, oggOpusFixture());
+    await writeFile(pcm, Buffer.alloc(pcmBytes));
+    return { kind: "exited", code: 0 };
+  });
+}
+
+test("transcode: a pcm output at exactly the 15 minute cap is too_long (ffmpeg stopped at -t), never a truncated note", async () => {
   await withTmpRoot(async (root) => {
-    const fake = fakeRunner(async (args) => {
-      const { ogg, pcm } = outputPaths(args);
-      await writeFile(ogg, oggOpusFixture());
-      await writeFile(pcm, Buffer.alloc(MAX_VOICE_NOTE_SECONDS * PCM_RATE * 2));
-      return { kind: "exited", code: 0 };
-    });
+    const fake = pcmSizedRunner(MAX_VOICE_NOTE_SECONDS * PCM_RATE * 2);
+    const result = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run: fake.run, tmpRoot: root });
+    assert.deepEqual(result, { ok: false, reason: "too_long" });
+    assert.deepEqual(await readdir(root), []);
+  });
+});
+
+test("transcode: a pcm output just under the 15 minute cap is accepted", async () => {
+  await withTmpRoot(async (root) => {
+    const fake = pcmSizedRunner(MAX_VOICE_NOTE_SECONDS * PCM_RATE * 2 - 2);
     const result = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run: fake.run, tmpRoot: root });
     assert.equal(result.ok, true);
     if (result.ok) assert.equal(result.seconds, MAX_VOICE_NOTE_SECONDS);
