@@ -428,6 +428,20 @@ function mapLocationNumber(row: LocationNumberRow): LocationNumber {
 function isUniqueViolation(error: { code?: string } | null): boolean {
   return error?.code === "23505";
 }
+/**
+ * Insert the account's own tenant as slot 1 / default unless the location
+ * already has a row for it or a slot-1/default row. Conflicts on the tenant
+ * primary key or the slot/default unique indexes mean "already set up" and are
+ * ignored; an existing row is never overwritten.
+ */
+async function ensureDefaultNumberRow(locationId: string, tenantId: string) {
+  const supabase = getServiceClient();
+  const { error } = await supabase
+    .from("ghl_location_numbers")
+    .insert({ tenant_id: tenantId, location_id: locationId, slot: 1, is_default: true });
+  if (error && !isUniqueViolation(error)) throw error;
+}
+
 /** Make `number` the location's one default, and mirror its tenant to `ghl_accounts.tenant_id`. */
 async function markDefault(locationId: string, number: LocationNumber) {
   const supabase = getServiceClient();
@@ -503,10 +517,27 @@ export class SupabaseGhlRepository implements GhlRepository {
     let tenantId: string | null = null;
     const releaseTenant = async () => {
       // Nothing references the tenant yet, so an unused one can go.
-      if (tenantId) await supabase.from("whatsapp_tenants").delete().eq("id", tenantId);
+      if (!tenantId) return;
+      const { error } = await supabase.from("whatsapp_tenants").delete().eq("id", tenantId);
+      // Log only: this runs on the way out of another failure, which must not be masked.
+      if (error) console.error("[supabase] addLocationNumber: could not remove the unused tenant row");
     };
     for (let attempt = 0; attempt < 2; attempt++) {
-      const existing = await this.listLocationNumbers(locationId);
+      let existing = await this.listLocationNumbers(locationId);
+      if (existing.length === 0) {
+        // A location with no number rows still has its account tenant: adopt it
+        // as slot 1 / default rather than minting a second tenant for slot 1.
+        const { data: account, error: accountError } = await supabase
+          .from("ghl_accounts")
+          .select("tenant_id")
+          .eq("location_id", locationId)
+          .maybeSingle();
+        if (accountError) throw accountError;
+        if (account) {
+          await ensureDefaultNumberRow(locationId, (account as { tenant_id: string }).tenant_id);
+          existing = await this.listLocationNumbers(locationId);
+        }
+      }
       const slot = nextFreeSlot(existing.map((n) => n.slot));
       if (slot === null) {
         await releaseTenant();
@@ -646,6 +677,8 @@ export class SupabaseGhlRepository implements GhlRepository {
       { onConflict: "location_id" }
     );
     if (error) throw error;
+    // Every account has its tenant as a slot-1 default number (insert-if-absent).
+    await ensureDefaultNumberRow(draft.locationId, draft.tenantId);
   }
 
   /**
