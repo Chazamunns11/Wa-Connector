@@ -8,6 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import {
+  ftypBrandForLog,
   buildBaileysMediaContent,
   collectWithByteCap,
   extensionForMime,
@@ -467,4 +468,13 @@ test("collectWithByteCap: an exactly-at-cap stream is accepted (boundary is incl
   const result = await resultPromise;
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.buffer.length, 5);
+});
+
+test("ftypBrandForLog: the 4 ASCII major-brand bytes, only for the mp4 family, sanitised to [A-Za-z0-9 ]", () => {
+  const mp4 = (brand: Buffer) => Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from("ftyp"), brand, Buffer.alloc(8)]);
+  assert.equal(ftypBrandForLog(mp4(Buffer.from("M4A ")), "audio/mp4"), "M4A ");
+  assert.equal(ftypBrandForLog(mp4(Buffer.from("isom")), "video/mp4"), "isom");
+  assert.equal(ftypBrandForLog(mp4(Buffer.from([0x71, 0x74, 0x0a, 0x22])), "video/mp4"), "qt", "control and quote characters are dropped");
+  assert.equal(ftypBrandForLog(mp4(Buffer.from("M4A ")), "audio/mpeg"), undefined, "not mp4-family");
+  assert.equal(ftypBrandForLog(Buffer.concat([Buffer.from([0, 0, 0, 8]), Buffer.from("ftyp")]), "video/mp4"), undefined, "too short to carry a brand");
 });

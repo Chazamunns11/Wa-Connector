@@ -90,7 +90,7 @@ function makeRecord(idempotencyKey: string, groupJid: string | null = null): Mes
 
 type TranscodeFn = (buf: Buffer, mime: SniffedMime) => Promise<TranscodeResult>;
 
-function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leaseHeld?: boolean; group?: boolean }) {
+function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leaseHeld?: boolean; group?: boolean; log?: typeof silentLog }) {
   const calls: { method: string; args: unknown[] }[] = [];
   let resolveTerminal!: () => void;
   const terminal = new Promise<void>((resolve) => (resolveTerminal = resolve));
@@ -145,7 +145,7 @@ function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leas
           return opts.transcode!(buf, mime);
         };
 
-  const manager = new SessionManager(store, makeConfig(), silentLog, null, null, { resolveAttachment, transcode: wrapped });
+  const manager = new SessionManager(store, makeConfig(), opts.log ?? silentLog, null, null, { resolveAttachment, transcode: wrapped });
   let leaseHeld = opts.leaseHeld ?? true;
   session = {
     coachId: TENANT,
@@ -294,6 +294,46 @@ test("drain (real ffmpeg): a VP8+Opus webm goes as a document with its original 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+function captureLog(): { log: typeof silentLog; lines: Record<string, unknown>[] } {
+  const lines: Record<string, unknown>[] = [];
+  return { lines, log: pino({ level: "info" }, { write: (line: string) => void lines.push(JSON.parse(line)) }) };
+}
+
+const SAFARI_MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypmp42"), Buffer.alloc(52, 1)]);
+
+test("drain: every outbound attachment logs one `outbound attachment` line — sniffed type, final kind/ptt, no names or URLs", async () => {
+  const cases = [
+    { bytes: MP3, transcode: ok(), want: { sniffedMime: "audio/mpeg", kind: "audio", ptt: true } },
+    { bytes: OPUS_OGG, transcode: ok(), want: { sniffedMime: "audio/ogg", kind: "audio", ptt: true } },
+    { bytes: MP3, transcode: null, want: { sniffedMime: "audio/mpeg", kind: "audio", ptt: false } },
+    { bytes: WEBM, transcode: async () => ({ ok: false, reason: "bad_output" }) as const, want: { sniffedMime: "audio/webm", kind: "document", ptt: false } },
+    { bytes: SAFARI_MP4, transcode: ok(), want: { sniffedMime: "video/mp4", ftypBrand: "mp42", kind: "video", ptt: false } },
+  ] as const;
+  for (const c of cases) {
+    const { log, lines } = captureLog();
+    const h = makeHarness({ bytes: c.bytes, transcode: c.transcode, log });
+    await sendAndSettle(h, "Secret Client Name.webm");
+    const found = lines.filter((l) => l.msg === "outbound attachment");
+    assert.equal(found.length, 1, c.want.sniffedMime);
+    const { level: _level, time: _time, pid: _pid, hostname: _hostname, msg: _msg, ...fields } = found[0]!;
+    assert.deepEqual(fields, { coachId: TENANT, messageId: "id-k-1", ...c.want }, c.want.sniffedMime);
+    const all = JSON.stringify(lines);
+    assert.doesNotMatch(all, /Secret Client Name/, "no file name in any log line");
+    assert.doesNotMatch(all, /example\.com/, "no URL in any log line");
+  }
+});
+
+test("drain: the `outbound attachment` line for a group send carries no group JID", async () => {
+  const { log, lines } = captureLog();
+  const h = makeHarness({ bytes: MP3, transcode: ok(), group: true, log });
+  const outcome = await h.manager.sendAttachmentToGroup(TENANT, GROUP_JID, { url: "https://example.com/a" }, "k-1");
+  assert.equal(outcome.kind, "accepted");
+  await h.terminal;
+  const found = lines.filter((l) => l.msg === "outbound attachment");
+  assert.equal(found.length, 1);
+  assert.doesNotMatch(JSON.stringify(found[0]), new RegExp(GROUP_JID.split("@")[0]!));
 });
 
 test("drain: transcode off (no mediaDeps.transcode) leaves mp3 exactly as today", async () => {

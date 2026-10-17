@@ -132,7 +132,7 @@ import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
 import { runMediaCapture } from "./media-capture.js";
 import { prepareOutboundAudio, resolveOutboundAttachment } from "./media-fetch.js";
-import { buildBaileysMediaContent, extensionForMime, type SniffedMime } from "./media.js";
+import { buildBaileysMediaContent, extensionForMime, ftypBrandForLog, type SniffedMime } from "./media.js";
 import type { TranscodeResult } from "./voice-transcode.js";
 import type { PortalPoke } from "./poke.js";
 
@@ -1575,6 +1575,21 @@ export class SessionManager {
               content = prepared.content;
               if (prepared.outcome === "has_video") fileName = payload.attachment.fileName ?? `attachment.${extensionForMime(resolved.mimetype)}`;
             }
+            // One line per outbound attachment (the real-device check reads it):
+            // the sniffed type of the bytes GHL sent and the shape we send.
+            // Never the file name, URL, bytes or a group JID.
+            const ftypBrand = ftypBrandForLog(resolved.buffer, resolved.mimetype);
+            this.log.info(
+              {
+                coachId: session.coachId,
+                messageId: record.id,
+                sniffedMime: resolved.mimetype,
+                ...(ftypBrand !== undefined ? { ftypBrand } : {}),
+                kind: content.kind,
+                ptt: content.ptt === true,
+              },
+              "outbound attachment"
+            );
             messageContent = buildBaileysMediaContent(content, fileName);
           }
 

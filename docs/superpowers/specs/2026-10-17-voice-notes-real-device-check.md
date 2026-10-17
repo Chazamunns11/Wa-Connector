@@ -10,15 +10,20 @@ in the boot log.
 1. In GHL Conversations in **Chrome**, record a voice note and send it to the
    test number.
 2. Repeat in **Safari** or the **GHL iPhone app**.
-3. For each, find the bridge log line `outbound voice note prepared` in Railway
-   and note `mime` and `outcome`. (Log lines carry no audio and no URL.)
+3. For each, find the bridge log line `outbound attachment` for your test
+   message in Railway (one per attachment sent) and note `sniffedMime`, `kind`
+   and `ptt`. If it was transcoded, the line `outbound voice note prepared`
+   just before it gives the `outcome`. (Log lines carry no audio, no file name
+   and no URL.)
 4. On the receiving phone, confirm it shows as a voice note with a duration
    and a waveform, and plays.
-5. Write the two `mime` values into open question 2 of
+5. Write the two `sniffedMime` values into open question 2 of
    `2026-10-17-voice-notes-and-message-events-design.md`.
-6. If the Safari recording logs `video/mp4`, add its `ftyp` brand to the audio
-   brand list in `sniffMime` (`services/whatsapp-bridge/src/media.ts`), since
-   it is being treated as a video and refused or sent wrongly.
+6. If `sniffedMime` is `video/mp4`, note `ftypBrand` and add it to the m4a
+   brand list (`M4A_MAJOR_BRANDS` in `services/whatsapp-bridge/src/media.ts`):
+   the recording is being treated as a video and sent wrongly. Without the
+   log, download the file from GHL and run `xxd file | head -1`: the brand is
+   the 4 characters right after `ftyp` (bytes 8 to 11).
 7. Also send an mp3 and confirm the same voice-note result. If anything fails,
    the message still arrives as an audio file (or a document for webm/wav);
    note the `outcome` value.
@@ -35,7 +40,7 @@ in the boot log.
 
 | Check | Chrome | Safari / iPhone |
 | --- | --- | --- |
-| Outbound `mime` | | |
+| Outbound `sniffedMime` (and `ftypBrand`) | | |
 | Outbound `outcome` | | |
 | Shows as voice note with waveform | | |
 | Inbound plays in GHL (web / mobile) | | |

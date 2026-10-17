@@ -96,6 +96,18 @@ export function sniffMime(bytes: Buffer): SniffedMime | null {
   return null;
 }
 
+/**
+ * The ISO-BMFF major brand (the 4 ASCII bytes at offset 8) of an mp4-family
+ * file, for the `outbound attachment` log line: an unrecognised audio brand
+ * (e.g. a new Safari recorder) sniffs as video/mp4, and this is how it is
+ * spotted. Anything outside [A-Za-z0-9 ] is dropped so a hostile file can't
+ * inject into the log. Undefined for every other type.
+ */
+export function ftypBrandForLog(bytes: Buffer, mime: SniffedMime): string | undefined {
+  if ((mime !== "video/mp4" && mime !== "audio/mp4") || bytes.length < 12) return undefined;
+  return bytes.toString("latin1", 8, 12).replace(/[^A-Za-z0-9 ]/g, "");
+}
+
 /** ISO-BMFF major brands that mean an audio-only MPEG-4 file (m4a, m4b audiobook, m4p protected). */
 const M4A_MAJOR_BRANDS: ReadonlySet<string> = new Set(["M4A ", "M4B ", "M4P "]);
 
