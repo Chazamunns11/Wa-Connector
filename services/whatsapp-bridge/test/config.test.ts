@@ -38,7 +38,8 @@ const MEDIA_KEYS = [
 const SHUTDOWN_FLUSH_KEYS = ["WA_SHUTDOWN_FLUSH_TIMEOUT_MS"];
 /** Session-lease heartbeat/TTL (src/lock.ts) — same "clear before every test" discipline as the keys above. */
 const LOCK_KEYS = ["WA_LOCK_HEARTBEAT_MS", "WA_LOCK_TTL_MS"];
-const CLEARED_KEYS = [...POKE_KEYS, ...MEDIA_KEYS, ...SHUTDOWN_FLUSH_KEYS, ...LOCK_KEYS];
+const GROUP_ENV_KEYS = ["WA_GROUPS_ENABLED", "WA_GROUP_ADD_BATCH", "WA_GROUP_ADD_GAP_MS", "WA_GROUP_ADD_JITTER_MS", "WA_GROUP_ADDS_DAILY_CAP", "WA_GROUP_CREATES_DAILY_CAP"];
+const CLEARED_KEYS = [...POKE_KEYS, ...MEDIA_KEYS, ...SHUTDOWN_FLUSH_KEYS, ...LOCK_KEYS, ...GROUP_ENV_KEYS];
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void): void {
   const previous: Record<string, string | undefined> = {};
@@ -305,5 +306,33 @@ test("config: WA_LOCK_TTL_MS just above WA_LOCK_HEARTBEAT_MS boots fine — the 
     const config = loadConfig();
     assert.equal(config.lockHeartbeatMs, 10_000);
     assert.equal(config.lockTtlMs, 10_001);
+  });
+});
+
+test("config: groups env defaults", () => {
+  withEnv(Object.fromEntries(GROUP_ENV_KEYS.map((k) => [k, undefined])), () => {
+    const c = loadConfig();
+    assert.equal(c.groupsEnabled, false);
+    assert.deepEqual([c.groupAddBatch, c.groupAddGapMs, c.groupAddJitterMs, c.groupAddsDailyCap, c.groupCreatesDailyCap], [5, 8000, 4000, 50, 3]);
+  });
+});
+
+test("config: groups env bounds throw naming the variable", () => {
+  const bad: Record<string, string[]> = {
+    WA_GROUP_ADD_BATCH: ["0", "11"],
+    WA_GROUP_ADD_GAP_MS: ["1999"],
+    WA_GROUP_ADDS_DAILY_CAP: ["0", "501"],
+    WA_GROUP_CREATES_DAILY_CAP: ["0", "21"],
+  };
+  for (const [name, values] of Object.entries(bad)) {
+    for (const v of values) {
+      withEnv({ [name]: v }, () => assert.throws(() => loadConfig(), new RegExp(name)));
+    }
+  }
+  withEnv({ WA_GROUPS_ENABLED: "yes" }, () => assert.throws(() => loadConfig(), /WA_GROUPS_ENABLED/));
+  withEnv({ WA_GROUPS_ENABLED: "true", WA_GROUP_ADD_BATCH: "10", WA_GROUP_ADD_GAP_MS: "2000", WA_GROUP_ADD_JITTER_MS: "0" }, () => {
+    const c = loadConfig();
+    assert.equal(c.groupsEnabled, true);
+    assert.equal(c.groupAddBatch, 10);
   });
 });

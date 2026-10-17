@@ -127,6 +127,18 @@ export interface BridgeConfig {
   inboundMediaPerTenantDaily: number;
   /** Supabase Storage bucket for inbound media (plan §6.2/§7d). */
   mediaBucket: string;
+  /** Master switch for WhatsApp groups (routes 404 `groups_disabled` when false). */
+  groupsEnabled: boolean;
+  /** Phones per `groupParticipantsUpdate` call (1..10). */
+  groupAddBatch: number;
+  /** Minimum gap between add batches (ms, >= 2000). */
+  groupAddGapMs: number;
+  /** Uniform random jitter added to the add-batch gap (ms). */
+  groupAddJitterMs: number;
+  /** Max phones added to groups per coach per UTC day (1..500). */
+  groupAddsDailyCap: number;
+  /** Max groups created per coach per UTC day (1..20). */
+  groupCreatesDailyCap: number;
 }
 
 function required(name: string): string {
@@ -203,7 +215,23 @@ export function loadConfig(): BridgeConfig {
     inboundMediaPerSenderDaily: intWithDefault("WA_INBOUND_MEDIA_PER_SENDER_DAILY", 20),
     inboundMediaPerTenantDaily: intWithDefault("WA_INBOUND_MEDIA_PER_TENANT_DAILY", 300),
     mediaBucket: process.env.WA_MEDIA_BUCKET?.trim() || "wa-media",
+    groupsEnabled: boolWithDefault("WA_GROUPS_ENABLED", false),
+    groupAddBatch: intWithDefault("WA_GROUP_ADD_BATCH", 5),
+    groupAddGapMs: intWithDefault("WA_GROUP_ADD_GAP_MS", 8_000),
+    groupAddJitterMs: intWithDefault("WA_GROUP_ADD_JITTER_MS", 4_000),
+    groupAddsDailyCap: intWithDefault("WA_GROUP_ADDS_DAILY_CAP", 50),
+    groupCreatesDailyCap: intWithDefault("WA_GROUP_CREATES_DAILY_CAP", 3),
   };
+
+  const inRange = (name: string, value: number, min: number, max: number): void => {
+    if (value < min || value > max) {
+      throw new Error(`[config] ${name} must be between ${min} and ${max} (got ${value}).`);
+    }
+  };
+  inRange("WA_GROUP_ADD_BATCH", config.groupAddBatch, 1, 10);
+  inRange("WA_GROUP_ADD_GAP_MS", config.groupAddGapMs, 2_000, Number.MAX_SAFE_INTEGER);
+  inRange("WA_GROUP_ADDS_DAILY_CAP", config.groupAddsDailyCap, 1, 500);
+  inRange("WA_GROUP_CREATES_DAILY_CAP", config.groupCreatesDailyCap, 1, 20);
 
   if (config.lockTtlMs <= config.lockHeartbeatMs) {
     throw new Error(
