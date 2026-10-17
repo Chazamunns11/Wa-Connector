@@ -20,7 +20,17 @@ import {
   type CreateConnectLinkResult,
   type SaveGhlAccountBrandingResult,
 } from "@/app/admin/actions";
-import type { GhlAccountStatus, GhlAccountSummary, WhatsappSessionSummary } from "@/lib/types";
+import type { GhlAccountStatus, GhlAccountSummary, WhatsappSessionStatus, WhatsappSessionSummary } from "@/lib/types";
+
+/** One of a location's WhatsApp numbers as the admin page hands it down — a slot, never a tenant id. */
+export interface AdminLocationNumber {
+  slot: 1 | 2 | 3;
+  label: string | null;
+  isDefault: boolean;
+  /** Last-known status from the database; `null` = never set up. */
+  status: WhatsappSessionStatus | null;
+  phoneNumber: string | null;
+}
 
 /**
  * Reason codes the two GHL OAuth routes redirect back with (`?ghl=`), as
@@ -129,6 +139,7 @@ function ghlResultMessage(
 export function GhlAccountsPanel({
   accounts,
   summaries,
+  numbersByLocation,
   bridgeConfigured,
   bridgeReachable,
   nowMs,
@@ -145,6 +156,8 @@ export function GhlAccountsPanel({
    * header on why `whatsapp_*.coach_id` was kept rather than renamed).
    */
   summaries: WhatsappSessionSummary[];
+  /** Every location's numbers (slot, label, status), keyed by location id. */
+  numbersByLocation: Record<string, AdminLocationNumber[]>;
   /** `isWhatsappBridgeConfigured()` — env vars unset means every status below is "last known from the database", never live. */
   bridgeConfigured: boolean;
   /** ONE shared `/health` probe result for the whole page render — see `WhatsappConnectionsPanel`'s identical prop for why this is never fetched per row. */
@@ -220,6 +233,7 @@ export function GhlAccountsPanel({
           {accounts.map((account) => {
             const summary = summaryByTenant.get(account.tenantId) ?? null;
             const isManaging = managingTenantId === account.tenantId;
+            const numbers = numbersByLocation[account.locationId] ?? [];
             return (
               <div key={account.locationId} className="p-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -231,6 +245,9 @@ export function GhlAccountsPanel({
                   </div>
                   <div className="flex items-center gap-2">
                     <GhlStatusChip status={account.status} />
+                    <span className="text-xs text-ink-faint">
+                      {numbers.length === 1 ? "1 number" : `${numbers.length} numbers`}
+                    </span>
                     <WhatsappStatusHint summary={summary} />
                     <Button
                       size="sm"
@@ -257,7 +274,7 @@ export function GhlAccountsPanel({
                       bridgeReachable={bridgeReachable}
                       nowMs={nowMs}
                     />
-                    <GhlConnectLinkManager locationId={account.locationId} label={account.label} />
+                    <GhlConnectLinkManager locationId={account.locationId} label={account.label} numbers={numbers} />
                     <GhlAccountBrandingManager
                       locationId={account.locationId}
                       label={account.label}
@@ -351,6 +368,10 @@ function GhlWhatsappConnectPanel({
   );
 }
 
+function slotName(numbers: AdminLocationNumber[], slot: number): string {
+  return numbers.find((n) => n.slot === slot)?.label ?? `Number ${slot}`;
+}
+
 /**
  * Per-client connect links (docs/GHL-PROVIDER-CLIENT-MIGRATION.md,
  * src/lib/ghl-connect-link.ts) — the "Create connect link" / "Revoke all
@@ -366,10 +387,18 @@ function GhlWhatsappConnectPanel({
  * rule, src/lib/onboarding.ts) — this component holds it in local state only
  * and it is gone the moment the row collapses or a fresh link is minted.
  */
-function GhlConnectLinkManager({ locationId, label }: { locationId: string; label: string }) {
-  const [creating, setCreating] = useState(false);
+function GhlConnectLinkManager({
+  locationId,
+  label,
+  numbers,
+}: {
+  locationId: string;
+  label: string;
+  numbers: AdminLocationNumber[];
+}) {
+  const [creating, setCreating] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [created, setCreated] = useState<CreateConnectLinkResult | null>(null);
+  const [created, setCreated] = useState<(CreateConnectLinkResult & { slot: number }) | null>(null);
 
   const [confirmingRevoke, setConfirmingRevoke] = useState(false);
   const [revoking, setRevoking] = useState(false);
@@ -386,16 +415,22 @@ function GhlConnectLinkManager({ locationId, label }: { locationId: string; labe
    * client with "this link has expired" at exactly the wrong moment.
    * See `CONNECT_LINK_MENU_TTL_MS` (src/lib/ghl-connect-link.ts).
    */
-  async function handleCreate(lifetime: "send" | "menu") {
-    setCreating(true);
+  async function handleCreate(slot: number, lifetime: "send" | "menu") {
+    setCreating(`${slot}:${lifetime}`);
     setCreateError(null);
     try {
-      const result = await createGhlConnectLinkAction(locationId, lifetime);
-      setCreated(result);
+      const result = await createGhlConnectLinkAction(locationId, lifetime, slot);
+      setCreated({ ...result, slot });
+      // Best effort: the button says "Copy", so try to. The URL stays on screen with its own Copy button if this is refused.
+      try {
+        await navigator.clipboard.writeText(result.url);
+      } catch {
+        // No clipboard permission or insecure context — the Copy button below still works.
+      }
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Could not create a connect link.");
     } finally {
-      setCreating(false);
+      setCreating(null);
     }
   }
 
@@ -424,6 +459,29 @@ function GhlConnectLinkManager({ locationId, label }: { locationId: string; labe
         Send {label} a link they open themselves to scan the QR from their own device — no portal login needed.
       </p>
 
+      <ul className="mt-2 flex flex-col gap-2">
+        {numbers.map((n) => (
+          <li key={n.slot} className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-medium text-ink">{n.label ?? `Number ${n.slot}`}</span>
+              {n.isDefault ? <Chip tone="accent">Default</Chip> : null}
+              <span className="text-ink-faint">
+                {n.status ?? "never set up"}
+                {n.phoneNumber ? ` — ${n.phoneNumber}` : ""}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="secondary" onClick={() => handleCreate(n.slot, "send")} disabled={creating !== null}>
+                {creating === `${n.slot}:send` ? "Creating…" : "Copy connect link (7 days)"}
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => handleCreate(n.slot, "menu")} disabled={creating !== null}>
+                {creating === `${n.slot}:menu` ? "Creating…" : "Menu link (1 year)"}
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+
       {created ? (
         <div className="mt-2 rounded-lg border border-loss/40 bg-loss/10 px-3 py-2.5 text-xs">
           <div className="flex flex-wrap items-center gap-2">
@@ -434,8 +492,8 @@ function GhlConnectLinkManager({ locationId, label }: { locationId: string; labe
           </div>
           <p className="mt-2 text-ink-faint">
             {created.lifetime === "menu"
-              ? `For ${label}'s GHL sidebar — expires ${formatDate(new Date(created.expiresAtMs).toISOString())}.`
-              : `To send to ${label} — expires ${formatDate(new Date(created.expiresAtMs).toISOString())}.`}
+              ? `For ${label}'s GHL sidebar${numbers.length > 1 ? ` (${slotName(numbers, created.slot)})` : ""} — expires ${formatDate(new Date(created.expiresAtMs).toISOString())}.`
+              : `To send to ${label}${numbers.length > 1 ? ` (${slotName(numbers, created.slot)})` : ""} — expires ${formatDate(new Date(created.expiresAtMs).toISOString())}.`}
           </p>
           <p className="mt-1 font-medium text-loss">
             Treat this like a password reset link for {label}&rsquo;s WhatsApp — send it only to the client, and
@@ -462,13 +520,6 @@ function GhlConnectLinkManager({ locationId, label }: { locationId: string; labe
       ) : null}
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="secondary" onClick={() => handleCreate("send")} disabled={creating}>
-          {creating ? "Creating…" : "Link to send (7 days)"}
-        </Button>
-        <Button size="sm" variant="secondary" onClick={() => handleCreate("menu")} disabled={creating}>
-          {creating ? "Creating…" : "Link for their GHL menu (1 year)"}
-        </Button>
-
         {confirmingRevoke ? (
           <>
             <span className="text-xs text-ink-faint">

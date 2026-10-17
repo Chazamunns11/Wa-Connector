@@ -120,6 +120,13 @@ function connectStatusChip(status: WhatsappSessionStatus | null): { tone: ChipTo
   return status ? CONNECT_STATUS_CHIP[status] : { tone: "muted", label: "Not connected" };
 }
 
+/** The number a connect link is for. */
+interface ConnectNumber {
+  slot: number;
+  label: string | null;
+  isDefault: boolean;
+}
+
 /** The exact shape `POST /api/connect/session` returns — see that route's own JSDoc for each `state`/failure `code`. `summary` is `GhlEmbedWhatsappSummary`, never carries a tenant id (src/lib/types.ts). */
 interface ConnectSessionResponse {
   ok: boolean;
@@ -128,6 +135,8 @@ interface ConnectSessionResponse {
   label?: string;
   summary?: GhlEmbedWhatsappSummary | null;
   bridgeReachable?: boolean | null;
+  /** Which of the location's numbers this link connects (Task 4) — slot, label and default flag only, never a tenant id. */
+  number?: ConnectNumber;
   message?: string;
   code?: string;
   /** Present only on a `code: "rate_limited"` response — see `runExchange`'s own comment, adversarial review lens 5, finding 7c. */
@@ -136,9 +145,9 @@ interface ConnectSessionResponse {
 
 /** Discriminated result of one full exchange round trip, with NO component state touched — see this file's header, "THAT RE-MINT IS SUMMARY-ONLY". `refreshSession` and `refreshSummaryOnly` below are the two callers that each decide, independently, what a given outcome should do to `phase`. */
 type ExchangeOutcome =
-  | { kind: "ok"; token: string; summary: GhlEmbedWhatsappSummary | null; label: string | null; bridgeReachable: boolean | null }
+  | { kind: "ok"; token: string; summary: GhlEmbedWhatsappSummary | null; label: string | null; number: ConnectNumber | null; bridgeReachable: boolean | null }
   | { kind: "disabled" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; code?: string };
 
 /** The `POST /api/connect/session` round trip, pure — see `ExchangeOutcome`'s own header. Takes the LINK token (the stable, 7-day-lived one) every time — this is what makes a re-exchange after a session-token 401 possible without holding two separate "which token do I re-send" branches. */
 async function runExchange(linkToken: string): Promise<ExchangeOutcome> {
@@ -163,7 +172,7 @@ async function runExchange(linkToken: string): Promise<ExchangeOutcome> {
         json?.code === "rate_limited" && typeof json.retryAfterSeconds === "number"
           ? `${baseMessage} (try again in ${json.retryAfterSeconds}s)`
           : baseMessage;
-      return { kind: "error", message };
+      return { kind: "error", message, code: json?.code };
     }
   } catch {
     return { kind: "error", message: "Couldn't reach the server — check your connection and try again." };
@@ -178,6 +187,7 @@ async function runExchange(linkToken: string): Promise<ExchangeOutcome> {
     token: json.token,
     summary: json.summary ?? null,
     label: json.label ?? null,
+    number: json.number ?? null,
     bridgeReachable: typeof json.bridgeReachable === "boolean" ? json.bridgeReachable : null,
   };
 }
@@ -211,6 +221,9 @@ export function ConnectLinkClient({
 }: ConnectLinkClientProps) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [errorMessage, setErrorMessage] = useState<string>(GENERIC_ERROR_MESSAGE);
+  // `unknown_number`: the link's number was removed after the link was minted — retrying cannot help.
+  const [numberGone, setNumberGone] = useState(false);
+  const [number, setNumber] = useState<ConnectNumber | null>(null);
   const [summary, setSummary] = useState<GhlEmbedWhatsappSummary | null>(null);
   const [label, setLabel] = useState<string>(initialLabel);
   const [bridgeReachable, setBridgeReachable] = useState<boolean | null>(null);
@@ -232,6 +245,7 @@ export function ConnectLinkClient({
     const outcome = await runExchange(token);
     if (outcome.kind === "error") {
       setErrorMessage(outcome.message);
+      setNumberGone(outcome.code === "unknown_number");
       setPhase("error");
       return null;
     }
@@ -241,6 +255,7 @@ export function ConnectLinkClient({
     }
     sessionTokenRef.current = outcome.token;
     setSummary(outcome.summary);
+    setNumber(outcome.number);
     if (outcome.label) setLabel(outcome.label);
     setBridgeReachable(outcome.bridgeReachable);
     setPhase("ready");
@@ -260,6 +275,7 @@ export function ConnectLinkClient({
     if (outcome.kind !== "ok") return;
     sessionTokenRef.current = outcome.token;
     setSummary(outcome.summary);
+    setNumber(outcome.number);
     if (outcome.label) setLabel(outcome.label);
     setBridgeReachable(outcome.bridgeReachable);
   }, [token]);
@@ -382,9 +398,11 @@ export function ConnectLinkClient({
         <Card>
           <CardHeader title="WhatsApp" />
           <p className="text-sm text-loss">{errorMessage}</p>
-          <Button size="sm" variant="secondary" className="mt-3" onClick={() => void refreshSession()}>
-            Try again
-          </Button>
+          {numberGone ? null : (
+            <Button size="sm" variant="secondary" className="mt-3" onClick={() => void refreshSession()}>
+              Try again
+            </Button>
+          )}
         </Card>
       </div>
     );
@@ -439,10 +457,17 @@ export function ConnectLinkClient({
         // still owns the actual "Log out" control — this block is decoration
         // built from the SAME `summary` state, never a second source of
         // truth for it.
-        <ConnectedHero summary={summary} nowMs={nowMs} />
+        <>
+          {number && (number.label || number.slot > 1) ? (
+            <p className="text-center text-xs font-medium text-ink-faint">{number.label ?? `Number ${number.slot}`}</p>
+          ) : null}
+          <ConnectedHero summary={summary} nowMs={nowMs} />
+        </>
       ) : (
         <>
-          <h2 className="font-display text-lg font-bold uppercase italic text-ink">Connect your business WhatsApp</h2>
+          <h2 className="font-display text-lg font-bold uppercase italic text-ink">
+            {connectHeading(number)}
+          </h2>
 
           {/*
             MANDATORY LINE 2 (above the connect button) — the single most
@@ -518,6 +543,13 @@ export function ConnectLinkClient({
       <p className="text-center text-[11px] text-ink-faint">Powered by WA4GHL</p>
     </div>
   );
+}
+
+/** "Connect WhatsApp: Sales line" for a named number, "Connect WhatsApp: Number 2" for an unnamed extra one, the original heading for an unnamed slot 1. */
+function connectHeading(number: ConnectNumber | null): string {
+  if (number?.label) return `Connect WhatsApp: ${number.label}`;
+  if (number && number.slot > 1) return `Connect WhatsApp: Number ${number.slot}`;
+  return "Connect your business WhatsApp";
 }
 
 /**
