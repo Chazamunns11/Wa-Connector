@@ -16,7 +16,7 @@
  *
  * NO ANTIVIRUS IN v1 (plan §10, stated position, not an oversight) — the
  * sniffed-type ALLOWLIST is what compensates: images, mp4 video, ogg/mp3/
- * mp4/wav audio, PDF, and zip-family office documents are allowed; anything
+ * m4a/webm/wav audio, PDF, and zip-family office documents are allowed; anything
  * else (executables, scripts, APKs, unrecognised magic bytes) is refused,
  * both directions.
  */
@@ -37,6 +37,9 @@ export type SniffedMime =
   | "video/mp4"
   | "audio/ogg"
   | "audio/mpeg"
+  | "audio/webm"
+  | "audio/mp4"
+  | "audio/wav"
   | "application/pdf"
   | "application/zip"
   | "application/x-msdownload";
@@ -62,10 +65,20 @@ export function sniffMime(bytes: Buffer): SniffedMime | null {
   )
     return "image/png";
   if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  // WAV: the same RIFF container as webp, form type 'WAVE' (GHL's in-browser recorder can emit it).
+  if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WAVE") return "audio/wav";
+  // EBML header — Matroska/WebM. Sniffed as audio/webm because the WebM GHL
+  // sends is its MediaRecorder voice clip; it is never sent as video.
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "audio/webm";
   if (bytes.length >= 6 && (bytes.toString("ascii", 0, 6) === "GIF87a" || bytes.toString("ascii", 0, 6) === "GIF89a")) return "image/gif";
   // ISO-BMFF (MP4 and its relatives): a 4-byte size field then 'ftyp' at
-  // offset 4 — the same signature Baileys/every MP4 muxer produces.
-  if (bytes.length >= 8 && bytes.toString("ascii", 4, 8) === "ftyp") return "video/mp4";
+  // offset 4 — the same signature Baileys/every MP4 muxer produces. The
+  // major brand (bytes 8–12) tells an audio-only m4a (iOS/Safari recordings)
+  // apart from video; every other brand stays video/mp4.
+  if (bytes.length >= 8 && bytes.toString("ascii", 4, 8) === "ftyp") {
+    const majorBrand = bytes.length >= 12 ? bytes.toString("ascii", 8, 12) : "";
+    return M4A_MAJOR_BRANDS.has(majorBrand) ? "audio/mp4" : "video/mp4";
+  }
   if (bytes.length >= 4 && bytes.toString("ascii", 0, 4) === "OggS") return "audio/ogg";
   // MP3: an ID3v2 tag, OR a bare frame sync (11 set bits: 0xFF Ex/Fx).
   if (bytes.length >= 3 && bytes.toString("ascii", 0, 3) === "ID3") return "audio/mpeg";
@@ -83,7 +96,25 @@ export function sniffMime(bytes: Buffer): SniffedMime | null {
   return null;
 }
 
-/** The allowlist (plan §10) — everything else, including `null` (unrecognised), is refused. Both directions share this set. */
+/** ISO-BMFF major brands that mean an audio-only MPEG-4 file (m4a, m4b audiobook, m4p protected). */
+const M4A_MAJOR_BRANDS: ReadonlySet<string> = new Set(["M4A ", "M4B ", "M4P "]);
+
+/**
+ * True iff `bytes` is an Ogg stream whose first page carries an Opus id
+ * header — the only ogg WhatsApp plays as a voice note. `OggS` at 0 and
+ * `OpusHead` at 28 (27-byte page header + the 1-byte segment table every
+ * first page has). An Ogg Vorbis file has `\x01vorbis` there instead.
+ */
+export function isOggOpus(bytes: Buffer): boolean {
+  return bytes.length >= 36 && bytes.toString("ascii", 0, 4) === "OggS" && bytes.toString("ascii", 28, 36) === "OpusHead";
+}
+
+/**
+ * The allowlist (plan §10) — everything else, including `null` (unrecognised), is refused. Both directions share this set.
+ * webm, wav and m4a are here for outbound voice notes; that also makes them storable inbound
+ * (media-capture.ts), which is intended and harmless — they are plain audio. Outbound webm/wav
+ * are still refused unless voice transcoding is on (see mapMimeToBaileysShape).
+ */
 const ALLOWED_MIME_TYPES: ReadonlySet<SniffedMime> = new Set([
   "image/jpeg",
   "image/png",
@@ -92,6 +123,9 @@ const ALLOWED_MIME_TYPES: ReadonlySet<SniffedMime> = new Set([
   "video/mp4",
   "audio/ogg",
   "audio/mpeg",
+  "audio/webm",
+  "audio/mp4",
+  "audio/wav",
   "application/pdf",
   "application/zip",
 ]);
@@ -117,6 +151,12 @@ export function extensionForMime(mime: SniffedMime): string {
       return "ogg";
     case "audio/mpeg":
       return "mp3";
+    case "audio/webm":
+      return "webm";
+    case "audio/mp4":
+      return "m4a";
+    case "audio/wav":
+      return "wav";
     case "application/pdf":
       return "pdf";
     case "application/zip":
@@ -158,11 +198,29 @@ export interface BaileysMediaMapping {
   kind: BaileysMediaKind;
   /** Voice-note rendering — ONLY true genuine audio/ogg is sent ptt:true (plan decision O5). Undefined for non-audio kinds. */
   ptt?: boolean;
+  /**
+   * Set only when voice transcoding is on and this audio isn't already ogg/opus: the
+   * dispatcher should try transcoding it to an opus voice note. `kind`/`ptt` are then
+   * the FALLBACK shape, used as-is if transcoding fails.
+   */
+  transcodeCandidate?: boolean;
 }
 
-/** `null` -> not supported for WhatsApp delivery (plan §5.4's terminal-failure row) — the sniffed type is either unrecognised or not on the outbound allowlist. */
-export function mapMimeToBaileysShape(mime: SniffedMime | null): BaileysMediaMapping | null {
+/**
+ * `null` -> not supported for WhatsApp delivery (plan §5.4's terminal-failure row) — the sniffed type is either unrecognised or not on the outbound allowlist.
+ *
+ * `opts.bytes` lets audio/ogg be checked for Opus: without it, ogg is assumed opus (the
+ * pre-voice-notes behaviour); with it, Ogg Vorbis goes as a plain audio file. `opts.voiceTranscode`
+ * (WA_VOICE_TRANSCODE_ENABLED) marks non-opus audio as a transcode candidate and accepts webm/wav,
+ * which fall back to a document because WhatsApp can't play them as audio. With it off, webm/wav
+ * stay refused, exactly as before.
+ */
+export function mapMimeToBaileysShape(
+  mime: SniffedMime | null,
+  opts: { bytes?: Buffer; voiceTranscode?: boolean } = {}
+): BaileysMediaMapping | null {
   if (!isAllowedMime(mime)) return null;
+  const voiceTranscode = opts.voiceTranscode === true;
   switch (mime) {
     case "image/jpeg":
     case "image/png":
@@ -172,9 +230,14 @@ export function mapMimeToBaileysShape(mime: SniffedMime | null): BaileysMediaMap
     case "video/mp4":
       return { kind: "video" };
     case "audio/ogg":
-      return { kind: "audio", ptt: true }; // genuine opus voice note (plan O5).
+      if (opts.bytes === undefined || isOggOpus(opts.bytes)) return { kind: "audio", ptt: true }; // genuine opus voice note (plan O5).
+      return voiceTranscode ? { kind: "audio", ptt: false, transcodeCandidate: true } : { kind: "audio", ptt: false }; // Ogg Vorbis.
     case "audio/mpeg":
-      return { kind: "audio", ptt: false };
+    case "audio/mp4":
+      return voiceTranscode ? { kind: "audio", ptt: false, transcodeCandidate: true } : { kind: "audio", ptt: false };
+    case "audio/webm":
+    case "audio/wav":
+      return voiceTranscode ? { kind: "document", transcodeCandidate: true } : null;
     case "application/pdf":
     case "application/zip":
       return { kind: "document" };
@@ -191,9 +254,13 @@ export function mapMimeToBaileysShape(mime: SniffedMime | null): BaileysMediaMap
  * fileName field on image/video/audio). Returns a plain object rather than
  * importing Baileys' own `AnyMessageContent` union here — this module stays
  * Baileys-import-free (matches its "pure, no network, no WhatsApp" header).
+ *
+ * A voice note (`ptt: true`) always goes as `audio/ogg; codecs=opus`, the mimetype WhatsApp
+ * clients expect for one, with `seconds`/`waveform` (from the transcoder) when present. A
+ * webm/wav document fallback is named `voice-note.<ext>` unless the caller supplies a name.
  */
 export function buildBaileysMediaContent(
-  resolved: { kind: BaileysMediaKind; mimetype: SniffedMime; buffer: Buffer; ptt?: boolean },
+  resolved: { kind: BaileysMediaKind; mimetype: SniffedMime; buffer: Buffer; ptt?: boolean; seconds?: number; waveform?: Uint8Array },
   fileName?: string
 ): Record<string, unknown> {
   switch (resolved.kind) {
@@ -201,10 +268,18 @@ export function buildBaileysMediaContent(
       return { image: resolved.buffer, mimetype: resolved.mimetype };
     case "video":
       return { video: resolved.buffer, mimetype: resolved.mimetype };
-    case "audio":
-      return { audio: resolved.buffer, mimetype: resolved.mimetype, ptt: resolved.ptt ?? false };
-    case "document":
-      return { document: resolved.buffer, mimetype: resolved.mimetype, fileName: fileName ?? `attachment.${extensionForMime(resolved.mimetype)}` };
+    case "audio": {
+      if (!resolved.ptt) return { audio: resolved.buffer, mimetype: resolved.mimetype, ptt: false };
+      const voiceNote: Record<string, unknown> = { audio: resolved.buffer, mimetype: "audio/ogg; codecs=opus", ptt: true };
+      if (resolved.seconds !== undefined) voiceNote.seconds = resolved.seconds;
+      if (resolved.waveform !== undefined) voiceNote.waveform = resolved.waveform;
+      return voiceNote;
+    }
+    case "document": {
+      const isVoiceFallback = resolved.mimetype === "audio/webm" || resolved.mimetype === "audio/wav";
+      const defaultName = `${isVoiceFallback ? "voice-note" : "attachment"}.${extensionForMime(resolved.mimetype)}`;
+      return { document: resolved.buffer, mimetype: resolved.mimetype, fileName: fileName ?? defaultName };
+    }
   }
 }
 

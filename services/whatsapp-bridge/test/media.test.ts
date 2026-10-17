@@ -13,6 +13,7 @@ import {
   extensionForMime,
   isAllowedMime,
   isDisallowedResolvedAddress,
+  isOggOpus,
   isValidWaMessageId,
   mapMimeToBaileysShape,
   maxBytesForKind,
@@ -89,6 +90,116 @@ test("sniffMime: header/extension disagreement — sniff always wins (caller nev
   // jpeg regardless of what filename or header a caller might have seen.
   const jpegBytesNamedAsPdf = bytes(0xff, 0xd8, 0xff, 0xe1);
   assert.equal(sniffMime(jpegBytesNamedAsPdf), "image/jpeg");
+});
+
+// ---------------------------------------------------------------------------
+// Voice notes (plan 2026-10-17-voice-notes, Task 1) — the audio formats GHL's
+// recorders produce, and the ogg/opus voice-note send shape.
+// ---------------------------------------------------------------------------
+
+/** A minimal first Ogg page: 27-byte header + a 1-entry segment table, so the codec id packet starts at offset 28. */
+function oggFirstPage(codecPacket: Buffer): Buffer {
+  const header = Buffer.alloc(27);
+  header.write("OggS", 0, "ascii");
+  header[5] = 0x02; // BOS flag
+  header[26] = 1; // one segment
+  return Buffer.concat([header, Buffer.from([codecPacket.length]), codecPacket]);
+}
+const opusBytes = oggFirstPage(Buffer.concat([Buffer.from("OpusHead"), Buffer.from([1, 1, 0x38, 0x01])]));
+const vorbisBytes = oggFirstPage(Buffer.concat([Buffer.from("\x01vorbis", "latin1"), Buffer.from([0, 0, 0, 0])]));
+
+test("sniffMime: webm (EBML header 1A 45 DF A3) -> audio/webm", () => {
+  assert.equal(sniffMime(bytes(0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01)), "audio/webm");
+});
+
+test("sniffMime: wav (RIFF....WAVE) -> audio/wav", () => {
+  assert.equal(sniffMime(Buffer.from("RIFF\0\0\0\0WAVE", "latin1")), "audio/wav");
+});
+
+test("sniffMime: m4a (ftyp major brand M4A/M4B/M4P) -> audio/mp4", () => {
+  assert.equal(sniffMime(Buffer.from("\0\0\0\x20ftypM4A ", "latin1")), "audio/mp4");
+  assert.equal(sniffMime(Buffer.from("\0\0\0\x20ftypM4B ", "latin1")), "audio/mp4");
+  assert.equal(sniffMime(Buffer.from("\0\0\0\x20ftypM4P ", "latin1")), "audio/mp4");
+});
+
+test("sniffMime: any other ftyp brand (isom) stays video/mp4", () => {
+  assert.equal(sniffMime(Buffer.from("\0\0\0\x20ftypisom", "latin1")), "video/mp4");
+});
+
+test("sniffMime: an ftyp box too short to carry a major brand stays video/mp4", () => {
+  assert.equal(sniffMime(Buffer.from("\0\0\0\x20ftyp", "latin1")), "video/mp4");
+});
+
+test("isOggOpus: OpusHead at offset 28 -> true; Vorbis id header -> false", () => {
+  assert.equal(isOggOpus(opusBytes), true);
+  assert.equal(isOggOpus(vorbisBytes), false);
+});
+
+test("isOggOpus: not an Ogg stream, or truncated -> false", () => {
+  assert.equal(isOggOpus(Buffer.concat([Buffer.from("XggS"), opusBytes.subarray(4)])), false);
+  assert.equal(isOggOpus(opusBytes.subarray(0, 30)), false);
+});
+
+test("voice notes: webm, wav and m4a are allowlisted (inbound storable) with their own extensions", () => {
+  for (const mime of ["audio/webm", "audio/wav", "audio/mp4"] as const) assert.equal(isAllowedMime(mime), true, mime);
+  assert.equal(extensionForMime("audio/webm"), "webm");
+  assert.equal(extensionForMime("audio/wav"), "wav");
+  assert.equal(extensionForMime("audio/mp4"), "m4a");
+});
+
+test("mapMimeToBaileysShape: webm/wav refused with the flag off (as today), document transcode candidates with it on", () => {
+  for (const mime of ["audio/webm", "audio/wav"] as const) {
+    assert.equal(mapMimeToBaileysShape(mime), null, mime);
+    assert.equal(mapMimeToBaileysShape(mime, { voiceTranscode: false }), null, mime);
+    assert.deepEqual(mapMimeToBaileysShape(mime, { voiceTranscode: true }), { kind: "document", transcodeCandidate: true }, mime);
+  }
+});
+
+test("mapMimeToBaileysShape: audio/mp4 (m4a) -> audio file, not video; candidate with the flag on", () => {
+  assert.deepEqual(mapMimeToBaileysShape("audio/mp4"), { kind: "audio", ptt: false });
+  assert.deepEqual(mapMimeToBaileysShape("audio/mp4", { voiceTranscode: true }), { kind: "audio", ptt: false, transcodeCandidate: true });
+});
+
+test("mapMimeToBaileysShape: audio/mpeg is a candidate with the flag on, plain audio file with it off", () => {
+  assert.deepEqual(mapMimeToBaileysShape("audio/mpeg", { voiceTranscode: false }), { kind: "audio", ptt: false });
+  assert.deepEqual(mapMimeToBaileysShape("audio/mpeg", { voiceTranscode: true }), { kind: "audio", ptt: false, transcodeCandidate: true });
+});
+
+test("mapMimeToBaileysShape: ogg opus -> voice note; ogg vorbis -> audio file (candidate only with the flag on)", () => {
+  assert.deepEqual(mapMimeToBaileysShape("audio/ogg", { bytes: opusBytes }), { kind: "audio", ptt: true });
+  assert.deepEqual(mapMimeToBaileysShape("audio/ogg", { bytes: opusBytes, voiceTranscode: true }), { kind: "audio", ptt: true });
+  assert.deepEqual(mapMimeToBaileysShape("audio/ogg", { bytes: vorbisBytes }), { kind: "audio", ptt: false });
+  assert.deepEqual(mapMimeToBaileysShape("audio/ogg", { bytes: vorbisBytes, voiceTranscode: true }), { kind: "audio", ptt: false, transcodeCandidate: true });
+});
+
+test("mapMimeToBaileysShape: the flag never changes non-audio types", () => {
+  assert.deepEqual(mapMimeToBaileysShape("video/mp4", { voiceTranscode: true }), { kind: "video" });
+  assert.deepEqual(mapMimeToBaileysShape("application/pdf", { voiceTranscode: true }), { kind: "document" });
+  assert.equal(mapMimeToBaileysShape(null, { voiceTranscode: true }), null);
+});
+
+test("buildBaileysMediaContent: a voice note carries the opus codec mimetype plus seconds and waveform", () => {
+  const buffer = Buffer.from("x");
+  const waveform = new Uint8Array([0, 10, 20]);
+  assert.deepEqual(buildBaileysMediaContent({ kind: "audio", mimetype: "audio/ogg", buffer, ptt: true, seconds: 7, waveform }), {
+    audio: buffer,
+    mimetype: "audio/ogg; codecs=opus",
+    ptt: true,
+    seconds: 7,
+    waveform,
+  });
+});
+
+test("buildBaileysMediaContent: a non-ptt audio file keeps its sniffed mimetype and omits seconds/waveform", () => {
+  const buffer = Buffer.from("x");
+  assert.deepEqual(buildBaileysMediaContent({ kind: "audio", mimetype: "audio/mp4", buffer, ptt: false }), { audio: buffer, mimetype: "audio/mp4", ptt: false });
+});
+
+test("buildBaileysMediaContent: a webm/wav document fallback is named voice-note.<ext> unless the caller names it", () => {
+  const buffer = Buffer.from("x");
+  assert.deepEqual(buildBaileysMediaContent({ kind: "document", mimetype: "audio/webm", buffer }), { document: buffer, mimetype: "audio/webm", fileName: "voice-note.webm" });
+  assert.deepEqual(buildBaileysMediaContent({ kind: "document", mimetype: "audio/wav", buffer }), { document: buffer, mimetype: "audio/wav", fileName: "voice-note.wav" });
+  assert.deepEqual(buildBaileysMediaContent({ kind: "document", mimetype: "application/pdf", buffer }), { document: buffer, mimetype: "application/pdf", fileName: "attachment.pdf" });
 });
 
 // ---------------------------------------------------------------------------
@@ -194,7 +305,7 @@ test("buildBaileysMediaContent: image/video shapes carry only buffer+mimetype", 
 
 test("buildBaileysMediaContent: audio carries ptt, defaulting false when unset", () => {
   const buf = Buffer.from("x");
-  assert.deepEqual(buildBaileysMediaContent({ kind: "audio", mimetype: "audio/ogg", buffer: buf, ptt: true }), { audio: buf, mimetype: "audio/ogg", ptt: true });
+  assert.deepEqual(buildBaileysMediaContent({ kind: "audio", mimetype: "audio/ogg", buffer: buf, ptt: true }), { audio: buf, mimetype: "audio/ogg; codecs=opus", ptt: true });
   assert.deepEqual(buildBaileysMediaContent({ kind: "audio", mimetype: "audio/mpeg", buffer: buf }), { audio: buf, mimetype: "audio/mpeg", ptt: false });
 });
 
