@@ -33,7 +33,7 @@ export default function HomePage() {
   const home = faqEntries(brand).filter((e) => (HOME_FAQ_IDS as readonly string[]).includes(e.id));
   return (
     <>
-      <section className="surface-dark pb-0">
+      <section className="surface-dark hero-band">
         <Container>
           <div className="hero-grid">
             <div>
@@ -42,16 +42,25 @@ export default function HomePage() {
               <div className="mt-7">
                 <Cta ground="dark" label={copy.ctaLabel} secondary={{ href: "#features", label: "See everything it does" }} note={copy.ctaNote} />
               </div>
-              <p className="hero-result mt-9 max-w-[34rem] text-lg font-medium leading-[1.5]">
-                About <span className="num-display font-display !text-[clamp(2.2rem,4vw,3.25rem)]">{result.before}</span>{" "}
-                {result.resultLead}{" "}
-                <span className="num-display font-display !text-[clamp(2.2rem,4vw,3.25rem)]">{result.after}</span>{" "}
-                <a href="#own-result" aria-label="Our own average, footnote 1" className="small inline-flex min-h-6 items-center align-baseline font-semibold underline underline-offset-2">
-                  Our own average<sup aria-hidden="true" className="ml-0.5 text-xs font-bold">1</sup>
-                </a>
-              </p>
+              <div className="hero-result">
+                <p className="hero-result-figure font-display">
+                  <span className="sr-only">About </span>
+                  <span className="num-display">{result.before}</span>
+                  <svg aria-hidden="true" className="hero-result-arrow" viewBox="0 0 40 16" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 8h34M29 2l7 6-7 6" />
+                  </svg>
+                  <span className="sr-only"> to </span>
+                  <span className="num-display hero-result-after">{result.after}</span>
+                </p>
+                <p className="hero-result-label">{result.resultLabel}</p>
+                <p className="mt-2">
+                  <a href="#own-result" aria-label="Our own average, footnote 1" className="small inline-flex min-h-6 items-center font-semibold underline underline-offset-2">
+                    Our own average<sup aria-hidden="true" className="ml-0.5 text-xs font-bold">1</sup>
+                  </a>
+                </p>
+              </div>
             </div>
-            <div className="relative z-[3] max-[900px]:mt-6">
+            <div className="relative z-[3] max-[900px]:-mt-10">
               <SameReminderTwice />
             </div>
           </div>

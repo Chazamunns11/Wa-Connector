@@ -104,14 +104,14 @@ test("hero: the h1 states the product and the result line keeps the 85%+ figure"
   assert.match(c.heroH1, /GoHighLevel/);
   assert.match(p, /className="hero-result/);
   assert.equal((p.match(/num-display/g) ?? []).length >= 2, true);
-  assert.match(p, /result\.resultLead|resultLead/);
+  assert.match(p, /result\.resultLabel/);
   assert.match(p, /href="#own-result"/);
   assert.ok(p.indexOf("</h1>") < p.indexOf("hero-result"), "result line is a sibling after the h1");
 });
 
-test("proof.ts exports resultLead", async () => {
+test("proof.ts exports resultLabel (the sentence became a figure plus a label in Task E)", async () => {
   const { OWN_RESULTS_AVERAGE } = await import("../../src/lib/site/proof.ts");
-  assert.equal(OWN_RESULTS_AVERAGE.resultLead, "of booked clients used to turn up. With WhatsApp reminders it's");
+  assert.equal(OWN_RESULTS_AVERAGE.resultLabel, "of booked clients turned up, before and after WhatsApp reminders");
   assert.match(OWN_RESULTS_AVERAGE.after, /85%\+/);
 });
 

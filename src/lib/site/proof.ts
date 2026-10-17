@@ -14,8 +14,8 @@ export interface AverageResult {
   /** The percentage-free parts of the home headline; `after` is the big number. */
   headingLead: string;
   headingTail: string;
-  /** The words between the two figures in the hero result line. */
-  resultLead: string;
+  /** The one-line label under the "50% to 85%+" figure in the hero result block. */
+  resultLabel: string;
 }
 
 /**
@@ -32,7 +32,7 @@ export const OWN_RESULTS_AVERAGE: AverageResult = {
   note: "That's our own average across the businesses we've run WhatsApp appointment reminders for, and it's from before this product existed. It is not an independent study, and your numbers will vary.",
   headingLead: "About half of booked clients used to turn up.",
   headingTail: "With WhatsApp reminders, it's",
-  resultLead: "of booked clients used to turn up. With WhatsApp reminders it's",
+  resultLabel: "of booked clients turned up, before and after WhatsApp reminders",
 };
 
 export interface CustomerResult {

@@ -58,12 +58,15 @@ test("B: the first phone's tilt is only applied from 601px up", () => {
   assert.ok(m, "tilt sits inside a min-width: 601px block");
 });
 
-test("B: the hang is a clamp at 901px and a fixed 96px below, and .hang-pad matches", () => {
+// Task E: the controller's review moved the wide hang. Below 901px the pair still rides 96px
+// over the seam (.hang-pad 150px); from 901px the pair sits inside the Ink, centred against the
+// headline block, and .hang-pad falls back to an ordinary band top padding.
+test("B/E: below 901px the hang is a fixed 96px with a matching .hang-pad; from 901px there is no hang", () => {
   const c = css();
   assert.match(c, /\.phones\s*\{[^}]*translate:\s*0 96px/);
-  assert.match(c, /@media \(min-width: 901px\)\s*\{[^@]*\.phones\s*\{[^}]*translate:\s*0 clamp\(120px, 22vw, 280px\)/);
   assert.match(c, /\.hang-pad\s*\{[^}]*padding-top:\s*150px/);
-  assert.match(c, /@media \(min-width: 901px\)\s*\{[^@]*\.hang-pad\s*\{[^}]*padding-top:\s*clamp\(150px, 22vw, 320px\)/);
+  assert.match(c, /@media \(min-width: 901px\)\s*\{[^@]*\.phones\s*\{[^}]*translate:\s*none/);
+  assert.match(c, /@media \(min-width: 901px\)\s*\{[^@]*\.hang-pad\s*\{[^}]*padding-top:\s*clamp\(64px, 9vw, 120px\)/);
 });
 
 test("B: the thread is bottom-anchored and the SMS thread keeps a visible No reply", () => {

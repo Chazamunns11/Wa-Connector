@@ -800,9 +800,55 @@ h3 {
 
 .hero-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
   gap: 0 24px;
+  align-items: center;
   padding-top: clamp(24px, 5vw, 64px);
+}
+
+/* The Ink hero owns its bottom padding, so the result block sits inside it
+   and never on the seam. */
+.hero-band {
+  padding-bottom: clamp(40px, 5vw, 64px);
+}
+
+/* The result: one figure, one label, the footnote link. A separate block
+   under the buttons, set off by a hairline, never a sentence with numbers in it. */
+.hero-result {
+  margin-top: clamp(32px, 4vw, 48px);
+  max-width: 36rem;
+  padding-top: clamp(20px, 2.4vw, 28px);
+  border-top: 1px solid rgba(255, 255, 255, 0.28);
+}
+
+.hero-result-figure {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 1.4vw, 18px);
+  margin: 0;
+}
+
+.hero-result-figure .num-display {
+  font-size: clamp(2.6rem, 4.6vw, 4rem);
+}
+
+.hero-result-after {
+  color: var(--color-accent);
+}
+
+.hero-result-arrow {
+  flex: none;
+  width: clamp(26px, 3vw, 40px);
+  height: auto;
+  color: var(--color-ink-faint);
+}
+
+.hero-result-label {
+  margin: 10px 0 0;
+  max-width: 56ch;
+  font-size: 1.0625rem;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .price-h2 {
@@ -850,7 +896,7 @@ h3 {
   --color-win: #17663F;
   position: relative;
   flex: 0 1 auto;
-  width: clamp(165px, 23vw, 300px);
+  width: clamp(165px, 24vw, 320px);
   aspect-ratio: 9 / 19.4;
   container-type: inline-size;
   color: #1B1F2A;
@@ -1129,6 +1175,12 @@ h3 {
   border-top-left-radius: 0;
 }
 
+/* Only the first bubble of a run carries the tail and the square corner. */
+.wa-in:not(.bubble-tail),
+.wa-out:not(.bubble-tail) {
+  border-radius: 3cqw;
+}
+
 .wa-sms {
   max-width: 90%;
   padding: 2.6cqw 3.4cqw;
@@ -1356,6 +1408,7 @@ h3 {
 
   .phones > .phone:nth-child(2) {
     margin-top: 0;
+    margin-left: -12px;
     transform: rotate(3deg);
   }
 
@@ -1372,8 +1425,11 @@ h3 {
 }
 
 @media (min-width: 901px) {
+  /* Wide hero: the pair sits inside the Ink, centred against the headline
+     block, and the seam below is a plain flat edge. */
   .phones {
-    translate: 0 clamp(120px, 22vw, 280px);
+    margin-right: -40px;
+    translate: none;
   }
 
   .phones-single {
@@ -1381,7 +1437,7 @@ h3 {
   }
 
   .hang-pad {
-    padding-top: clamp(150px, 22vw, 320px);
+    padding-top: clamp(64px, 9vw, 120px);
   }
 }
 

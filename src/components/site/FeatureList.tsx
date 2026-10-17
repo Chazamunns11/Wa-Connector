@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Container } from "@/components/site/Container";
 import { ReplyDiagram } from "@/components/site/diagrams/ReplyDiagram";
+import { GroupChatSample } from "@/components/site/samples/GroupChatSample";
 import { DashboardSample } from "@/components/site/samples/DashboardSample";
 import type { BrandConfig } from "@/lib/brand-config";
 import { featureEntries, type Feature } from "@/lib/site/features";
@@ -29,7 +30,14 @@ function Visual({
       </figure>
     );
   }
-  // TODO: mount GroupChatSample for visual === "group" once the phone mock-ups task lands it.
+  if (feature.visual === "group") {
+    // Only present while FEATURES.groupsLive (the "Coming soon" entry has no visual).
+    return (
+      <div className="mt-8 flex justify-center min-[901px]:mt-0 min-[901px]:self-center">
+        <GroupChatSample />
+      </div>
+    );
+  }
   return null;
 }
 
@@ -46,7 +54,7 @@ export function FeatureList({ brand }: { brand: BrandConfig }) {
           {featureEntries(brand).map((f) => (
             <li
               key={f.id}
-              className={`border-t-2 border-rule pt-6${f.visual === "dashboard" ? " min-[901px]:col-span-2" : ""}${f.visual === "reply" ? " min-[901px]:col-span-2 min-[901px]:grid min-[901px]:grid-cols-2 min-[901px]:gap-x-12" : ""}`}
+              className={`border-t-2 border-rule pt-6${f.visual === "dashboard" ? " min-[901px]:col-span-2" : ""}${f.visual === "reply" || f.visual === "group" ? " min-[901px]:col-span-2 min-[901px]:grid min-[901px]:grid-cols-2 min-[901px]:gap-x-12" : ""}`}
             >
               <div>
                 <h3 className="h-item font-display flex flex-wrap items-center gap-x-3 gap-y-2">
