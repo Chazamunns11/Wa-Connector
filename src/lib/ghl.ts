@@ -1231,6 +1231,53 @@ export async function addGhlInboundMessage(
 }
 
 /**
+ * `POST /conversations/messages/outbound` — GHL's "add an outbound historical
+ * message": records ONE message we already sent (a group invite, sent by the
+ * app over WhatsApp) in the contact's GHL conversation, so the coach sees it
+ * went out. It only records; GHL does not deliver it. Same headers, version
+ * and provider id source as `addGhlInboundMessage`. NOT idempotent: callers
+ * post once and never retry.
+ *
+ * ASSUMED, NOT CONFIRMED against a live location: the body shape
+ * (`type: "SMS"`, `contactId`, `conversationProviderId`, `message`) mirrors
+ * the inbound endpoint. Verify on the first live invite.
+ *
+ * Never throws. Logs the HTTP status only (never the response body, which
+ * could echo the message text); the result carries the status for the
+ * caller's own fixed-string log.
+ */
+export async function addGhlOutboundMessage(
+  accessToken: string,
+  input: { contactId: string; message: string; conversationProviderId: string }
+): Promise<{ ok: true } | { ok: false; status: number | null }> {
+  try {
+    const res = await fetch(`${API_BASE}/conversations/messages/outbound`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Version: API_VERSION,
+      },
+      body: JSON.stringify({
+        type: "SMS",
+        contactId: input.contactId,
+        conversationProviderId: input.conversationProviderId,
+        message: input.message,
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[ghl] conversations/messages/outbound rejected: HTTP ${res.status}`);
+      return { ok: false, status: res.status };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error("[ghl] conversations/messages/outbound failed:", err instanceof Error ? err.name : "unknown");
+    return { ok: false, status: null };
+  }
+}
+
+/**
  * Provably PRE-FLIGHT failures only — the request never reached (or could
  * never have reached) GHL's servers, so a retry cannot possibly double-post.
  * `ENOTFOUND`/`EAI_AGAIN` (DNS resolution never completed) and

@@ -14,7 +14,7 @@
  * verified token proves. `tenantId` below is that guard's answer, never
  * anything the client sent.
  *
- * WHAT IS RETURNED: `{ jid, name, size, enabled, left }` per group, built by
+ * WHAT IS RETURNED: `{ jid, name, size, enabled, left, live, createdByUs }` per group, built by
  * ENUMERATING fields (never spreading a `WhatsappGroup`, which carries the
  * tenant id). The JID IS returned — it is WhatsApp's own group id, not a
  * tenant id, and the owner has to say which group to switch. Bridge failure
@@ -72,6 +72,8 @@ export interface EmbedGroupView {
   left: boolean;
   /** In WhatsApp's live list for this number right now. */
   live: boolean;
+  /** This app created the group (stored `created_by_us`); false for a group with no stored row. */
+  createdByUs: boolean;
 }
 
 export type GroupsRouteResult =
@@ -112,11 +114,19 @@ function mergeGroups(live: BridgeGroup[], stored: WhatsappGroup[]): EmbedGroupVi
   const liveJids = new Set(live.map((g) => g.jid));
   const views: EmbedGroupView[] = live.map((g) => {
     const row = storedByJid.get(g.jid);
-    return { jid: g.jid, name: g.name, size: g.size, enabled: row?.enabled ?? false, left: row ? row.leftAt !== null : false, live: true };
+    return {
+      jid: g.jid,
+      name: g.name,
+      size: g.size,
+      enabled: row?.enabled ?? false,
+      left: row ? row.leftAt !== null : false,
+      live: true,
+      createdByUs: row?.createdByUs ?? false,
+    };
   });
   for (const g of stored) {
     if (liveJids.has(g.groupJid) || (!g.enabled && g.leftAt === null)) continue;
-    views.push({ jid: g.groupJid, name: g.name, size: 0, enabled: g.enabled, left: g.leftAt !== null, live: false });
+    views.push({ jid: g.groupJid, name: g.name, size: 0, enabled: g.enabled, left: g.leftAt !== null, live: false, createdByUs: g.createdByUs });
   }
   return views;
 }

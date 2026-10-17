@@ -80,8 +80,8 @@ test("groups list: the live list merged with the stored switches — jid, name, 
     body: {
       ok: true,
       groups: [
-        { jid: GROUP_A, name: "Team chat", size: 12, enabled: false, left: false, live: true },
-        { jid: GROUP_B, name: "Clients", size: 40, enabled: true, left: false, live: true },
+        { jid: GROUP_A, name: "Team chat", size: 12, enabled: false, left: false, live: true, createdByUs: false },
+        { jid: GROUP_B, name: "Clients", size: 40, enabled: true, left: false, live: true, createdByUs: false },
       ],
     },
   });
@@ -100,7 +100,7 @@ test("groups list: a stored group the number has left (no longer in the live lis
   assert.equal(result.status, 200);
   const groups = result.body.ok && "groups" in result.body ? result.body.groups : [];
   assert.deepEqual(groups.map((g) => g.jid), [GROUP_A, GROUP_B, GROUP_LEFT]);
-  assert.deepEqual(groups[2], { jid: GROUP_LEFT, name: "Old crew", size: 0, enabled: true, left: true, live: false });
+  assert.deepEqual(groups[2], { jid: GROUP_LEFT, name: "Old crew", size: 0, enabled: true, left: true, live: false, createdByUs: false });
   assertNoTenantId(result, "list with left");
 });
 
@@ -115,8 +115,8 @@ test("groups list: `left` is exactly leftAt !== null — an enabled stored group
   });
   const result = await decideGroupsRequest(repo, deps, TENANT, {});
   const groups = result.body.ok && "groups" in result.body ? result.body.groups : [];
-  assert.deepEqual(groups.find((g) => g.jid === missing), { jid: missing, name: "Gone quiet", size: 0, enabled: true, left: false, live: false });
-  assert.deepEqual(groups.find((g) => g.jid === GROUP_A), { jid: GROUP_A, name: "Team chat", size: 12, enabled: false, left: true, live: true });
+  assert.deepEqual(groups.find((g) => g.jid === missing), { jid: missing, name: "Gone quiet", size: 0, enabled: true, left: false, live: false, createdByUs: false });
+  assert.deepEqual(groups.find((g) => g.jid === GROUP_A), { jid: GROUP_A, name: "Team chat", size: 12, enabled: false, left: true, live: true, createdByUs: false });
 });
 
 test("groups list: the number isn't connected -> the not-connected shape, fixed message, no bridge text forwarded", async () => {
@@ -137,6 +137,19 @@ test("groups list: any other bridge failure -> 502 groups_unavailable with a fix
   assert.equal(result.status, 502);
   assert.deepEqual(result.body, { ok: false, code: "groups_unavailable", message: "Couldn't load this number's WhatsApp groups. Please try again." });
   assertNoTenantId(result, "bridge failure");
+});
+
+test("groups list: createdByUs comes from the stored row (live and not-live), false for a group with no row", async () => {
+  const gone = "120363000000000009@g.us";
+  const { repo, deps } = fakes({
+    stored: [stored(GROUP_A, { createdByUs: true }), stored(gone, { enabled: true, createdByUs: true, name: "Made here" })],
+  });
+  const result = await decideGroupsRequest(repo, deps, TENANT, {});
+  const groups = result.body.ok && "groups" in result.body ? result.body.groups : [];
+  assert.equal(groups.find((g) => g.jid === GROUP_A)?.createdByUs, true);
+  assert.equal(groups.find((g) => g.jid === GROUP_B)?.createdByUs, false);
+  assert.equal(groups.find((g) => g.jid === gone)?.createdByUs, true);
+  assertNoTenantId(result, "createdByUs list");
 });
 
 test("groups toggle: enabling stores the LIVE name (never the client's), then refreshes the bridge for THAT tenant, and returns the merged list", async () => {

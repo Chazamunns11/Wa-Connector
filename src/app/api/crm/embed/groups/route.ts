@@ -3,7 +3,7 @@
  * picker for one number (opt-in groups, Task 9):
  *   `{ slot? }`                                   list that number's groups
  *   `{ slot?, groupJid: string, enabled: boolean }` switch one group on/off
- * Success: `{ ok: true, groups: { jid, name, size, enabled, left, live }[] }`,
+ * Success: `{ ok: true, groups: { jid, name, size, enabled, left, live, createdByUs }[] }`,
  * except switching OFF, which answers `{ ok: true, groupJid, enabled: false }`
  * (it never reads the live list — see `logic.ts`'s header).
  *
