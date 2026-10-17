@@ -149,6 +149,7 @@ import {
 } from "./group-management.js";
 import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MissedCallTracker } from "./calls.js";
+import { ReceiptApplier } from "./receipts.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
 import { runMediaCapture } from "./media-capture.js";
 import { prepareOutboundAudio, resolveOutboundAttachment } from "./media-fetch.js";
@@ -625,6 +626,8 @@ export class SessionManager {
   /** In-flight `startSession` calls per coach — collapses concurrent callers onto one attempt instead of letting them race independent socket opens (see file header). */
   private readonly starting = new Map<string, Promise<Session>>();
   private claimRetryTimer: NodeJS.Timeout | null = null;
+  /** Delivered / read receipts (src/receipts.ts); null unless WA_READ_RECEIPTS_ENABLED. Shared across sessions: its keys include the coach id. */
+  private readonly receipts: ReceiptApplier | null;
   readonly instanceId = crypto.randomUUID();
   /**
    * Set exactly once, at the very top of `shutdown()`, before anything else
@@ -718,7 +721,9 @@ export class SessionManager {
     private readonly outboundPoke: PortalPoke | null = null,
     /** Outbound media seams — see `SessionMediaDeps`. */
     private readonly mediaDeps: SessionMediaDeps = {}
-  ) {}
+  ) {
+    this.receipts = config.readReceiptsEnabled ? new ReceiptApplier(store, Date.now, log) : null;
+  }
 
   /**
    * Boot: resume every coach that already has linked creds, then keep
@@ -1222,6 +1227,15 @@ export class SessionManager {
         void tracker.handle(coachId, events);
       });
     }
+
+    // Delivered / read receipts (src/receipts.ts). Subscribed only when
+    // WA_READ_RECEIPTS_ENABLED is on.
+    if (this.config.readReceiptsEnabled && this.receipts) {
+      const receipts = this.receipts;
+      sock.ev.on("messages.update", (updates) => {
+        void receipts.handle(coachId, updates);
+      });
+    }
   }
 
   /**
@@ -1667,6 +1681,8 @@ export class SessionManager {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Baileys' AnyMessageContent union is intentionally not re-imported into media.ts (see buildBaileysMediaContent's own JSDoc); both branches above already produce a shape Baileys accepts.
             const sent = await sock.sendMessage(jid, messageContent as any);
             await recordSent(this.store, this.outboundPoke, record.id, sent?.key?.id ?? null);
+            // An ack may have beaten markMessageSent; apply it now (never throws).
+            if (this.receipts && sent?.key?.id) await this.receipts.afterSent(session.coachId, sent.key.id);
           } catch (err) {
             // sendMessage WAS invoked — the frame may already be with
             // WhatsApp (e.g. an ack timeout after transmit). Never log the

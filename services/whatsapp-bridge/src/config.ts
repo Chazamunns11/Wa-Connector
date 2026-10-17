@@ -146,6 +146,8 @@ export interface BridgeConfig {
   voiceTranscodeEnabled: boolean;
   /** Log missed WhatsApp calls as inbound rows (src/calls.ts). Default off until the real-device check passes. */
   missedCallsEnabled: boolean;
+  /** Record delivered / read receipts on sent messages (src/receipts.ts). Default off until the real-device check passes. */
+  readReceiptsEnabled: boolean;
 }
 
 function required(name: string): string {
@@ -229,6 +231,7 @@ export function loadConfig(): BridgeConfig {
     mediaBucket: process.env.WA_MEDIA_BUCKET?.trim() || "wa-media",
     voiceTranscodeEnabled: boolWithDefault("WA_VOICE_TRANSCODE_ENABLED", false),
     missedCallsEnabled: boolWithDefault("WA_MISSED_CALLS_ENABLED", false),
+    readReceiptsEnabled: boolWithDefault("WA_READ_RECEIPTS_ENABLED", false),
   };
 
   if (config.lockTtlMs <= config.lockHeartbeatMs) {

@@ -400,6 +400,41 @@ export class BridgeStore {
   }
 
   /**
+   * Delivery / read receipt for a sent message (migration 0010). Set once,
+   * never backwards: each column is written only while it is still null, and a
+   * read also fills delivered_at. Returns "no_row" when no sent row carries
+   * this wa_message_id yet (the ack beat markMessageSent); a row that already
+   * holds the value counts as applied.
+   */
+  async markMessageReceipt(coachId: string, waMessageId: string, level: "delivered" | "read", atIso: string): Promise<"applied" | "no_row"> {
+    const columns = level === "read" ? (["delivered_at", "read_at"] as const) : (["delivered_at"] as const);
+    let updated = 0;
+    for (const column of columns) {
+      const { data, error } = await this.supabase
+        .from("whatsapp_messages")
+        .update({ [column]: atIso })
+        .eq("coach_id", coachId)
+        .eq("wa_message_id", waMessageId)
+        .eq("status", "sent")
+        .is(column, null)
+        .select("id");
+      if (error) throw error;
+      updated += data?.length ?? 0;
+    }
+    if (updated > 0) return "applied";
+    // Nothing changed: either every column was already set, or there is no row.
+    const { data, error } = await this.supabase
+      .from("whatsapp_messages")
+      .select("id")
+      .eq("coach_id", coachId)
+      .eq("wa_message_id", waMessageId)
+      .eq("status", "sent")
+      .limit(1);
+    if (error) throw error;
+    return (data?.length ?? 0) > 0 ? "applied" : "no_row";
+  }
+
+  /**
    * @param dispatchAttempted see `MessageRecord.dispatchAttempted` — the
    *   caller (src/sessions.ts) is the only place that knows whether Baileys'
    *   send API was actually invoked for this attempt, so it MUST pass this

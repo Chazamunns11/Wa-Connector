@@ -99,6 +99,23 @@ only observes: it never answers or rejects a call.
 - At most one row per caller per 10 minutes.
 - Logs carry fixed strings only: no phones, JIDs or call ids.
 
+## Delivered and read receipts
+
+The bridge records when a message we sent is delivered and read
+(`whatsapp_messages.delivered_at` / `read_at`), from Baileys' `messages.update`
+events.
+
+- **Flag:** `WA_READ_RECEIPTS_ENABLED` (default `false`). Apply migration
+  `0010_missed_calls_and_receipts.sql` first.
+- Each timestamp is set once and never moves backwards. A read also sets
+  `delivered_at` if it is empty.
+- Group messages only get `delivered_at`; there is no read tracking in groups.
+- An ack that arrives before the ledger row has its WhatsApp message id is held
+  in memory for 60 seconds (at most 1,000 entries) and applied once the send is
+  recorded.
+- The absence of a read receipt means nothing: people turn read receipts off.
+- Logs carry fixed strings and error names only: no message ids or JIDs.
+
 ## Voice notes (ffmpeg)
 
 Audio that GHL sends and that is not ogg/opus (an mp3, an m4a, GHL's own

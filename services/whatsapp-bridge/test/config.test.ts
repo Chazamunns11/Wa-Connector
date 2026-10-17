@@ -341,3 +341,8 @@ test("config: WA_MISSED_CALLS_ENABLED defaults to false and reads true", () => {
   withEnv({}, () => assert.equal(loadConfig().missedCallsEnabled, false));
   withEnv({ WA_MISSED_CALLS_ENABLED: "true" }, () => assert.equal(loadConfig().missedCallsEnabled, true));
 });
+
+test("config: WA_READ_RECEIPTS_ENABLED defaults to false and reads true", () => {
+  withEnv({}, () => assert.equal(loadConfig().readReceiptsEnabled, false));
+  withEnv({ WA_READ_RECEIPTS_ENABLED: "true" }, () => assert.equal(loadConfig().readReceiptsEnabled, true));
+});
