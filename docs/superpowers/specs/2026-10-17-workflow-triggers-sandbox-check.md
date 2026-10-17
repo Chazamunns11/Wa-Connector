@@ -47,6 +47,7 @@ Only after migration 0014. Set `GHL_SMS_FALLBACK_ENABLED=true` and leave the sub
 - [ ] A message with an attachment and text: the SMS carries the text only. Attachment only: no SMS, and the trigger fires.
 - [ ] A contact who sent STOP: nothing, and no trigger.
 - [ ] On a sub-account whose SMS provider is PingWren: if GHL hands the SMS back to PingWren, it is refused with `This sub-account sends SMS through PingWren, so the SMS fallback can't be used — not sent`, nothing goes out on WhatsApp, and the embed shows the setting off with the "Turned off: this sub-account's SMS goes through PingWren…" notice. The next not-on-WhatsApp send gets no SMS and fires the trigger. Switching the setting back on clears the notice.
+- [ ] Confirm the provider webhook's `messageId` for the handed-back SMS equals the `messageId` in the `POST /conversations/messages` response. If it doesn't, the guard only matches on the text hash, and a hand-sent copy of the same text within 10 minutes is treated as the echo.
 - [ ] If the SMS call itself is refused, `sendGhlSms` in `src/lib/ghl.ts` is the one function to change. Record the working call here:
 
 > Working call: _to fill in_

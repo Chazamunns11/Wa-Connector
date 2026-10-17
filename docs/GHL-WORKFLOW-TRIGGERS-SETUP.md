@@ -133,7 +133,7 @@ It only fires when read receipts are on: `GHL_READ_RECEIPTS_ENABLED=true` (Verce
 
 `message` is the unsent text, cut to 500 characters. It can be empty: for an attachment-only send (no text), for a message whose kept text was cleared because it was not reported within 7 days, for a message accepted while both `GHL_WORKFLOW_TRIGGERS_ENABLED` and `GHL_SMS_FALLBACK_ENABLED` were off (the text is only kept while one of them is on), and for messages sent before migration 0013.
 
-Not fired when PingWren's own SMS fallback sent the text as an SMS (`GHL_SMS_FALLBACK_ENABLED=true` and the sub-account's "Send as SMS when a contact isn't on WhatsApp" switch on), so a workflow doesn't send a second SMS. GHL then shows the message as failed with `Not on WhatsApp — sent as SMS instead`. When the fallback is off, switched off, blocked by the loop guard, or the SMS call failed, the trigger fires as above. See "SMS fallback (GHL)" in `docs/GO-LIVE-FOUNDATION.md`.
+Not fired when PingWren's own SMS fallback sent the text as an SMS (`GHL_SMS_FALLBACK_ENABLED=true` and the sub-account's "Send as SMS when a contact isn't on WhatsApp" switch on), so a workflow doesn't send a second SMS. GHL then shows the message as failed with `Not on WhatsApp — sent as SMS instead`. When the fallback is off, switched off, blocked by the loop guard, the contact already had a fallback SMS in the last 10 minutes, or the SMS call failed, the trigger fires as above. If GHL hands the fallback SMS back to PingWren, the trigger fires for the original message. See "SMS fallback (GHL)" in `docs/GO-LIVE-FOUNDATION.md`.
 
 ### The 30-day "not on WhatsApp" memory
 

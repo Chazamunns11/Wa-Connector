@@ -458,14 +458,22 @@ function createFakeRepo(
       const until = notOnWhatsapp.get(`${locationId}:${phone}`);
       return until !== undefined && until > nowIso;
     },
-    // SMS fallback B (0014): with GHL_SMS_FALLBACK_ENABLED unset (every test in
-    // this file) none of these is reached; scripts/test/sms-fallback.test.ts
-    // covers them.
-    async recordSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, expiresIso: string) {
-      calls.push({ method: "recordSmsFallbackEcho", args: [locationId, contactId, textSha256, expiresIso] });
+    // SMS fallback B (0014): no echo is ever pending here, and with
+    // GHL_SMS_FALLBACK_ENABLED unset (every test in this file) nothing is
+    // claimed or sent; scripts/test/sms-fallback.test.ts covers these.
+    async findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string) {
+      calls.push({ method: "findSmsFallbackEcho", args: [locationId, contactId, nowIso] });
+      return null;
     },
-    async consumeSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, nowIso: string) {
-      calls.push({ method: "consumeSmsFallbackEcho", args: [locationId, contactId, textSha256, nowIso] });
+    async recordSmsFallbackEcho(echo: unknown, nowIso: string) {
+      calls.push({ method: "recordSmsFallbackEcho", args: [echo, nowIso] });
+      return true;
+    },
+    async setSmsFallbackEchoMessageId(...args: unknown[]) {
+      calls.push({ method: "setSmsFallbackEchoMessageId", args });
+    },
+    async deleteSmsFallbackEcho(...args: unknown[]) {
+      calls.push({ method: "deleteSmsFallbackEcho", args });
       return false;
     },
     async blockSmsFallback(locationId: string) {
@@ -477,6 +485,13 @@ function createFakeRepo(
     },
     async setSmsFallbackResult(id: string, result: "sent" | "failed") {
       calls.push({ method: "setSmsFallbackResult", args: [id, result] });
+    },
+    async failSmsFallback(id: string) {
+      calls.push({ method: "failSmsFallback", args: [id] });
+    },
+    async getGhlOutboundMessage(id: string) {
+      calls.push({ method: "getGhlOutboundMessage", args: [id] });
+      return rows.get(id) ?? null;
     },
     async isOptedOut(tenantId: string, phone: string) {
       calls.push({ method: "isOptedOut", args: [tenantId, phone] });
@@ -4117,7 +4132,7 @@ test("sendGhlSms: posts type SMS, the contact and the text with the location tok
     async () => jsonResponse(201, { conversationId: "conv-1", messageId: "m-1" }),
     () => sendGhlSms("loc-token", { contactId: "contact-9", message: "Your class is at 6pm" })
   );
-  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(result, { ok: true, messageId: "m-1" });
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, "https://services.leadconnectorhq.com/conversations/messages");
   assert.equal(requests[0].method, "POST");
@@ -4185,5 +4200,17 @@ test("isSmsFallbackEnabled: only exactly \"true\" switches it on", () => {
   } finally {
     if (saved === undefined) delete process.env.GHL_SMS_FALLBACK_ENABLED;
     else process.env.GHL_SMS_FALLBACK_ENABLED = saved;
+  }
+});
+
+test("sendGhlSms: a success without a messageId (or without JSON) still succeeds, with messageId null", async () => {
+  for (const respond of [
+    async () => jsonResponse(200, { conversationId: "conv-1" }),
+    async () => jsonResponse(200, { messageId: "" }),
+    async () => jsonResponse(200, { messageId: 42 }),
+    async () => new Response("ok", { status: 200 }),
+  ]) {
+    const { result } = await withCapturedFetch(respond, () => sendGhlSms("loc-token", { contactId: "contact-9", message: "hi" }));
+    assert.deepEqual(result, { ok: true, messageId: null });
   }
 });

@@ -2,7 +2,8 @@
  * POST /api/crm/embed/message-events — the sub-account's switches for posting
  * reactions and deleted-message notices into GHL, and for the SMS fallback:
  * `{}` reads them, `{ showReactions?, showDeletes?, smsFallback? }` saves.
- * Answers `{ ok: true, showReactions, showDeletes, smsFallback, smsFallbackBlocked }`.
+ * Answers `{ ok: true, showReactions, showDeletes, smsFallback, smsFallbackBlocked,
+ * smsFallbackAvailable }` (the last is the global switch; the toggle is hidden while it is off).
  *
  * EMBED-ONLY, LOCATION-GUARDED (`authorizeGhlEmbedLocationRequest`): the
  * settings belong to the sub-account, not to one number, so no slot is

@@ -27,6 +27,7 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  SmsFallbackEcho,
   LocationNumber,
   LocationStats,
   Role,
@@ -409,6 +410,7 @@ interface GhlOutboundMessageRow {
   read_report_error: string | null;
   /** 0014 — absent on a pre-0014 database (`select("*")`). */
   sms_fallback?: string | null;
+  sms_fallback_claimed_at?: string | null;
   created_at: string;
 }
 
@@ -432,6 +434,7 @@ function mapGhlOutboundMessage(row: GhlOutboundMessageRow): GhlOutboundMessage {
     readReportedAt: row.read_reported_at,
     readReportError: row.read_report_error,
     smsFallback: row.sms_fallback === "claimed" || row.sms_fallback === "sent" || row.sms_fallback === "failed" ? row.sms_fallback : null,
+    smsFallbackClaimedAt: typeof row.sms_fallback_claimed_at === "string" ? row.sms_fallback_claimed_at : null,
     createdAt: row.created_at,
   };
 }
@@ -2211,33 +2214,82 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (error) throw error;
   }
 
-  async recordSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, expiresIso: string) {
+  async recordSmsFallbackEcho(
+    echo: { locationId: string; contactId: string; textSha256: string; outboundMessageId: string; expiresIso: string },
+    nowIso: string
+  ) {
     const supabase = getServiceClient();
-    // Keeps the table small: this location's expired echoes go first.
+    // This contact's expired echo goes first, so only an unexpired one blocks the insert.
     const { error: cleanupError } = await supabase
       .from("ghl_sms_fallback_echoes")
       .delete()
-      .eq("location_id", locationId)
-      .lte("expires_at", new Date().toISOString());
+      .eq("location_id", echo.locationId)
+      .eq("contact_id", echo.contactId)
+      .lte("expires_at", nowIso);
     if (cleanupError) throw cleanupError;
+    // INSERT ... ON CONFLICT DO NOTHING: only an inserted row comes back.
+    const { data, error } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .upsert(
+        {
+          location_id: echo.locationId,
+          contact_id: echo.contactId,
+          text_sha256: echo.textSha256,
+          outbound_message_id: echo.outboundMessageId,
+          ghl_message_id: null,
+          expires_at: echo.expiresIso,
+        },
+        { onConflict: "location_id,contact_id", ignoreDuplicates: true }
+      )
+      .select("location_id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async setSmsFallbackEchoMessageId(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string) {
+    const supabase = getServiceClient();
     const { error } = await supabase
       .from("ghl_sms_fallback_echoes")
-      .upsert({ location_id: locationId, contact_id: contactId, text_sha256: textSha256, expires_at: expiresIso }, { onConflict: "location_id,contact_id,text_sha256" });
+      .update({ ghl_message_id: ghlMessageId })
+      .eq("location_id", locationId)
+      .eq("contact_id", contactId)
+      .eq("outbound_message_id", outboundMessageId);
     if (error) throw error;
   }
 
-  async consumeSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, nowIso: string) {
+  async findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string): Promise<SmsFallbackEcho | null> {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .select("text_sha256, outbound_message_id, ghl_message_id, expires_at")
+      .eq("location_id", locationId)
+      .eq("contact_id", contactId)
+      .gt("expires_at", nowIso)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const row = data as { text_sha256: string; outbound_message_id: string; ghl_message_id: string | null; expires_at: string };
+    return { textSha256: row.text_sha256, outboundMessageId: row.outbound_message_id, ghlMessageId: row.ghl_message_id, expiresAt: row.expires_at };
+  }
+
+  async deleteSmsFallbackEcho(locationId: string, contactId: string, outboundMessageId: string) {
     const supabase = getServiceClient();
     const { data, error } = await supabase
       .from("ghl_sms_fallback_echoes")
       .delete()
       .eq("location_id", locationId)
       .eq("contact_id", contactId)
-      .eq("text_sha256", textSha256)
-      .gt("expires_at", nowIso)
+      .eq("outbound_message_id", outboundMessageId)
       .select("location_id");
     if (error) throw error;
     return (data ?? []).length > 0;
+  }
+
+  async purgeExpiredSmsFallbackEchoes(nowIso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_sms_fallback_echoes").delete().lte("expires_at", nowIso).select("location_id");
+    if (error) throw error;
+    return (data ?? []).length;
   }
 
   async blockSmsFallback(locationId: string) {
@@ -2262,7 +2314,7 @@ export class SupabaseGhlRepository implements GhlRepository {
     const supabase = getServiceClient();
     const { data, error } = await supabase
       .from("ghl_outbound_messages")
-      .update({ sms_fallback: "claimed" })
+      .update({ sms_fallback: "claimed", sms_fallback_claimed_at: new Date().toISOString() })
       .eq("id", id)
       .is("sms_fallback", null)
       .is("reported_status", null)
@@ -2275,6 +2327,19 @@ export class SupabaseGhlRepository implements GhlRepository {
     const supabase = getServiceClient();
     const { error } = await supabase.from("ghl_outbound_messages").update({ sms_fallback: result }).eq("id", id).eq("sms_fallback", "claimed");
     if (error) throw error;
+  }
+
+  async failSmsFallback(id: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_outbound_messages").update({ sms_fallback: "failed" }).eq("id", id).in("sms_fallback", ["claimed", "sent"]);
+    if (error) throw error;
+  }
+
+  async getGhlOutboundMessage(id: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_outbound_messages").select("*").eq("id", id).maybeSingle();
+    if (error) throw error;
+    return data ? mapGhlOutboundMessage(data as GhlOutboundMessageRow) : null;
   }
 
   async setSessionTriggerState(

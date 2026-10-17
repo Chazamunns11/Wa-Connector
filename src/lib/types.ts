@@ -303,10 +303,22 @@ export interface GhlOutboundMessage {
    * (and on a pre-0014 database). Optional so fixtures may leave it out.
    */
   smsFallback?: GhlOutboundSmsFallback | null;
+  /** SMS fallback B (0014) — when `smsFallback` was claimed; a claim younger than 2 minutes means another pass is still on it. */
+  smsFallbackClaimedAt?: string | null;
   createdAt: string;
 }
 
 export type GhlOutboundSmsFallback = "claimed" | "sent" | "failed";
+
+/** SMS fallback B (0014) — the pending echo of the last fallback SMS to a contact (`ghl_sms_fallback_echoes`). Never carries the text. */
+export interface SmsFallbackEcho {
+  textSha256: string;
+  /** The original `ghl_outbound_messages` row the SMS stood in for. */
+  outboundMessageId: string;
+  /** GHL's message id from the send's response; null until (or unless) GHL returned one. */
+  ghlMessageId: string | null;
+  expiresAt: string;
+}
 
 /** Input for `Repository.recordGhlOutboundMessage` — the webhook route's own fields, already normalised/derived by `src/lib/ghl.ts` before this is called. */
 export interface GhlOutboundMessageDraft {

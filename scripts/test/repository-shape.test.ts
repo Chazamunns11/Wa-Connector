@@ -96,22 +96,27 @@ const METHODS = [
   "stampSessionTriggerPhone",
   "listSessionsForTriggers",
   "recordSmsFallbackEcho",
-  "consumeSmsFallbackEcho",
+  "setSmsFallbackEchoMessageId",
+  "findSmsFallbackEcho",
+  "deleteSmsFallbackEcho",
+  "purgeExpiredSmsFallbackEchoes",
   "blockSmsFallback",
   "setSmsFallbackEnabled",
   "claimSmsFallback",
   "setSmsFallbackResult",
+  "failSmsFallback",
+  "getGhlOutboundMessage",
 ] as const;
 
-test("SupabaseGhlRepository implements all 92 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 92);
-  assert.equal(new Set(METHODS).size, 92);
+test("SupabaseGhlRepository implements all 97 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 97);
+  assert.equal(new Set(METHODS).size, 97);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 92", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 97", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });
@@ -242,22 +247,53 @@ test("updateGhlOutboundSendState clears the text on accept unless workflow trigg
   );
 });
 
-test("recordSmsFallbackEcho stores only the text hash, valid until the expiry, and drops the location's expired echoes", () => {
+test("recordSmsFallbackEcho: one echo per (location, contact), a conditional insert that says whether the cooldown was free", () => {
   const body = methodSource("recordSmsFallbackEcho");
   assert.match(body, /from\("ghl_sms_fallback_echoes"\)/);
-  assert.match(body, /\.delete\(\)\s*\.eq\("location_id", locationId\)\s*\.lte\("expires_at", /);
-  assert.match(body, /\{ location_id: locationId, contact_id: contactId, text_sha256: textSha256, expires_at: expiresIso \}/);
-  assert.match(body, /onConflict: "location_id,contact_id,text_sha256"/);
-  assert.doesNotMatch(body, /message|text:/);
-});
-
-test("consumeSmsFallbackEcho deletes one matching unexpired echo and says whether there was one", () => {
-  const body = methodSource("consumeSmsFallbackEcho");
+  // Only this contact's expired echo is cleared first, so an unexpired one blocks the insert.
+  assert.match(body, /\.delete\(\)\s*\.eq\("location_id", echo\.locationId\)\s*\.eq\("contact_id", echo\.contactId\)\s*\.lte\("expires_at", nowIso\)/);
   assert.match(
     body,
-    /\.delete\(\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.eq\("text_sha256", textSha256\)\s*\.gt\("expires_at", nowIso\)\s*\.select\("location_id"\)/
+    /\{\s*location_id: echo\.locationId,\s*contact_id: echo\.contactId,\s*text_sha256: echo\.textSha256,\s*outbound_message_id: echo\.outboundMessageId,\s*ghl_message_id: null,\s*expires_at: echo\.expiresIso,\s*\}/
   );
+  assert.match(body, /onConflict: "location_id,contact_id", ignoreDuplicates: true/);
   assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
+  assert.doesNotMatch(body, /message:|text:/);
+});
+
+test("setSmsFallbackEchoMessageId stamps GHL's message id on that row's echo only", () => {
+  const body = methodSource("setSmsFallbackEchoMessageId");
+  assert.match(
+    body,
+    /\.update\(\{ ghl_message_id: ghlMessageId \}\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.eq\("outbound_message_id", outboundMessageId\)/
+  );
+});
+
+test("findSmsFallbackEcho reads one unexpired echo by its key", () => {
+  const body = methodSource("findSmsFallbackEcho");
+  assert.match(body, /\.select\("text_sha256, outbound_message_id, ghl_message_id, expires_at"\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.gt\("expires_at", nowIso\)/);
+});
+
+test("deleteSmsFallbackEcho deletes only the echo it read and says whether it did", () => {
+  const body = methodSource("deleteSmsFallbackEcho");
+  assert.match(body, /\.delete\(\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.eq\("outbound_message_id", outboundMessageId\)\s*\.select\("location_id"\)/);
+  assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
+});
+
+test("purgeExpiredSmsFallbackEchoes deletes every expired echo", () => {
+  const body = methodSource("purgeExpiredSmsFallbackEchoes");
+  assert.match(body, /from\("ghl_sms_fallback_echoes"\)\s*\.delete\(\)\s*\.lte\("expires_at", nowIso\)\s*\.select\("location_id"\)/);
+});
+
+test("failSmsFallback marks a claimed or sent row failed (the loop guard's correction)", () => {
+  const body = methodSource("failSmsFallback");
+  assert.match(body, /\.update\(\{ sms_fallback: "failed" \}\)\s*\.eq\("id", id\)\s*\.in\("sms_fallback", \["claimed", "sent"\]\)/);
+});
+
+test("getGhlOutboundMessage reads one row by id", () => {
+  const body = methodSource("getGhlOutboundMessage");
+  assert.match(body, /from\("ghl_outbound_messages"\)\s*\.select\("\*"\)\s*\.eq\("id", id\)\s*\.maybeSingle\(\)/);
+  assert.match(body, /mapGhlOutboundMessage\(/);
 });
 
 test("blockSmsFallback stamps blocked_at on this sub-account only", () => {
@@ -274,7 +310,10 @@ test("setSmsFallbackEnabled clears blocked_at only when switching on", () => {
 
 test("claimSmsFallback wins only for a row never claimed and still unreported", () => {
   const body = methodSource("claimSmsFallback");
-  assert.match(body, /\.update\(\{ sms_fallback: "claimed" \}\)\s*\.eq\("id", id\)\s*\.is\("sms_fallback", null\)\s*\.is\("reported_status", null\)\s*\.select\("id"\)/);
+  assert.match(
+    body,
+    /\.update\(\{ sms_fallback: "claimed", sms_fallback_claimed_at: new Date\(\)\.toISOString\(\) \}\)\s*\.eq\("id", id\)\s*\.is\("sms_fallback", null\)\s*\.is\("reported_status", null\)\s*\.select\("id"\)/
+  );
   assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
 });
 
@@ -288,12 +327,21 @@ test("0014: the SMS fallback switch is on by default, blocked_at is nullable, th
   assert.match(sql, /add column if not exists sms_fallback_enabled boolean not null default true/);
   assert.match(sql, /add column if not exists sms_fallback_blocked_at timestamptz(,|;)/);
   assert.match(sql, /add column if not exists sms_fallback text\s+check \(sms_fallback is null or sms_fallback in \('claimed', 'sent', 'failed'\)\)/);
+  assert.match(sql, /add column if not exists sms_fallback_claimed_at timestamptz/);
+  assert.match(sql, /outbound_message_id\s+uuid not null references public\.ghl_outbound_messages \(id\) on delete cascade/);
+  assert.match(sql, /ghl_message_id\s+text,/);
+  assert.match(sql, /create index ghl_sms_fallback_echoes_expires_idx on public\.ghl_sms_fallback_echoes \(expires_at\)/);
   assert.match(sql, /create table public\.ghl_sms_fallback_echoes \(/);
   assert.match(sql, /location_id\s+text not null references public\.ghl_accounts \(location_id\) on delete cascade/);
   assert.match(sql, /contact_id\s+text not null/);
   assert.match(sql, /text_sha256\s+text not null/);
   assert.match(sql, /expires_at\s+timestamptz not null/);
-  assert.match(sql, /primary key \(location_id, contact_id, text_sha256\)/);
+  assert.match(sql, /primary key \(location_id, contact_id\)\n/);
   assert.match(sql, /alter table public\.ghl_sms_fallback_echoes enable row level security/);
   assert.doesNotMatch(sql, /create policy/);
+});
+
+test("the hourly cron purges expired SMS fallback echoes, best effort", () => {
+  const src = readFileSync(new URL("../../src/app/api/cron/drain/route.ts", import.meta.url), "utf8");
+  assert.match(src, /try \{\s*const purgedEchoes = await repo\.purgeExpiredSmsFallbackEchoes\(new Date\(\)\.toISOString\(\)\);/);
 });

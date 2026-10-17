@@ -1292,6 +1292,13 @@ export async function addGhlOutboundMessage(
   }
 }
 
+/** Prefix of the `ghl_message_id` on rows this app originates (not GHL), e.g. group invites. Re-exported by `src/lib/ghl-provider.ts`. */
+export const APP_MESSAGE_ID_PREFIX = "pwapp_";
+
+export function isAppOriginatedMessageId(id: string): boolean {
+  return /^pwapp_[0-9a-f]{32}$/.test(id);
+}
+
 /**
  * SMS fallback B (docs/superpowers/plans/2026-10-17-sms-fallback-b.md) — the
  * global switch. Off unless `GHL_SMS_FALLBACK_ENABLED` is exactly "true",
@@ -1314,10 +1321,16 @@ export function isSmsFallbackEnabled(): boolean {
  * provider webhook. The caller records a pending echo before calling this,
  * so `handleProviderOutboundMessage` can refuse it.
  *
+ * On success returns GHL's `messageId` from the response (null when absent or
+ * not JSON), so the loop guard can recognise this exact SMS if it comes back.
+ *
  * Never throws; 5 s timeout. Logs the HTTP status or the error name only,
  * never the body, the contact or the text.
  */
-export async function sendGhlSms(accessToken: string, input: { contactId: string; message: string }): Promise<{ ok: true } | { ok: false; status: number | null }> {
+export async function sendGhlSms(
+  accessToken: string,
+  input: { contactId: string; message: string }
+): Promise<{ ok: true; messageId: string | null } | { ok: false; status: number | null }> {
   try {
     const res = await fetch(`${API_BASE}/conversations/messages`, {
       method: "POST",
@@ -1333,7 +1346,14 @@ export async function sendGhlSms(accessToken: string, input: { contactId: string
       console.error(`[ghl] conversations/messages (SMS fallback) rejected: HTTP ${res.status}`);
       return { ok: false, status: res.status };
     }
-    return { ok: true };
+    let messageId: string | null = null;
+    try {
+      const json = (await res.json()) as { messageId?: unknown } | null;
+      if (json && typeof json.messageId === "string" && json.messageId.length > 0) messageId = json.messageId;
+    } catch {
+      // Sent, but no readable id: the loop guard falls back to the text hash.
+    }
+    return { ok: true, messageId };
   } catch (err) {
     console.error("[ghl] conversations/messages (SMS fallback) failed:", err instanceof Error ? err.name : "unknown");
     return { ok: false, status: null };

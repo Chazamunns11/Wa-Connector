@@ -10,9 +10,11 @@
  *   `{ showReactions?, showDeletes?, smsFallback? }` write the ones given (booleans only)
  *
  * Every answer is `{ ok: true, showReactions, showDeletes, smsFallback,
- * smsFallbackBlocked }`. `smsFallbackBlocked` is true once the loop guard
- * switched the fallback off (this sub-account's SMS goes through PingWren);
- * `smsFallback` then reads false, and switching it on again clears the block.
+ * smsFallbackBlocked, smsFallbackAvailable }`. `smsFallbackBlocked` is true
+ * once the loop guard switched the fallback off (this sub-account's SMS goes
+ * through PingWren); `smsFallback` then reads false, and switching it on again
+ * clears the block. `smsFallbackAvailable` is the global
+ * `GHL_SMS_FALLBACK_ENABLED` switch: while it is off the UI hides the toggle.
  * DELIBERATELY ZERO NEXT IMPORTS. No tenant id is read or returned.
  */
 import type { GhlRepository } from "@/lib/data";

@@ -631,9 +631,11 @@ sub-account's. Apply migration 0014 first (0001 to 0014 apply on Postgres 16).
   turns it off.
 - It falls back where PingWren learns the contact isn't on WhatsApp: the
   status drain, and a send refused at once by the 30-day memory. Once per
-  message. Text only: attachments are not sent; a message with no text gets
-  no SMS. Group sends never fall back. A contact who sent STOP gets nothing,
-  and no trigger.
+  message, and at most one fallback SMS per contact per 10 minutes (a second
+  message in that window fires the trigger instead). Text only: attachments
+  and their links are not sent; a message with no text gets no SMS. Group
+  sends never fall back. A contact who sent STOP gets nothing, and no trigger,
+  whether or not the fallback is on.
 - When the SMS was sent, GHL shows the original as failed with `Not on
   WhatsApp — sent as SMS instead`, and the `whatsapp_not_on_whatsapp` trigger
   is not fired (so a workflow doesn't send a second SMS). When it wasn't sent,
@@ -641,19 +643,25 @@ sub-account's. Apply migration 0014 first (0001 to 0014 apply on Postgres 16).
   as before.
 - **Loop guard.** PingWren may be the sub-account's own SMS provider, so GHL
   may hand our SMS straight back to PingWren. Before each SMS, PingWren
-  records a pending echo (sub-account, contact, sha256 of the text, never the
-  text) for 10 minutes. If that message comes back through the provider
-  webhook, it is refused with `This sub-account sends SMS through PingWren, so
+  records a pending echo for 10 minutes: sub-account, contact, the original
+  message, the sha256 of the normalised text (never the text) and, once GHL's
+  send answers, GHL's message id. The webhook matches on that id when it is
+  known, else on the hash. The hourly cron purges expired echoes. If our SMS
+  comes back through the provider webhook, it is refused with `This sub-account sends SMS through PingWren, so
   the SMS fallback can't be used — not sent`, never sent over WhatsApp, and
   the fallback is turned off for that sub-account
   (`ghl_accounts.sms_fallback_blocked_at`). The embed then says "Turned off:
   this sub-account's SMS goes through PingWren. Connect another SMS provider
   (LC Phone or Twilio) in GHL, then switch it back on." Switching it back on
-  clears the block.
-- **Known limit.** If a coach sends the same text to the same contact by hand
-  within 10 minutes of a fallback SMS, it is treated as the echo: refused, and
-  the fallback switches off for that sub-account. Accepted risk; switch it
-  back on in the embed.
+  clears the block. The original message is corrected: GHL is told
+  `recipient has no WhatsApp account` (if it wasn't reported yet) and the
+  `whatsapp_not_on_whatsapp` trigger fires for it. An echo the guard misses
+  costs one hop, never a loop (the 10-minute cooldown stops a second SMS).
+- **Known limit.** Until GHL's send has answered with a message id, the guard
+  matches on the text. If a coach sends the same text to the same contact by
+  hand in that window (within 10 minutes of a fallback SMS whose send gave no
+  id), it is treated as the echo: refused, and the fallback switches off for
+  that sub-account. Accepted risk; switch it back on in the embed.
 
 ---
 

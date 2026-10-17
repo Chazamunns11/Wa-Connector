@@ -144,6 +144,14 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] pending-text cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
+  // SMS fallback echoes live 10 minutes; drop the expired ones.
+  try {
+    const purgedEchoes = await repo.purgeExpiredSmsFallbackEchoes(new Date().toISOString());
+    if (purgedEchoes > 0) console.log(`[cron/drain] purged ${purgedEchoes} expired SMS fallback echo row(s).`);
+  } catch (err) {
+    console.error("[cron/drain] SMS fallback echo purge failed (non-fatal):", err instanceof Error ? err.name : "error");
+  }
+
   let whatsappInboundPurged = 0;
   try {
     const cutoffIso = new Date(now - WHATSAPP_INBOUND_RETENTION_MS).toISOString();

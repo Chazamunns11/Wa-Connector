@@ -23,6 +23,7 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  SmsFallbackEcho,
   LocationNumber,
   LocationStats,
   Role,
@@ -850,22 +851,35 @@ export interface GhlRepository {
   /** Clears the not-on-WhatsApp memory for (location, phone); a no-op when absent. */
   forgetNotOnWhatsapp(locationId: string, phoneE164: string): Promise<void>;
   /**
-   * SMS fallback B (0014) — records a pending echo of a fallback SMS about to
-   * be sent: (location, contact, sha256 of the text), valid until
-   * `expiresIso`. Stores only the hash. Replaces an existing echo for the same
-   * key, and drops this location's expired echoes.
+   * SMS fallback B (0014) — the pending echo, and the cooldown: at most one
+   * fallback SMS per (location, contact) per 10 minutes. Clears this contact's
+   * expired echo, then inserts unless an unexpired one exists. True when
+   * inserted (the SMS may go); false means skip it. Stores only the hash.
    */
-  recordSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, expiresIso: string): Promise<void>;
-  /** Deletes a matching echo unexpired at `nowIso`; true when there was one (the loop guard's check). */
-  consumeSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, nowIso: string): Promise<boolean>;
+  recordSmsFallbackEcho(
+    echo: { locationId: string; contactId: string; textSha256: string; outboundMessageId: string; expiresIso: string },
+    nowIso: string
+  ): Promise<boolean>;
+  /** Stamps GHL's message id (from the send's response) on the echo of that outbound row. */
+  setSmsFallbackEchoMessageId(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string): Promise<void>;
+  /** The contact's echo unexpired at `nowIso`, or null. */
+  findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string): Promise<SmsFallbackEcho | null>;
+  /** Deletes the contact's echo if it is still the one for `outboundMessageId`; true when it did. */
+  deleteSmsFallbackEcho(locationId: string, contactId: string, outboundMessageId: string): Promise<boolean>;
+  /** Deletes every echo expired at `nowIso` (the hourly cron); returns how many. */
+  purgeExpiredSmsFallbackEchoes(nowIso: string): Promise<number>;
   /** Stamps `ghl_accounts.sms_fallback_blocked_at` (first time only) for this sub-account; it then never falls back. */
   blockSmsFallback(locationId: string): Promise<void>;
   /** The sub-account's SMS fallback switch. Switching it on also clears `sms_fallback_blocked_at`. The caller confirms the row exists first. */
   setSmsFallbackEnabled(locationId: string, enabled: boolean): Promise<void>;
-  /** Once per message: claims the row's fallback SMS while it is unclaimed and unreported; true when this call won. */
+  /** Once per message: claims the row's fallback SMS (stamping `sms_fallback_claimed_at`) while it is unclaimed and unreported; true when this call won. */
   claimSmsFallback(id: string): Promise<boolean>;
-  /** Stores the outcome of a claimed row's fallback SMS. */
+  /** Stores the outcome of a claimed row's fallback SMS (only while it is still `claimed`). */
   setSmsFallbackResult(id: string, result: "sent" | "failed"): Promise<void>;
+  /** The loop guard's correction: a `claimed` or `sent` row becomes `failed` (its SMS came back through PingWren). */
+  failSmsFallback(id: string): Promise<void>;
+  /** One outbound row by id, or null. */
+  getGhlOutboundMessage(id: string): Promise<GhlOutboundMessage | null>;
   /**
    * Compare-and-set of a number's connection-trigger state: applies only while the
    * stored `lastFired` still equals `expectedLastFired` (null-safe). Returns whether
