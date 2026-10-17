@@ -15,6 +15,7 @@ Order of work from the design spec (`docs/superpowers/specs/2026-10-12-brand-wha
 | Public status page | `src/app/status/page.tsx`, `src/lib/public-status.ts` | No customer data, 60s cache |
 | B. Several numbers per sub-account | Built on branch `claude/eloquent-mccarthy-m60n6c`. Plan: `docs/superpowers/plans/2026-10-17-multiple-numbers-and-groups.md` | Migration `0006`. Up to 3 numbers by slot, default plus sticky sending number |
 | E. Groups | Built on the same branch, same plan | Migrations `0007` and `0008`. Opt-in groups, 5 cap units per send. Apply 0005 to 0008 before deploying |
+| H. Missed-call logging (item 5) and read receipts (item 8) | Built without triggers on the same branch. Spec: `docs/superpowers/specs/2026-10-17-calls-receipts-fallback-ai-design.md`. Plan: `docs/superpowers/plans/2026-10-17-missed-calls-and-read-receipts.md` | Migration `0010`. Three flags, all off. Pending the checks in `docs/superpowers/specs/2026-10-17-calls-receipts-real-device-check.md` |
 | E2. Group creation and management | Built on the same branch. Spec: `docs/superpowers/specs/2026-10-17-group-creation-and-management-design.md`. Plan: `docs/superpowers/plans/2026-10-17-group-management.md` | Migration `0009`. Create, invite, rename, settings, members, invite link, leave. Pending the sandbox script on a spare number and the live GHL checks in `docs/GO-LIVE-FOUNDATION.md` |
 
 ## Specs written (17 Oct, drafts for review)
@@ -65,7 +66,7 @@ Order of work from the design spec (`docs/superpowers/specs/2026-10-12-brand-wha
 
 ### G. Later
 - **SMS fallback** for contacts not on WhatsApp: the bridge already reports "not on WhatsApp" (`recordNotOnWhatsapp`). A GHL workflow can branch on that once D exists, so build D first and document the recipe rather than building a gateway.
-- **Missed-call text-back:** Baileys sees call offers (`call` events). A "Missed WhatsApp call" trigger fits D.
+- **Missed-call text-back:** Baileys sees call offers (`call` events). Logging the missed call into GHL is built (item 5, without triggers, pending the real-device check). A "Missed WhatsApp call" trigger fits D and is still to do.
 - **AI replies:** go through GHL's own AI agents (which act on Conversations already), not a bespoke bot.
 - **Official API upgrade path:** Coexistence is now available in the UK and EU (Meta changelog). For a risk-averse client, the honest answer may be GHL's native WhatsApp, not a second PingWren product.
 

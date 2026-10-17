@@ -91,8 +91,10 @@ only observes: it never answers or rejects a call.
 
 - **Flag:** `WA_MISSED_CALLS_ENABLED` (default `false`). Apply migration
   `0010_missed_calls_and_receipts.sql` first.
-- A call is missed when it ends (`timeout`, `reject`, `terminate`) with no
-  `accept` from any device. Group calls and calls from the number itself are
+- A call is missed only if the bridge saw the ring (`offer`) for it and it then
+  ends (`timeout`, `reject`, `terminate`) with no `accept` from any device. A
+  call that rang while the bridge was restarting, or one answered and longer
+  than 10 minutes, is never logged as missed. Group calls and calls from the number itself are
   ignored.
 - The caller is resolved like a message sender (phone JID, or a LID that
   the session's LID mapping resolves); unresolvable callers are dropped.
@@ -114,6 +116,7 @@ events.
 - An ack that arrives before the ledger row has its WhatsApp message id is held
   in memory for 60 seconds (at most 1,000 entries) and applied once the send is
   recorded.
+- The app reports `read` to GHL only when `GHL_READ_RECEIPTS_ENABLED=true` is set on the app (Vercel). Leave both flags off until the real-device check passes.
 - The absence of a read receipt means nothing: people turn read receipts off.
 - Logs carry fixed strings and error names only: no message ids or JIDs.
 

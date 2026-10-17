@@ -8,10 +8,10 @@
 | 2 | Create and manage groups | `2026-10-17-group-creation-and-management-design.md` |
 | 3 | WhatsApp triggers in workflows | `2026-10-17-ghl-workflow-triggers-actions-design.md` |
 | 4 | Edits, quoted replies, reactions | `2026-10-17-voice-notes-and-message-events-design.md` |
-| 5 | Missed-call text-back | this file |
+| 5 | Missed-call text-back | this file. Logging built without triggers, pending the real-device check |
 | 6 | SMS fallback | this file |
 | 7 | AI replies | this file |
-| 8 | Read receipts | this file |
+| 8 | Read receipts | this file. Built without triggers, pending the real-device check |
 
 Items 5, 6 and 8 lean on item 3 (custom triggers). Each section says what works without it.
 
@@ -64,9 +64,13 @@ Items 5, 6 and 8 lean on item 3 (custom triggers). Each section says what works 
 - `whatsapp_messages` gains `delivered_at` and `read_at`, set once and never moved backwards.
 - The app's outbound status drain already reports to GHL. It adds `delivered`, then `read`, through GHL's message status update, if GHL's provider status API accepts those values (the drain uses it today for `delivered` and `failed`; confirm `read` in the sandbox).
 - With item 3: a `whatsapp_message_read` trigger carrying `contactId` and `messageId`, for "read, no reply" workflows.
-- Group messages: no per-member read tracking (too noisy). Only "delivered" for groups.
+- Group messages: no receipts at all. Baileys sends group receipts through a different event, and per-member read tracking would be noisy anyway.
 
 **Privacy.** If the contact has read receipts turned off on WhatsApp, we get no read ack. The UI never claims "not read", only "delivered".
+
+## Build status (17 Oct)
+
+Items 5 (missed-call logging) and 8 (read receipts) are built without triggers, behind flags that are off by default. They stay off until the checks in `2026-10-17-calls-receipts-real-device-check.md` pass. Plan: `docs/superpowers/plans/2026-10-17-missed-calls-and-read-receipts.md`.
 
 ## Build order
 

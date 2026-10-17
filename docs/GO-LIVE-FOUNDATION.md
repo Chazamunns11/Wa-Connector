@@ -74,15 +74,19 @@ two are filled in a second pass once both domains exist. That is expected.
    (`0002_accounts.sql`, `0003_activation_cap.sql`, `0004_reliability.sql`,
    `0005_whatsapp_sessions_phone_linked_at.sql`, `0006_ghl_location_numbers.sql`,
    `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`,
-   `0009_group_management.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
+   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
    every logout, so 0005 must be applied before the bridge is deployed.
-   Likewise apply 0001 to 0009 in order before deploying the bridge and the
+   Likewise apply 0001 to 0010 in order before deploying the bridge and the
    app: 0002 to 0004 add accounts, activation and held messages / STOP
    opt-outs (see `docs/GO-LIVE-ACCOUNTS.md`), 0006 the several-numbers
    tables, 0007 the group tables, 0008 the `whatsapp_messages.group_jid`
    column the bridge and app now use, and 0009 the group action log and the
-   per-account invite message used by group create and manage.
-   The app build must not go live before 0006 to 0009 are applied. Without
+   per-account invite message used by group create and manage, and 0010 the
+   missed-call and read-receipt columns plus the SQL function
+   `ghl_outbound_awaiting_read` (service_role only). The bridge and app flags
+   that use 0010 are off by default; see "Missed calls and read receipts" in
+   Part 5.
+   The app build must not go live before 0006 to 0010 are applied. Without
    them every GHL outbound message fails before it is recorded, the GHL
    inbound drain fails on every pass (no replies reach GHL), and a GHL
    install (OAuth) errors after it has already written the account. The
@@ -487,6 +491,19 @@ Do them after migration 0009 is applied and before a coach uses the feature.
 
 ---
 
+### Missed calls and read receipts: checks before go-live
+
+Apply migration 0010 first. Three flags, all off by default:
+
+- `WA_MISSED_CALLS_ENABLED` (Railway, bridge)
+- `WA_READ_RECEIPTS_ENABLED` (Railway, bridge)
+- `GHL_READ_RECEIPTS_ENABLED` (Vercel, app)
+
+Leave them off until the checks in
+`docs/superpowers/specs/2026-10-17-calls-receipts-real-device-check.md` pass.
+Turn on the bridge flags first, then the app flag, and only if GHL accepted
+`read` in the sandbox.
+
 ## Part 6 — Moving a sub-account from the FitClosers app to this one
 
 The same phone number must never be linked to both bridges at once; two
@@ -533,12 +550,13 @@ live sessions fight over one WhatsApp account.
 | `GHL_SSO_SHARED_SECRET` | Yes for the Custom Page | unset (embed off) | Decrypts GHL's SSO payload |
 | `GHL_EMBED_FRAME_ANCESTORS` | No | unset (GHL's own hosts only) | Extra `frame-ancestors` origins for whitelabel domains |
 | `GHL_SYNC_DND` | No | `false` | Exactly `true` mirrors STOP/START onto the GHL contact's WhatsApp and SMS DND (`PUT /contacts/{id}` `dndSettings`; verify at first go-live). Failures are logged and never block the opt-out |
+| `GHL_READ_RECEIPTS_ENABLED` | No | `false` | Exactly `true` lets the cron report `read` to GHL for messages the bridge saw read. Turn on only after the real-device check |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Supabase Storage bucket for inbound media; must match the bridge |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | Web-app side media switch; see the flip order below |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | Lifetime of signed media URLs |
 | `NODE_ENV` | Set by Vercel | n/a | Not an operator setting |
 
-That is 22 foundation names (the `BRAND_*` website variables above are extra): 21 from `src/` (including `NODE_ENV`) plus
+That is 23 foundation names (the `BRAND_*` website variables above are extra): 22 from `src/` (including `NODE_ENV`) plus
 `GHL_EMBED_FRAME_ANCESTORS` from `next.config.ts`.
 
 **Media switches, flip order.** Both media features default off and stay off
@@ -588,9 +606,11 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_INBOUND_MEDIA_PER_SENDER_DAILY` | No | `20` | Inbound media per sender per tenant per day |
 | `WA_INBOUND_MEDIA_PER_TENANT_DAILY` | No | `300` | Inbound media per tenant per day |
 | `WA_VOICE_TRANSCODE_ENABLED` | No | `false` | Send non-opus GHL audio as voice notes via ffmpeg. Turn on only after `ffmpeg -version` works in a Railway shell; see the bridge README, "Voice notes" |
+| `WA_MISSED_CALLS_ENABLED` | No | `false` | Log calls that ring out unanswered as missed-call messages. Off until the real-device check passes |
+| `WA_READ_RECEIPTS_ENABLED` | No | `false` | Record delivered and read times for one-to-one messages. Off until the real-device check passes |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Storage bucket for inbound media |
 
-That is 32 variables, all read in `config.ts`.
+That is 34 variables, all read in `config.ts`.
 
 ---
 

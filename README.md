@@ -98,9 +98,14 @@ route, switched on `action`) and `/api/crm/embed/groups/invite-template`.
 - Run `services/whatsapp-bridge/scripts/group-sandbox.ts` on a spare number
   before go-live.
 
-Apply migrations `0006` to `0009` (in order, after `0001` to `0005`) before
+Apply migrations `0006` to `0010` (in order, after `0001` to `0005`) before
 deploying the new bridge and app. `0009` adds the group action log and the
-invite message column; the group create and manage screens need it. The app build must not go live before
+invite message column; the group create and manage screens need it. `0010`
+adds missed-call and read-receipt columns and the SQL function
+`ghl_outbound_awaiting_read` (service_role only). Its three flags
+(`WA_MISSED_CALLS_ENABLED`, `WA_READ_RECEIPTS_ENABLED`,
+`GHL_READ_RECEIPTS_ENABLED`) default to off and stay off until the checks in
+`docs/superpowers/specs/2026-10-17-calls-receipts-real-device-check.md` pass. The app build must not go live before
 them: without them every GHL outbound message fails before it is recorded,
 the inbound drain fails on every pass, and a GHL install (OAuth) errors after
 it has already written the account. The bridge tolerates running before

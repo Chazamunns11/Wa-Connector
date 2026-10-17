@@ -18,7 +18,7 @@
 - A missed call goes through the same sender resolution as messages (PN, or a LID that `lidMapping.getPNForLID` resolves). Unresolvable callers are dropped.
 - One missed-call row per (number, caller) per 10 minutes.
 - `delivered_at` and `read_at` are set once and never move backwards. Setting `read_at` also sets `delivered_at` if it is null.
-- Group messages get no read tracking. Only `delivered_at` is set for them.
+- Receipts are tracked for one-to-one messages only. Group messages record no receipts (Baileys sends group receipts through a different event).
 - The UI and GHL never claim "not read". Absence of a read ack means nothing.
 - Flags, all default **off**: bridge `WA_MISSED_CALLS_ENABLED`, bridge `WA_READ_RECEIPTS_ENABLED`, app `GHL_READ_RECEIPTS_ENABLED`. They stay off until the real-device / sandbox checks in Task 6 pass.
 - App-originated rows (`isAppOriginatedMessageId`) never PUT a status to GHL, `read` included.
@@ -181,3 +181,10 @@
   - A contact with read receipts turned off → delivered only.
 - [ ] **Step 2:** Document migration 0010, the flags and their defaults, and that the flags stay off until the checklist passes.
 - [ ] **Step 3: Run** `npm run check`. **Commit** `docs: missed calls and read receipts`.
+
+## Decisions during the build
+
+- Receipts are tracked for one-to-one messages only. Group messages record no receipts, because Baileys sends group receipts through a different event.
+- A call counts as missed only if the bridge saw the ring (`offer`) for it. A call ringing during a bridge restart, or one answered and longer than 10 minutes, is never logged as missed.
+- Migration 0010 also holds the SQL function `ghl_outbound_awaiting_read` (service_role only). Migrations 0001 to 0010 were all applied successfully to a local Postgres 16.
+- A 401 from GHL on a read status is retried. Other 4xx responses are final ("GHL refused read status").
