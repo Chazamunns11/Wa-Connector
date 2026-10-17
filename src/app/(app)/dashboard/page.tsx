@@ -8,14 +8,14 @@ import { Container } from "@/components/site/Container";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { getAccountDataSource } from "@/lib/account-data";
 import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
-import { headline, needsAttention, planStatus } from "@/lib/account-data/derive";
+import { fleetSummary, headline, needsAttention, planStatus } from "@/lib/account-data/derive";
 import { panelSummaryFromRow } from "@/lib/account-data/map";
 import { isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { billingHref, DASHBOARD_RESULT_COPY, dashboardHref, parseFilter, parseResult } from "@/lib/site/dashboard-url";
 
-import { buttonClasses } from "@/components/ui/Button";
+import { siteButton } from "@/components/site/button";
 import { endTrialNowAction, startCheckoutAction } from "./billing/actions";
 
 // Session-gated (requireAccountSession reads cookies): never prerendered.
@@ -71,68 +71,75 @@ export default async function DashboardPage({
       : undefined,
   };
 
-  const attentionCount = rows.filter((r) => needsAttention(r) !== null).length;
+  const summary = fleetSummary(rows);
+  const attentionCount = summary.attention;
   const visible = filter === "attention" ? rows.filter((r) => needsAttention(r) !== null) : rows;
 
   return (
-    <Container className="py-8 md:py-12">
-      <PlanHeader
-        accountName={account.name}
-        status={planStatus(account, now)}
-        headline={headline(rows)}
-        hasLocations={rows.length > 0}
-        billingHref={billingHref()}
-        pendingCheckoutAction={account.billingStatus === "pending" ? startCheckoutAction : undefined}
-      />
-
-      {result ? (
-        <p role="status" className="mt-4 rounded-lg border border-info/30 bg-info-soft p-3 font-medium text-ink">
-          {result === "link" && !connectUrl ? DASHBOARD_RESULT_COPY.link_unavailable : DASHBOARD_RESULT_COPY[result]}
-          {result === "trial_cap" && account.billingStatus === "trialing" ? (
-            <form action={endTrialNowAction} className="mt-3">
-              <button type="submit" className={buttonClasses("primary", "md", "min-h-11 px-5")}>
-                Start my paid plan now
-              </button>
-            </form>
-          ) : null}
-        </p>
-      ) : null}
-      <GhlResultNotice
-        reason={first(params.ghl)}
-        installed={count(params.installed)}
-        failed={count(params.failed)}
-        conflicts={count(params.conflicts)}
-      />
-
-      <section aria-labelledby="subaccounts" className="mt-8">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h2 id="subaccounts" className="font-display text-2xl">
-            Sub-accounts
-          </h2>
-          <AttentionFilter filter={filter} total={rows.length} attention={attentionCount} />
-        </div>
-        <div className="mt-4">
-          {rows.length === 0 ? (
-            <EmptyState
-              title="No sub-accounts yet"
-              description="Connect GoHighLevel to see your sub-accounts here."
-            />
-          ) : visible.length === 0 ? (
-            <EmptyState
-              title="Nothing needs attention"
-              description="Every active number is connected and sending."
-              action={
-                <a href={dashboardHref()} className="text-accent-text underline underline-offset-2">
-                  Show all sub-accounts
-                </a>
-              }
-            />
-          ) : (
-            <LocationTable rows={visible} filter={filter} {...rowExtras} />
-          )}
-        </div>
+    <>
+      <section className="surface-dark pb-[clamp(40px,5vw,64px)] pt-8 md:pt-12">
+        <Container>
+          <PlanHeader
+            accountName={account.name}
+            status={planStatus(account, now)}
+            headline={headline(rows)}
+            hasLocations={rows.length > 0}
+            billingHref={billingHref()}
+            summary={summary}
+            pendingCheckoutAction={account.billingStatus === "pending" ? startCheckoutAction : undefined}
+          />
+        </Container>
       </section>
 
-    </Container>
+      <Container className="py-10 md:py-14">
+        {result ? (
+          <p role="status" className="mb-6 rounded-[12px] border-2 border-info bg-info-soft p-4 font-medium text-ink">
+            {result === "link" && !connectUrl ? DASHBOARD_RESULT_COPY.link_unavailable : DASHBOARD_RESULT_COPY[result]}
+            {result === "trial_cap" && account.billingStatus === "trialing" ? (
+              <form action={endTrialNowAction} className="mt-3">
+                <button type="submit" className={siteButton("ink")}>
+                  Start my paid plan now
+                </button>
+              </form>
+            ) : null}
+          </p>
+        ) : null}
+        <GhlResultNotice
+          reason={first(params.ghl)}
+          installed={count(params.installed)}
+          failed={count(params.failed)}
+          conflicts={count(params.conflicts)}
+        />
+
+        <section aria-labelledby="subaccounts">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <h2 id="subaccounts" className="h-section font-display">
+              Sub-accounts
+            </h2>
+            <AttentionFilter filter={filter} total={rows.length} attention={attentionCount} />
+          </div>
+          <div className="mt-6">
+            {rows.length === 0 ? (
+              <EmptyState
+                title="No sub-accounts yet"
+                description="Connect GoHighLevel to see your sub-accounts here."
+              />
+            ) : visible.length === 0 ? (
+              <EmptyState
+                title="Nothing needs attention"
+                description="Every active number is connected and sending."
+                action={
+                  <a href={dashboardHref()} className="font-semibold underline underline-offset-2">
+                    Show all sub-accounts
+                  </a>
+                }
+              />
+            ) : (
+              <LocationTable rows={visible} filter={filter} open={first(params.open)} {...rowExtras} />
+            )}
+          </div>
+        </section>
+      </Container>
+    </>
   );
 }

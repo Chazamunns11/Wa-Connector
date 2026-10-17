@@ -26,3 +26,8 @@ test("every result has fixed copy and parseResult rejects unknown values", () =>
   assert.equal(parseResult(undefined), null);
   assert.equal(parseResult(["activated", "link"]), "activated");
 });
+
+test("dashboardHref: an open row keeps the filter and anchors to the row", () => {
+  assert.equal(dashboardHref({ open: "loc_1" }), "/dashboard?open=loc_1#row-loc_1");
+  assert.equal(dashboardHref({ filter: "attention", open: "loc_1" }), "/dashboard?filter=attention&open=loc_1#row-loc_1");
+});

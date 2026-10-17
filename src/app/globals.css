@@ -1505,3 +1505,75 @@ h3 {
     line-height: 1.4;
   }
 }
+
+/* ---- dashboard ---- */
+/* The row's details toggle: a small pill in the row's last column, the same width on every row
+   so the columns line up with the header. */
+.row-toggle {
+  display: inline-flex;
+  min-height: 44px;
+  min-width: 5.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px solid var(--color-outline);
+  border-radius: 999px;
+  padding-inline: 14px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-ink);
+  background: var(--color-card);
+}
+
+.row-toggle:hover {
+  background: var(--color-raised);
+}
+
+.row-toggle[aria-expanded="true"] {
+  background: var(--color-ink);
+  color: var(--color-card);
+}
+
+/* The cap bar from 90%: amber, brighter than the warn text colour (a bar, not text; the words beside it carry the meaning). */
+.bg-cap-near {
+  background-color: #E8940A;
+}
+
+.row-detail:not([hidden]) {
+  background: var(--color-well);
+  border-top: 1px solid var(--color-border);
+  padding-top: 20px;
+}
+
+/* The at-a-glance figures in the Ink band: real counts, one rule above each. */
+.fleet {
+  display: grid;
+  gap: 20px 32px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (min-width: 768px) {
+  .fleet {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.fleet-item {
+  border-top: 2px solid var(--color-rule);
+  padding-top: 12px;
+}
+
+.fleet-figure {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
