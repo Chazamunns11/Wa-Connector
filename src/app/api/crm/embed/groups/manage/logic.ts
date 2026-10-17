@@ -32,6 +32,8 @@
  * tenant ids.
  */
 import type { GhlRepository } from "@/lib/data";
+import { requestedSlotFromBody } from "@/app/api/crm/embed/guard";
+import type { SlotParseResult } from "@/lib/location-numbers";
 import type { GhlAccount } from "@/lib/types";
 import type { addGhlOutboundMessage, searchGhlContacts } from "@/lib/ghl";
 import { GHL_GROUP_CONTACT_TAG } from "@/lib/ghl";
@@ -103,6 +105,8 @@ const MAX_TAG = 100;
 const MAX_SEARCH_TEXT = 100;
 /** The bridge's own per-request limit for member changes. */
 const MAX_MEMBER_IDS = 50;
+/** The bridge accepts at most this many fallback first-member candidates on a create. */
+const MAX_CREATE_FALLBACK_CANDIDATES = 50;
 const SEARCH_LIMIT = 25;
 const SEARCH_CHECK_CONCURRENCY = 5;
 const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
@@ -302,10 +306,26 @@ async function handleCreate(repo: GroupManageRepo, deps: GroupManageDeps, ctx: G
     name,
     ...(description !== undefined ? { description } : {}),
     // Fallback candidates for the first member, used only if WhatsApp refuses an empty group.
-    participants: audience.invitees.slice(0, MAX_MEMBER_IDS).map((i) => i.phone),
+    participants: audience.invitees.slice(0, MAX_CREATE_FALLBACK_CANDIDATES).map((i) => i.phone),
   });
   if (!created.ok) return bridgeFailure(created, true);
   const group = { jid: created.jid, name: created.name };
+
+  // A replay: the bridge answers a repeated requestId with the first outcome,
+  // and that first request already recorded the group and sent its invites.
+  // Never invite twice; the coach uses Invite to add anyone missed.
+  let alreadyRecorded = false;
+  try {
+    alreadyRecorded = (await repo.listWhatsappGroups(ctx.tenantId)).some((g) => g.groupJid === group.jid && g.createdByUs);
+  } catch (err) {
+    console.error(`${LOG} couldn't check for a replayed create:`, errName(err));
+  }
+  if (alreadyRecorded) {
+    return {
+      status: 200,
+      body: { ok: true, group: { jid: group.jid, name: group.name }, invites: invitesView(EMPTY_SEND, [], [], false), replayed: true },
+    };
+  }
 
   // The group exists on WhatsApp now: a failed record or reload is logged, never a failed create.
   let recorded = false;
@@ -374,7 +394,8 @@ type GroupAction = "detail" | "update" | "participants" | "invite_link" | "invit
 async function findManagedGroup(repo: GroupManageRepo, tenantId: string, rawJid: unknown): Promise<{ jid: string; name: string } | GroupManageResult> {
   if (typeof rawJid !== "string" || !isWhatsappGroupJid(rawJid)) return malformed();
   const row = (await repo.listWhatsappGroups(tenantId)).find((g) => g.groupJid === rawJid);
-  if (!row || !row.enabled) return unknownGroup();
+  // Only a synced group this number is still in: not stored, switched off, or left is unknown.
+  if (!row || !row.enabled || row.leftAt !== null) return unknownGroup();
   return { jid: row.groupJid, name: row.name };
 }
 
@@ -508,6 +529,16 @@ async function handleGroupAction(
 }
 
 const GROUP_ACTIONS: readonly string[] = ["detail", "update", "participants", "invite_link", "invite_reset", "leave", "invite"];
+
+/**
+ * The slot the guard resolves for this route. A malformed or oversized body
+ * (`null` from `readSmallJsonBody`) is guarded as slot 1 so the caller still
+ * has to prove a valid token, and then gets 400 `invalid_body` from
+ * `decideGroupManageRequest` rather than the guard's `invalid_slot`.
+ */
+export function manageSlotFromBody(body: Record<string, unknown> | null): SlotParseResult {
+  return requestedSlotFromBody(body ?? {});
+}
 
 /** The whole route, for one already-authorised number. Never echoes a tenant id. `null` body is `readSmallJsonBody`'s malformed body. */
 export async function decideGroupManageRequest(

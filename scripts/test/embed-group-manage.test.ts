@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 
 import {
   decideGroupManageRequest,
+  manageSlotFromBody,
   MSG_LAST_ADMIN,
   MSG_NO_RESPONSE,
   MSG_OFFLINE,
@@ -77,7 +78,8 @@ type Over = Partial<GroupManageDeps> & { groups?: WhatsappGroup[]; recordThrows?
 
 function fakes(over: Over = {}) {
   const calls: string[] = [];
-  const groups = (over.groups ?? [row(TENANT, GROUP), row(OTHER_TENANT, OTHER_GROUP)]).map((g) => ({ ...g }));
+  // GROUP is stored as a synced group this app did not create, so a create returning GROUP is not a replay.
+  const groups = (over.groups ?? [row(TENANT, GROUP, { createdByUs: false }), row(OTHER_TENANT, OTHER_GROUP)]).map((g) => ({ ...g }));
   const posts: { contactId: string; message: string; conversationProviderId: string }[] = [];
   const sendInputs: { invitees: Invitee[]; coachName: string; tenantId: string; directAdd: boolean }[] = [];
   const repo: GroupManageRepo = {
@@ -294,6 +296,37 @@ test("create: offline is 409 with the fixed string; an unknown failure is 502 wi
     assert.equal(result.status, 400);
     assert.equal((result.body as { code: string }).code, "too_many");
   }
+});
+
+test("create: a replayed create (same requestId, same jid from the bridge) never re-sends invites or re-posts to GHL", async () => {
+  const accepted: SendGroupInvitesResult = { ...NO_SEND, sent: 1, delivered: [{ contactId: "c-b", text: "t", outcome: "accepted" }] };
+  let sends = 0;
+  // Only the new group is pre-seeded elsewhere; start with no stored row for it.
+  const { repo, deps, calls, posts } = fakes({
+    groups: [row(OTHER_TENANT, OTHER_GROUP)],
+    sendInvites: async () => {
+      sends += 1;
+      return accepted;
+    },
+  });
+  const body = createBody({ contactIds: ["c-a", "c-b"] });
+  const first = await decideGroupManageRequest(repo, deps, CTX, body);
+  const second = await decideGroupManageRequest(repo, deps, CTX, body);
+  assert.equal(first.status, 200);
+  assert.ok(!("replayed" in first.body));
+  assert.equal(sends, 1);
+  assert.equal(posts.length, 1);
+  assert.equal(calls.filter((c) => c.startsWith("record:")).length, 1);
+  assert.deepEqual(second, {
+    status: 200,
+    body: {
+      ok: true,
+      group: { jid: GROUP, name: "Spring Cohort" },
+      invites: { added: [], alreadyMember: [], sent: [], held: [], refused: [], skipped: [], truncated: false },
+      replayed: true,
+    },
+  });
+  assertNoTenantId(second, "replayed create");
 });
 
 test("create: a group created on WhatsApp but not recorded still answers ok with the group", async (t) => {
@@ -518,6 +551,34 @@ test("manage: a group not enabled on this number is 404 unknown_group and the br
       assert.deepEqual(bridgeTouched(calls), [], action);
     }
   }
+});
+
+test("manage: a group this number has left is 404 unknown_group and the bridge is never called", async () => {
+  for (const action of ["detail", "update", "participants", "invite_link", "invite_reset", "leave", "invite"]) {
+    const { repo, deps, calls } = fakes({ groups: [row(TENANT, GROUP, { leftAt: "2026-10-16T10:00:00Z" })] });
+    const result = await decideGroupManageRequest(repo, deps, CTX, {
+      action,
+      groupJid: GROUP,
+      name: "x",
+      change: "remove",
+      memberIds: [MEMBER],
+      contactIds: ["c-a"],
+    });
+    assert.deepEqual(result, { status: 404, body: { ok: false, code: "unknown_group", message: "That WhatsApp group wasn't found on this number." } }, action);
+    assert.deepEqual(bridgeTouched(calls), [], action);
+  }
+});
+
+test("manage: a malformed or oversized body (null) is guarded as slot 1 and answered 400 invalid_body, not invalid_slot", async () => {
+  assert.deepEqual(manageSlotFromBody(null), { ok: true, slot: 1 });
+  assert.deepEqual(manageSlotFromBody({ slot: 2 }), { ok: true, slot: 2 });
+  assert.deepEqual(manageSlotFromBody({ slot: 7 }), { ok: false });
+  const { repo, deps, calls } = fakes();
+  assert.deepEqual(await decideGroupManageRequest(repo, deps, CTX, null), {
+    status: 400,
+    body: { ok: false, code: "invalid_body", message: "Malformed request." },
+  });
+  assert.deepEqual(calls, []);
 });
 
 test("manage: a malformed groupJid is 400 and nothing is read", async () => {

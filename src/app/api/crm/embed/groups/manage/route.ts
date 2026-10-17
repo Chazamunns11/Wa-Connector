@@ -28,8 +28,8 @@ import { addGhlOutboundMessage, ghlConversationProviderId, searchGhlContacts } f
 import { defaultGhlProviderDeps, optedOutReason, resolveGhlAccessToken } from "@/lib/ghl-provider";
 import { defaultResolveInviteesDeps, defaultSendGroupInvitesDeps, resolveInvitees, sendGroupInvites } from "@/lib/group-invites";
 import { readSmallJsonBody } from "@/lib/bridge-panel-guard";
-import { authorizeGhlEmbedRequest, guardFailureResponseBody, requestedSlotFromBody } from "@/app/api/crm/embed/guard";
-import { decideGroupManageRequest, type GroupManageDeps } from "./logic";
+import { authorizeGhlEmbedRequest, guardFailureResponseBody } from "@/app/api/crm/embed/guard";
+import { decideGroupManageRequest, manageSlotFromBody, type GroupManageDeps } from "./logic";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +62,7 @@ function productionDeps(): GroupManageDeps {
 export async function POST(request: Request) {
   try {
     const body = await readSmallJsonBody(request, MAX_MANAGE_BODY_BYTES);
-    const auth = await authorizeGhlEmbedRequest(repo, request.headers.get("authorization"), requestedSlotFromBody(body));
+    const auth = await authorizeGhlEmbedRequest(repo, request.headers.get("authorization"), manageSlotFromBody(body));
     if (!auth.ok) {
       return NextResponse.json(guardFailureResponseBody(auth), { status: auth.status });
     }
