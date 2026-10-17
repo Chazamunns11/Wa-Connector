@@ -98,6 +98,8 @@ function makeHarness(opts: {
   enabledGroups?: string[];
   log?: ReturnType<typeof pino>;
 } = {}) {
+  /** whatsapp_groups rows the app has written (any enabled state), and whether that lookup fails. */
+  const groupRows = { jids: [] as string[], throws: false };
   const calls: Call[] = [];
   const actions: { action: GroupActionKind; count: number; groupJid: string | null }[] = [];
   let createThrowsLeft = opts.createThrows ?? 0;
@@ -111,6 +113,11 @@ function makeHarness(opts: {
       return (opts.inbound ?? []).includes(phone);
     },
     listEnabledGroupJids: async () => [],
+    existingGroupJids: async (_tenantId: string, jids: string[]) => {
+      calls.push({ method: "existingGroupJids", args: [jids] });
+      if (groupRows.throws) throw new Error("supabase down");
+      return jids.filter((j) => groupRows.jids.includes(j));
+    },
   };
   const record = (method: string) => async (...args: unknown[]) => {
     calls.push({ method, args });
@@ -189,9 +196,9 @@ function makeHarness(opts: {
   };
   (manager as unknown as { sessions: Map<string, unknown> }).sessions.set(TENANT, session);
   const called = (method: string) => calls.filter((c) => c.method === method);
-  const reads = new Set(["groupMetadata", "hasInboundFromPhone", "onWhatsApp", "groupInviteCode", "groupFetchAllParticipating"]);
+  const reads = new Set(["groupMetadata", "hasInboundFromPhone", "onWhatsApp", "groupInviteCode", "groupFetchAllParticipating", "existingGroupJids"]);
   const mutations = () => calls.filter((c) => !reads.has(c.method));
-  return { manager, session, calls, called, mutations, actions, pacer };
+  return { manager, session, calls, called, mutations, actions, pacer, groupRows };
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +357,67 @@ test("create: a just-created group stays enabled across a reconnect's reload, fo
   await load(h.session);
   assert.equal(h.session.enabledGroups.has(NEW_GROUP_JID), false, "no longer forced in after 10 minutes");
   assert.equal(h.session.recentlyCreated.size, 0, "the expired entry is pruned");
+});
+
+function loadOf(h: ReturnType<typeof makeHarness>) {
+  return (h.manager as unknown as { loadEnabledGroups: (s: unknown) => Promise<boolean> }).loadEnabledGroups.bind(h.manager);
+}
+
+test("create: no whatsapp_groups row yet -> a reload keeps the new group enabled", async () => {
+  const h = makeHarness();
+  await h.manager.createGroup(TENANT, { requestId: "req-00017", name: GROUP_NAME, participants: [] });
+  await loadOf(h)(h.session);
+  assert.ok(h.session.enabledGroups.has(NEW_GROUP_JID));
+  assert.deepEqual(h.called("existingGroupJids").map((c) => c.args), [[[NEW_GROUP_JID]]]);
+  assert.ok(h.session.recentlyCreated.has(NEW_GROUP_JID));
+});
+
+test("create: the app recorded it, then it was switched off -> a reload leaves it off, for good", async () => {
+  const h = makeHarness();
+  await h.manager.createGroup(TENANT, { requestId: "req-00018", name: GROUP_NAME, participants: [] });
+  h.groupRows.jids.push(NEW_GROUP_JID); // a row exists, but listEnabledGroupJids does not list it: disabled
+  await loadOf(h)(h.session);
+  assert.equal(h.session.enabledGroups.has(NEW_GROUP_JID), false);
+  assert.equal(h.session.recentlyCreated.has(NEW_GROUP_JID), false, "forgotten, so later loads don't ask again");
+});
+
+test("create: the row lookup fails -> not forced in (fail closed), the entry kept for the next load", async () => {
+  const h = makeHarness();
+  await h.manager.createGroup(TENANT, { requestId: "req-00019", name: GROUP_NAME, participants: [] });
+  h.groupRows.throws = true;
+  assert.equal(await loadOf(h)(h.session), true, "the enabled list itself loaded");
+  assert.equal(h.session.enabledGroups.has(NEW_GROUP_JID), false);
+  h.groupRows.throws = false;
+  await loadOf(h)(h.session);
+  assert.ok(h.session.enabledGroups.has(NEW_GROUP_JID));
+});
+
+test("store.existingGroupJids: tenant-scoped IN query; a malformed JID throws before Supabase; empty asks nothing", async () => {
+  const store = new BridgeStore(makeConfig());
+  const filters: unknown[][] = [];
+  const builder: Record<string, unknown> = {};
+  for (const method of ["select", "eq"]) {
+    builder[method] = (...args: unknown[]) => {
+      filters.push([method, ...args]);
+      return builder;
+    };
+  }
+  builder.in = async (...args: unknown[]) => {
+    filters.push(["in", ...args]);
+    return { data: [{ group_jid: NEW_GROUP_JID }], error: null };
+  };
+  (store as unknown as { supabase: unknown }).supabase = { from: (table: string) => (filters.push(["from", table]), builder) };
+  assert.deepEqual(await store.existingGroupJids(TENANT, [NEW_GROUP_JID, GROUP_JID]), [NEW_GROUP_JID]);
+  assert.deepEqual(filters, [
+    ["from", "whatsapp_groups"],
+    ["select", "group_jid"],
+    ["eq", "tenant_id", TENANT],
+    ["in", "group_jid", [NEW_GROUP_JID, GROUP_JID]],
+  ]);
+  filters.length = 0;
+  await assert.rejects(store.existingGroupJids(TENANT, [NEW_GROUP_JID, "abc@g.us"]));
+  assert.deepEqual(await store.existingGroupJids(TENANT, []), []);
+  assert.equal(filters.length, 0);
 });
 
 test("create: a create that throws on the fallback too is failed and replayed", async () => {

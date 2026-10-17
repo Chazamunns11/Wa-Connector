@@ -607,6 +607,26 @@ export class BridgeStore {
     return ((data ?? []) as { group_jid: string }[]).map((r) => r.group_jid).filter(isGroupJid);
   }
 
+  /**
+   * Which of `groupJids` already have a `whatsapp_groups` row for this
+   * tenant, enabled or not. Read-only. Lets the enabled-set load tell a
+   * just-created group the app has not recorded yet (no row: keep it on)
+   * from one the owner has since switched off (row, not enabled: keep it
+   * off). Every JID is checked with `isGroupJid` first; a malformed one
+   * throws before Supabase is touched.
+   */
+  async existingGroupJids(tenantId: string, groupJids: string[]): Promise<string[]> {
+    if (!groupJids.every(isGroupJid)) throw new Error("[store] existingGroupJids: refused a malformed group jid");
+    if (groupJids.length === 0) return [];
+    const { data, error } = await this.supabase
+      .from("whatsapp_groups")
+      .select("group_jid")
+      .eq("tenant_id", tenantId)
+      .in("group_jid", groupJids);
+    if (error) throw error;
+    return ((data ?? []) as { group_jid: string }[]).map((r) => r.group_jid);
+  }
+
   // -------------------------------------------------------------------------
   // whatsapp_group_actions (0009) — what each number has done to groups.
   // Holds no names, numbers or links: tenant, group JID, action, count.

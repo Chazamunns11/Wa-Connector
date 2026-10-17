@@ -275,17 +275,38 @@ async function findJustCreatedGroup(ctx: GroupOpContext, subject: string, err: u
 
 /**
  * The enabled set a load returned, plus every group this session created in
- * the last 10 minutes — the app records a new group and refreshes shortly
- * after the create, and a socket bounce or an older in-flight load before
- * that must not switch it off. Prunes expired entries.
+ * the last 10 minutes that the app has NOT recorded yet — the app records a
+ * new group and refreshes shortly after the create, and a socket bounce or
+ * an older in-flight load before that must not switch it off. A recent group
+ * that already has a `whatsapp_groups` row but is missing from the loaded
+ * list was switched off (or left) since: it is forgotten and stays off.
+ * Prunes expired entries. If the row lookup fails, nothing is forced in
+ * (fail closed) and `lookupFailed` is set; the entries are kept for the next load.
  */
-export function withRecentlyCreated(loaded: Iterable<string>, recentlyCreated: Map<string, number>, now: number): Set<string> {
-  const set = new Set(loaded);
+export async function withRecentlyCreated(
+  loaded: Iterable<string>,
+  recentlyCreated: Map<string, number>,
+  now: number,
+  existingGroupJids: (jids: string[]) => Promise<string[]>
+): Promise<{ enabled: Set<string>; lookupFailed: boolean }> {
+  const enabled = new Set(loaded);
+  const pending: string[] = [];
   for (const [jid, at] of recentlyCreated) {
-    if (now - at >= RECENTLY_CREATED_MS) recentlyCreated.delete(jid);
-    else if (isGroupJid(jid)) set.add(jid);
+    if (now - at >= RECENTLY_CREATED_MS || !isGroupJid(jid)) recentlyCreated.delete(jid);
+    else if (!enabled.has(jid)) pending.push(jid);
   }
-  return set;
+  if (pending.length === 0) return { enabled, lookupFailed: false };
+  let recorded: Set<string>;
+  try {
+    recorded = new Set(await existingGroupJids(pending));
+  } catch {
+    return { enabled, lookupFailed: true };
+  }
+  for (const jid of pending) {
+    if (recorded.has(jid)) recentlyCreated.delete(jid);
+    else enabled.add(jid);
+  }
+  return { enabled, lookupFailed: false };
 }
 
 const RECENTLY_CREATED_MS = 10 * 60 * 1000;
