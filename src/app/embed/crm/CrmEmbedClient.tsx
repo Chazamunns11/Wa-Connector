@@ -9,6 +9,8 @@ import { WhatsappConnectionPanel, type WhatsappPanelCopy } from "@/components/wh
 import { embedPausedMessage } from "@/app/api/crm/embed/session/logic";
 import type { GhlEmbedWhatsappSummary } from "@/lib/types";
 import { MAX_NUMBER_LABEL_LENGTH, parseLabelInput, type LocationSlot } from "@/lib/location-numbers";
+import { CreateGroupForm } from "./CreateGroupForm";
+import { GroupManagePanel } from "./GroupManagePanel";
 import type { BridgeOkResult, BridgeSessionResult } from "@/lib/whatsapp-bridge";
 
 /**
@@ -778,6 +780,8 @@ function GroupsSection({
   const [busyJid, setBusyJid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showHint, setShowHint] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [managingJid, setManagingJid] = useState<string | null>(null);
 
   /** The server's list; `"switched_off"` for a switch-off (which answers without a list, so the row is patched in place); `null` on a refusal. */
   async function request(body: Record<string, unknown>): Promise<EmbedGroup[] | "switched_off" | null> {
@@ -849,6 +853,15 @@ function GroupsSection({
             ) : null}
           </div>
           <p className="text-xs text-ink-faint">Switch a group on to see its messages in HighLevel and reply to the whole group.</p>
+          {creating ? (
+            <CreateGroupForm slot={slot} callEmbedApi={callEmbedApi} onCreated={() => void load()} onClose={() => setCreating(false)} />
+          ) : (
+            <div>
+              <Button size="sm" variant="secondary" onClick={() => setCreating(true)}>
+                Create group
+              </Button>
+            </div>
+          )}
 
           {loading && groups === null ? <p className="text-xs text-ink-faint">Loading groups…</p> : null}
           {error ? <p className="text-xs text-loss">{error}</p> : null}
@@ -885,6 +898,12 @@ function GroupsSection({
                       ) : null}
                     </div>
                   ) : (
+                    <div className="flex shrink-0 items-center gap-2">
+                    {group.enabled ? (
+                      <Button size="sm" variant="ghost" disabled={busyJid !== null} onClick={() => setManagingJid(group.jid)}>
+                        Manage
+                      </Button>
+                    ) : null}
                     <label className="flex shrink-0 items-center gap-2 text-xs text-ink">
                       <input
                         type="checkbox"
@@ -897,10 +916,26 @@ function GroupsSection({
                       />
                       {busyJid === group.jid ? "Saving…" : group.enabled ? "On" : "Off"}
                     </label>
+                    </div>
                   )}
                 </li>
               ))}
             </ul>
+          ) : null}
+          {managingJid !== null ? (
+            <GroupManagePanel
+              key={managingJid}
+              slot={slot}
+              groupJid={managingJid}
+              groupName={groups?.find((g) => g.jid === managingJid)?.name ?? ""}
+              callEmbedApi={callEmbedApi}
+              onChanged={() => void load()}
+              onLeft={() => {
+                setManagingJid(null);
+                void load();
+              }}
+              onClose={() => setManagingJid(null)}
+            />
           ) : null}
         </div>
       ) : null}
