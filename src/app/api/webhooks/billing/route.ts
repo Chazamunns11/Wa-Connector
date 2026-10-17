@@ -9,7 +9,16 @@ import { NextResponse, type NextRequest } from "next/server";
 import { repo } from "@/lib/data";
 import { notifyText } from "@/lib/slack";
 import { verifyStripeSignature } from "@/lib/stripe/webhook";
-import { retrieveCheckoutSession, retrieveSubscription, setSubscriptionItemQuantity } from "@/lib/stripe/billing";
+import {
+  endTrialNow,
+  resumeSubscription,
+  retrieveCheckoutSession,
+  retrieveSubscription,
+  setCustomerDefaultPaymentMethod,
+  setSubscriptionDefaultPaymentMethod,
+  setSubscriptionItemQuantity,
+} from "@/lib/stripe/billing";
+import { applyCardSetup } from "@/lib/billing/card";
 import { handleBillingEvent, type StripeEvent } from "@/lib/billing/webhook-handler";
 import { syncSubscriptionQuantity } from "@/lib/billing/quantity";
 import { applyCheckoutSession } from "@/lib/billing/onboard";
@@ -45,6 +54,18 @@ export async function POST(request: NextRequest) {
       repo,
       {
         applyCheckout: (session) => applyCheckoutSession(repo, session),
+        applyCardSetup: (session) =>
+          applyCardSetup(
+            repo,
+            {
+              retrieveSubscription,
+              setCustomerDefault: setCustomerDefaultPaymentMethod,
+              setSubscriptionDefault: setSubscriptionDefaultPaymentMethod,
+              resume: resumeSubscription,
+              endTrial: endTrialNow,
+            },
+            session,
+          ),
         retrieveCheckoutSession,
         retrieveSubscription,
         syncQuantity: (account) =>

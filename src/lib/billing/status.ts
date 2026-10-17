@@ -13,6 +13,7 @@ export function mapStripeSubscriptionStatus(status: string): BillingStatus | nul
       return "active";
     case "past_due":
       return "past_due";
+    // `paused`: the no-card trial ended without a card. `unpaid`: payment retries ran out.
     case "unpaid":
     case "paused":
       return "paused";

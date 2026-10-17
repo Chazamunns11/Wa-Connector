@@ -22,12 +22,12 @@ test("defaults: 10 numbers at 50 pounds", () => {
   assert.equal(RESALE_DEFAULT_PRICE, "50");
 });
 
-test("W41 examples at 50 pounds: keep 35.01, 175.05, 420.10 and 1,050.25 a month", () => {
+test("W41 examples at 50 pounds: keep 40.01, 200.05, 400.10 and 1,100.25 a month", () => {
   const cases: [number, number][] = [
-    [1, 3501],
-    [5, 17505],
-    [10, 42010],
-    [25, 105025],
+    [1, 4001],
+    [5, 20005],
+    [10, 40010],
+    [25, 110025],
   ];
   for (const [n, keep] of cases) {
     const f = resaleFigures(n, 5000);
@@ -42,7 +42,7 @@ test("the 10-number sentence is the owner's, word for word", () => {
   const v = resaleView("10", "50", GBP);
   assert.equal(
     v.sentences?.join(" "),
-    "Your clients pay you £500 a month. You pay us £79.90. You keep £420.10 a month (£5,041.20 a year).",
+    "Your clients pay you £500 a month. You pay us £99.90. You keep £400.10 a month (£4,801.20 a year).",
   );
   assert.equal(v.numbersNote, null);
   assert.equal(v.priceNote, null);
@@ -89,22 +89,22 @@ test("price accepts decimals, a leading currency sign and rounds extra digits to
 
 test("a resale price below ours shows a negative margin honestly", () => {
   const v = resaleView("10", "5", GBP);
-  assert.equal(v.figures?.keepPence, 10 * 500 - 7990);
+  assert.equal(v.figures?.keepPence, 10 * 500 - 9990);
   assert.match(v.sentences?.join(" ") ?? "", /lose/i);
-  assert.match(v.sentences?.join(" ") ?? "", /£29\.90 a month/);
-  assert.match(v.sentences?.join(" ") ?? "", /£358\.80 a year/);
+  assert.match(v.sentences?.join(" ") ?? "", /£49\.90 a month/);
+  assert.match(v.sentences?.join(" ") ?? "", /£598\.80 a year/);
   assert.ok(v.warning, "warns that the price is below ours");
-  assert.match(v.warning ?? "", /£7\.99/);
+  assert.match(v.warning ?? "", /£9\.99/);
 });
 
 test("a price of nothing: you pay us, you keep nothing and lose the lot", () => {
   const v = resaleView("1", "0", GBP);
-  assert.equal(v.figures?.keepPence, -1499);
+  assert.equal(v.figures?.keepPence, -999);
   assert.ok(v.warning);
 });
 
 test("break even says so", () => {
-  const v = resaleView("10", "7.99", GBP);
+  const v = resaleView("10", "9.99", GBP);
   assert.equal(v.figures?.keepPence, 0);
   assert.match(v.sentences?.join(" ") ?? "", /nothing/i);
 });
@@ -114,14 +114,14 @@ test("fallback line and examples at 50 pounds", () => {
   assert.deepEqual(
     ex.map((e) => [e.numbers, e.keep]),
     [
-      [1, "£35.01"],
-      [5, "£175.05"],
-      [10, "£420.10"],
-      [25, "£1,050.25"],
+      [1, "£40.01"],
+      [5, "£200.05"],
+      [10, "£400.10"],
+      [25, "£1,100.25"],
     ],
   );
   const line = resaleFallbackLine(GBP);
-  for (const s of ["£50", "£35.01", "£175.05", "£420.10", "£1,050.25"]) assert.ok(line.includes(s), s);
+  for (const s of ["£50", "£40.01", "£200.05", "£400.10", "£1,100.25"]) assert.ok(line.includes(s), s);
   assert.match(line, /example/i);
 });
 

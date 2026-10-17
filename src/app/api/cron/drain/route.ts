@@ -22,16 +22,22 @@
 import { timingSafeEqual } from "crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { repo } from "@/lib/data";
-import { drainGhlOutboundStatuses } from "@/lib/ghl-provider";
+import { drainGhlOutboundStatuses, drainGhlReadReceipts } from "@/lib/ghl-provider";
 import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
 import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
 import { purgeCancelledAccounts } from "@/lib/billing/cleanup";
 import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
+import { defaultGhlProviderDeps } from "@/lib/ghl-provider";
+import { defaultTriggerDeps, isWorkflowTriggersEnabled } from "@/lib/ghl-triggers";
+import { defaultSessionTriggerDeps, drainSessionTriggers } from "@/lib/session-triggers";
 
 export const dynamic = "force-dynamic";
 
 /** Same explicit budget as PortalHub's reminders cron — the outbound drain carries its own wall-clock budget inside it, see `DRAIN_TIME_BUDGET_MS` (src/lib/ghl-provider.ts). */
 export const maxDuration = 300;
+
+/** An accepted outbound row that was never reported keeps its text (0013) at most this long. */
+const STALE_PENDING_TEXT_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Adversarial-review fix (lens 3, finding 1) — 0048's own file header always documented a 90-day purge of `whatsapp_inbound_messages`; this constant + the pass below is what actually implements it. See `Repository.purgeOldWhatsappInboundMessages`'s JSDoc. */
 const WHATSAPP_INBOUND_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -80,6 +86,7 @@ export async function GET(request: NextRequest) {
     unresolved: 0,
     reportFailed: 0,
     timeBudgetExceeded: false,
+    triggersSkipped: 0,
   };
   try {
     ghlOutboundStatuses = await drainGhlOutboundStatuses(repo);
@@ -92,7 +99,20 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] ghl outbound-status drain failed (non-fatal):", err);
   }
 
-  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, optedOut: 0, optedIn: 0, blockedUnconfigured: false };
+  // Read receipts: off unless GHL_READ_RECEIPTS_ENABLED is exactly "true".
+  let ghlReadReceipts = { examined: 0, reported: 0, failed: 0, timeBudgetExceeded: false, triggersSkipped: 0 };
+  if (process.env.GHL_READ_RECEIPTS_ENABLED === "true") {
+    try {
+      ghlReadReceipts = await drainGhlReadReceipts(repo);
+      if (ghlReadReceipts.examined > 0) {
+        console.log(`[cron/drain] ghl read receipts: ${ghlReadReceipts.examined} examined, reported ${ghlReadReceipts.reported}, failed ${ghlReadReceipts.failed}.`);
+      }
+    } catch (err) {
+      console.error("[cron/drain] ghl read-receipt drain failed (non-fatal):", err instanceof Error ? err.name : "error");
+    }
+  }
+
+  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, groupNotEnabled: 0, staleMissedCalls: 0, eventsSuppressed: 0, optedOut: 0, optedIn: 0, blockedUnconfigured: false, triggersSkipped: 0 };
   try {
     ghlInboundReplies = await drainGhlInboundReplies(repo);
     if (ghlInboundReplies.candidates > 0) {
@@ -102,6 +122,34 @@ export async function GET(request: NextRequest) {
     }
   } catch (err) {
     console.error("[cron/drain] ghl inbound-reply drain failed (non-fatal):", err);
+  }
+
+  // WhatsApp disconnected / reconnected triggers. Only when the flag is on; never fatal.
+  let sessionTriggers = { fired: 0 };
+  if (isWorkflowTriggersEnabled()) {
+    try {
+      // The time now, not the cron's start: the drains above can take minutes,
+      // and the 5-minute "down" check must use the current clock.
+      sessionTriggers = await drainSessionTriggers(repo, defaultSessionTriggerDeps(defaultTriggerDeps(defaultGhlProviderDeps)), Date.now());
+    } catch {
+      console.error("[cron/drain] session trigger drain failed (non-fatal)");
+    }
+  }
+
+  // Data minimisation: an accepted row never reported keeps its text only 7 days.
+  try {
+    const cleared = await repo.clearStaleOutboundPendingText(new Date(now - STALE_PENDING_TEXT_MS).toISOString());
+    if (cleared > 0) console.log(`[cron/drain] cleared the kept text of ${cleared} unreported outbound row(s) older than 7 days.`);
+  } catch (err) {
+    console.error("[cron/drain] pending-text cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
+  }
+
+  // SMS fallback echoes live 10 minutes; drop the expired ones.
+  try {
+    const purgedEchoes = await repo.purgeExpiredSmsFallbackEchoes(new Date().toISOString());
+    if (purgedEchoes > 0) console.log(`[cron/drain] purged ${purgedEchoes} expired SMS fallback echo row(s).`);
+  } catch (err) {
+    console.error("[cron/drain] SMS fallback echo purge failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
   let whatsappInboundPurged = 0;
@@ -129,5 +177,5 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] cancelled-account cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
-  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlInboundReplies, whatsappInboundPurged, cancelledCleanup });
+  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlReadReceipts, ghlInboundReplies, sessionTriggers, whatsappInboundPurged, cancelledCleanup });
 }

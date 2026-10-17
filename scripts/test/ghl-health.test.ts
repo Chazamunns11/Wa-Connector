@@ -344,3 +344,21 @@ test("safeGetGhlHealthSnapshot: a throwing fetch resolves to null instead of rej
     assert.equal(result, null);
   });
 });
+
+test("inbound: a non-default number's rows count against its location", () => {
+  const location = loc({ locationId: "loc-1", tenantId: "t-default", tenantIds: ["t-default", "t-slot2", "t-slot3"] });
+  const inboundRows = [
+    inboundRow({ tenantId: "t-slot2", resolution: "ghl_push_failed", pushError: "slot 2 failed" }),
+    inboundRow({ tenantId: "t-slot3", resolution: "ghl_pushed" }),
+    inboundRow({ tenantId: "t-default", resolution: "ghl_pushed" }),
+  ];
+  const waitingRows = [waitingRow({ tenantId: "t-slot3" }), waitingRow({ tenantId: "t-slot2" })];
+  const snapshot = buildGhlHealthSnapshot([location], [], inboundRows, NOW, waitingRows);
+  const inbound = snapshot.inbound[0];
+  assert.equal(inbound.failedCount, 1);
+  assert.equal(inbound.pushedCount, 2);
+  assert.equal(inbound.waitingCount, 2);
+  assert.equal(inbound.latestProblemError, "slot 2 failed");
+  assert.equal(snapshot.recentProblems.length, 1);
+  assert.equal(snapshot.recentProblems[0].locationId, "loc-1");
+});

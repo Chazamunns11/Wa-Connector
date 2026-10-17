@@ -23,12 +23,23 @@
  * Nothing in this module logs a value column, in either form.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Logger } from "pino";
 import type { BridgeConfig } from "./config.js";
 import { createCredsCipher, whatsappCredsAad, whatsappKeyAad, type CredsCipher } from "./crypto.js";
 import { isValidWaMessageId } from "./media.js";
+import { GROUP_SEND_CAP_UNITS, isGroupJid } from "./groups.js";
 
 /** Mirrors the portal's `WhatsappSessionStatus` (src/lib/types.ts) and the 0046 CHECK constraint — keep all three in lockstep. */
 export type SessionStatus = "disconnected" | "waiting_qr" | "connected" | "logged_out" | "banned";
+
+/** Mirrors the 0009 CHECK on `whatsapp_group_actions.action`. Only `create` and `add` count towards the daily limits (src/group-limits.ts). */
+export type GroupActionKind = "create" | "add" | "remove" | "promote" | "demote" | "update" | "invite_reset" | "leave";
+
+/** The largest `count` one `whatsapp_group_actions` row may carry (0009's CHECK: between 1 and 50). */
+export const GROUP_ACTION_MAX_COUNT = 50;
+
+/** How far back an inbound 1:1 message makes a contact eligible for a direct group add — the inbound table's retention (0001). */
+export const INBOUND_ELIGIBILITY_DAYS = 90;
 
 export type MessageStatus = "accepted" | "sending" | "sent" | "failed" | "not_on_whatsapp";
 
@@ -36,7 +47,10 @@ export interface MessageRecord {
   id: string;
   coachId: string;
   idempotencyKey: string;
-  toPhone: string;
+  /** The 1:1 recipient (strict E.164), or null for a group send. Exactly one of `toPhone` / `groupJid` is set (0008's `whatsapp_messages_one_target`). */
+  toPhone: string | null;
+  /** The opted-in WhatsApp group this row was sent to (src/groups.ts), or null for a 1:1 send. Null too on a row read before migration 0008 (PostgREST omits the unknown column). */
+  groupJid: string | null;
   status: MessageStatus;
   waMessageId: string | null;
   error: string | null;
@@ -61,7 +75,9 @@ interface MessageRow {
   id: string;
   coach_id: string;
   idempotency_key: string;
-  to_phone: string;
+  to_phone: string | null;
+  /** Absent entirely on a row read before migration 0008 is applied. */
+  group_jid?: string | null;
   status: MessageStatus;
   wa_message_id: string | null;
   error: string | null;
@@ -72,12 +88,16 @@ interface MessageRow {
   kind?: "text" | "media";
 }
 
+/** Who a send goes to: one phone number, or one opted-in group. Never both — the ledger's CHECK (0008) refuses a row naming both, and so does this type. */
+export type MessageTarget = { toPhone: string } | { groupJid: string };
+
 function mapMessage(row: MessageRow): MessageRecord {
   return {
     id: row.id,
     coachId: row.coach_id,
     idempotencyKey: row.idempotency_key,
     toPhone: row.to_phone,
+    groupJid: row.group_jid ?? null,
     status: row.status,
     waMessageId: row.wa_message_id,
     error: row.error,
@@ -170,6 +190,30 @@ export class BridgeStore {
   }
 
   /**
+   * Warm-up (src/pacing.ts `WARMUP_SCHEDULE`): returns when `phoneNumber`
+   * was first linked on this tenant, in ms. Keeps the stored
+   * `phone_linked_at` when the row already holds this same number; stamps
+   * now() when the number is new or the date is missing. Must run BEFORE the
+   * 'connected' status write replaces `phone_number`, since it compares
+   * against the stored number. `wipeCreds` clears the date, so a number
+   * linked after a logout or ban always starts its warm-up again.
+   */
+  async markPhoneLinked(coachId: string, phoneNumber: string): Promise<number> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_sessions")
+      .select("phone_number, phone_linked_at")
+      .eq("coach_id", coachId)
+      .maybeSingle();
+    if (error) throw error;
+    const row = data as { phone_number: string | null; phone_linked_at: string | null } | null;
+    if (row?.phone_number === phoneNumber && row.phone_linked_at) return Date.parse(row.phone_linked_at);
+    const now = new Date();
+    const { error: updateError } = await this.supabase.from("whatsapp_sessions").update({ phone_linked_at: now.toISOString() }).eq("coach_id", coachId);
+    if (updateError) throw updateError;
+    return now.getTime();
+  }
+
+  /**
    * Full credential wipe — logout, ban, or an explicit unlink. Removes the
    * creds blob AND every Signal key row: a logged-out device's key material
    * is dead weight that still reads as a credential, so it must not linger.
@@ -179,7 +223,7 @@ export class BridgeStore {
     if (keysError) throw keysError;
     const { error } = await this.supabase
       .from("whatsapp_sessions")
-      .update({ creds_enc: null, phone_number: null, status: finalStatus, last_disconnect_reason: reason })
+      .update({ creds_enc: null, phone_number: null, phone_linked_at: null, status: finalStatus, last_disconnect_reason: reason })
       .eq("coach_id", coachId);
     if (error) throw error;
   }
@@ -288,15 +332,26 @@ export class BridgeStore {
    * `fresh: false` instead — the caller then reports that row's status and
    * dispatches nothing. The unique constraint (0046) is the dedupe; this
    * method just surfaces which side of it we landed on.
+   *
+   * A group target is re-checked against `isGroupJid` here, before the
+   * insert (src/groups.ts — validate before ANY store write), and only the
+   * target's own column is named: a 1:1 insert never mentions `group_jid`,
+   * so it is byte-identical to the pre-0008 insert.
    */
   async acceptMessage(
     coachId: string,
     idempotencyKey: string,
-    toPhone: string,
+    target: MessageTarget,
     /** Media plan (docs/MEDIA-PLAN.md §7c) — omitted (or `'text'`) writes NOTHING new to the insert, so a pre-migration-0073 database is untouched: the column's own `default 'text'` covers it. Only ever `'media'` from the (WA_MEDIA_OUTBOUND_ENABLED-gated) attachment send path. */
     kind: "text" | "media" = "text"
   ): Promise<{ record: MessageRecord; fresh: boolean }> {
-    const row: Record<string, unknown> = { coach_id: coachId, idempotency_key: idempotencyKey, to_phone: toPhone };
+    const row: Record<string, unknown> = { coach_id: coachId, idempotency_key: idempotencyKey };
+    if ("groupJid" in target) {
+      if (!isGroupJid(target.groupJid)) throw new Error("[store] acceptMessage: refused a malformed group jid");
+      row.group_jid = target.groupJid;
+    } else {
+      row.to_phone = target.toPhone;
+    }
     if (kind === "media") row.kind = kind;
     const { data, error } = await this.supabase.from("whatsapp_messages").insert(row).select("*").maybeSingle();
     if (!error && data) return { record: mapMessage(data as MessageRow), fresh: true };
@@ -342,6 +397,41 @@ export class BridgeStore {
       .eq("id", messageId)
       .eq("status", "sending");
     if (error) throw error;
+  }
+
+  /**
+   * Delivery / read receipt for a sent message (migration 0010). Set once,
+   * never backwards: each column is written only while it is still null, and a
+   * read also fills delivered_at. Returns "no_row" when no sent row carries
+   * this wa_message_id yet (the ack beat markMessageSent); a row that already
+   * holds the value counts as applied.
+   */
+  async markMessageReceipt(coachId: string, waMessageId: string, level: "delivered" | "read", atIso: string): Promise<"applied" | "no_row"> {
+    const columns = level === "read" ? (["delivered_at", "read_at"] as const) : (["delivered_at"] as const);
+    let updated = 0;
+    for (const column of columns) {
+      const { data, error } = await this.supabase
+        .from("whatsapp_messages")
+        .update({ [column]: atIso })
+        .eq("coach_id", coachId)
+        .eq("wa_message_id", waMessageId)
+        .eq("status", "sent")
+        .is(column, null)
+        .select("id");
+      if (error) throw error;
+      updated += data?.length ?? 0;
+    }
+    if (updated > 0) return "applied";
+    // Nothing changed: either every column was already set, or there is no row.
+    const { data, error } = await this.supabase
+      .from("whatsapp_messages")
+      .select("id")
+      .eq("coach_id", coachId)
+      .eq("wa_message_id", waMessageId)
+      .eq("status", "sent")
+      .limit(1);
+    if (error) throw error;
+    return (data?.length ?? 0) > 0 ? "applied" : "no_row";
   }
 
   /**
@@ -391,23 +481,31 @@ export class BridgeStore {
    *     'failed' row) — seeds the pacer's min-gap clock so a restart landing
    *     seconds after the previous instance's last send doesn't reset to
    *     "no wait needed".
+   *
+   * `attemptCount` is in daily-cap UNITS, not rows: a dispatched group row
+   * (`group_jid` set) counts `GROUP_SEND_CAP_UNITS` (5), the same as the
+   * pacer recorded when it sent it — otherwise a restart would hand back 4
+   * units per group send. `select("*")` rather than naming `group_jid`, so
+   * this read still works on a database without migration 0008 (the column
+   * is then simply absent and every row counts 1, which is right: no group
+   * row can exist there).
    */
   async getDailyActivity(coachId: string): Promise<{ attemptCount: number; lastAttemptAt: string | null }> {
     const midnightUtc = new Date();
     midnightUtc.setUTCHours(0, 0, 0, 0);
     const { data, error } = await this.supabase
       .from("whatsapp_messages")
-      .select("status, dispatch_attempted, sent_at, created_at")
+      .select("*")
       .eq("coach_id", coachId)
       .gte("created_at", midnightUtc.toISOString());
     if (error) throw error;
-    const rows = (data ?? []) as { status: MessageStatus; dispatch_attempted: boolean; sent_at: string | null; created_at: string }[];
+    const rows = (data ?? []) as { status: MessageStatus; dispatch_attempted: boolean; sent_at: string | null; created_at: string; group_jid?: string | null }[];
     let attemptCount = 0;
     let lastAttemptAt: string | null = null;
     for (const row of rows) {
       const dispatched = row.status === "sent" || (row.status === "failed" && row.dispatch_attempted);
       if (!dispatched) continue;
-      attemptCount += 1;
+      attemptCount += row.group_jid ? GROUP_SEND_CAP_UNITS : 1;
       const at = row.sent_at ?? row.created_at;
       if (!lastAttemptAt || at > lastAttemptAt) lastAttemptAt = at;
     }
@@ -478,6 +576,11 @@ export class BridgeStore {
    * resync) — the caller (src/inbound.ts's `processInboundBatch`) uses this
    * to skip poking the portal a second time for a message it already knows
    * about.
+   *
+   * Group rows (0007): `groupJid` is re-checked against `isGroupJid` BEFORE
+   * the insert — this column has no CHECK of its own, so this is the gate
+   * (src/groups.ts). A 1:1 row names neither `group_jid` nor `sender_name`,
+   * so its insert is byte-identical to the pre-0007 one.
    */
   async recordInboundMessage(input: {
     coachId: string;
@@ -488,7 +591,20 @@ export class BridgeStore {
     receivedAt: string;
     /** Media plan (docs/MEDIA-PLAN.md §6.1/§7a) — see `RecordInboundInput.captureMedia`'s own JSDoc (src/inbound.ts). Omitted/false -> `media_status` is never named in the insert, so it stays the column's default (NULL) — byte-identical to pre-media-plan rows. */
     captureMedia?: boolean;
+    /** The opted-in group this message came from, or null/omitted for a 1:1 reply. */
+    groupJid?: string | null;
+    /** The group member's push name (<=60 chars, src/inbound.ts), or null. Only written on a group row. */
+    senderName?: string | null;
+    /** Non-message event kind (migration 0010). Omitted -> column untouched (NULL). */
+    eventKind?: "missed_call" | "edit" | "reaction" | "delete";
+    /** Edit/reaction/delete rows (migration 0011): the wa_message_id the event acts on. Omitted -> column untouched (NULL). */
+    targetWaMessageId?: string | null;
+    /** Edit/reaction/delete rows (migration 0011): whether that target is ours. Omitted or null -> column untouched (NULL). */
+    targetFromMe?: boolean | null;
   }): Promise<{ fresh: boolean }> {
+    if (input.groupJid != null && !isGroupJid(input.groupJid)) {
+      throw new Error("[store] recordInboundMessage: refused a malformed group jid");
+    }
     const row: Record<string, unknown> = {
       coach_id: input.coachId,
       from_phone: input.fromPhone,
@@ -498,11 +614,160 @@ export class BridgeStore {
       received_at: input.receivedAt,
     };
     if (input.captureMedia) row.media_status = "pending";
+    if (input.eventKind) row.event_kind = input.eventKind;
+    if (input.targetWaMessageId != null) row.target_wa_message_id = input.targetWaMessageId;
+    if (input.targetFromMe != null) row.target_from_me = input.targetFromMe;
+    if (input.groupJid != null) {
+      row.group_jid = input.groupJid;
+      row.sender_name = input.senderName ?? null;
+    }
     const { data, error } = await this.supabase.from("whatsapp_inbound_messages").insert(row).select("id").maybeSingle();
     if (!error && data) return { fresh: true };
     // 23505 = unique_violation on (coach_id, wa_message_id) — a redelivery, not a failure.
     if (error && error.code !== "23505") throw error;
     return { fresh: false };
+  }
+
+  /**
+   * Has this caller already produced a missed-call row since `sinceIso`?
+   * One query on the partial index from migration 0010. On a DB error it
+   * returns false (and logs a fixed string via the passed-in logger) so a call is never silently
+   * lost because the check failed; the unique wa_message_id still dedups.
+   */
+  async hasRecentMissedCall(coachId: string, phoneE164: string, sinceIso: string, log?: Pick<Logger, "warn">): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_inbound_messages")
+      .select("id")
+      .eq("coach_id", coachId)
+      .eq("from_phone", phoneE164)
+      .eq("event_kind", "missed_call")
+      .gte("received_at", sinceIso)
+      .limit(1);
+    if (error) {
+      log?.warn({ code: error.code }, "[store] hasRecentMissedCall: query failed; treating as no recent call");
+      return false;
+    }
+    return (data?.length ?? 0) > 0;
+  }
+
+  // -------------------------------------------------------------------------
+  // whatsapp_groups (0007) — the opt-in switch per (number, group). Read-only
+  // here: the app writes it when the owner enables a group.
+  // -------------------------------------------------------------------------
+
+  /**
+   * The group JIDs this tenant's owner has enabled and the number has not
+   * left — the source of `Session.enabledGroups` (src/sessions.ts). Rows are
+   * filtered through `isGroupJid` once more on the way out (0007's CHECK
+   * already holds them to it), so the in-memory set can only ever hold
+   * well-formed JIDs. Note the column is `tenant_id` here, not the
+   * historical `coach_id` the whatsapp_* tables use.
+   */
+  async listEnabledGroupJids(tenantId: string): Promise<string[]> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_groups")
+      .select("group_jid")
+      .eq("tenant_id", tenantId)
+      .eq("enabled", true)
+      .is("left_at", null);
+    if (error) throw error;
+    return ((data ?? []) as { group_jid: string }[]).map((r) => r.group_jid).filter(isGroupJid);
+  }
+
+  /**
+   * The `whatsapp_groups` rows this tenant has for `groupJids`: each one's
+   * switch (`enabled`) and whether the number has left (`left_at` set).
+   * JIDs with no row are simply absent. Read-only. Lets the enabled-set
+   * load tell a just-created group the app has not recorded yet, or has
+   * recorded enabled, from one the owner has since switched off. Every JID
+   * is checked with `isGroupJid` first; a malformed one throws before
+   * Supabase is touched.
+   */
+  async groupRowStates(tenantId: string, groupJids: string[]): Promise<{ jid: string; enabled: boolean; left: boolean }[]> {
+    if (!groupJids.every(isGroupJid)) throw new Error("[store] groupRowStates: refused a malformed group jid");
+    if (groupJids.length === 0) return [];
+    const { data, error } = await this.supabase
+      .from("whatsapp_groups")
+      .select("group_jid, enabled, left_at")
+      .eq("tenant_id", tenantId)
+      .in("group_jid", groupJids);
+    if (error) throw error;
+    return ((data ?? []) as { group_jid: string; enabled: boolean; left_at: string | null }[]).map((r) => ({
+      jid: r.group_jid,
+      enabled: r.enabled === true,
+      left: r.left_at !== null && r.left_at !== undefined,
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // whatsapp_group_actions (0009) — what each number has done to groups.
+  // Holds no names, numbers or links: tenant, group JID, action, count.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Today's (UTC) `create` and `add` totals for this tenant — the sum of
+   * `count`, so a 12-person add row counts 12. Seeds src/group-limits.ts so a
+   * restart cannot hand a number a fresh day's budget.
+   */
+  async countGroupActionsToday(tenantId: string): Promise<{ creates: number; adds: number }> {
+    const midnightUtc = new Date();
+    midnightUtc.setUTCHours(0, 0, 0, 0);
+    const { data, error } = await this.supabase
+      .from("whatsapp_group_actions")
+      .select("action, count")
+      .eq("tenant_id", tenantId)
+      .in("action", ["create", "add"])
+      .gte("created_at", midnightUtc.toISOString());
+    if (error) throw error;
+    let creates = 0;
+    let adds = 0;
+    for (const row of (data ?? []) as { action: GroupActionKind; count: number }[]) {
+      if (row.action === "create") creates += row.count;
+      else if (row.action === "add") adds += row.count;
+    }
+    return { creates, adds };
+  }
+
+  /**
+   * Appends one action row. `groupJid` is null for a create that has no
+   * group yet. Re-checks the JID and count before the insert so a bad value
+   * fails here with a fixed message rather than as a constraint error.
+   */
+  async recordGroupAction(tenantId: string, action: GroupActionKind, count: number, groupJid: string | null): Promise<void> {
+    if (groupJid !== null && !isGroupJid(groupJid)) {
+      throw new Error("[store] recordGroupAction: refused a malformed group jid");
+    }
+    if (!Number.isInteger(count) || count < 1 || count > GROUP_ACTION_MAX_COUNT) {
+      throw new Error("[store] recordGroupAction: count out of range");
+    }
+    const { error } = await this.supabase
+      .from("whatsapp_group_actions")
+      .insert({ tenant_id: tenantId, action, count, group_jid: groupJid });
+    if (error) throw error;
+  }
+
+  /**
+   * True when this phone has sent this tenant at least one 1:1 message
+   * (a non-group inbound row). Gates direct adds: only someone who has
+   * messaged the number before is added directly; everyone else gets an
+   * invite link. "Before" means within the inbound table's 90-day
+   * retention (`received_at`), filtered here too so a row the purge has not
+   * reached yet cannot make an older contact eligible.
+   */
+  async hasInboundFromPhone(tenantId: string, phoneE164: string, now: number = Date.now()): Promise<boolean> {
+    const since = new Date(now - INBOUND_ELIGIBILITY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await this.supabase
+      .from("whatsapp_inbound_messages")
+      .select("id")
+      .eq("coach_id", tenantId)
+      .eq("from_phone", phoneE164)
+      .is("group_jid", null)
+      // A missed call is not a message: it never makes a number eligible for a direct add.
+      .is("event_kind", null)
+      .gte("received_at", since)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? []).length > 0;
   }
 
   // -------------------------------------------------------------------------

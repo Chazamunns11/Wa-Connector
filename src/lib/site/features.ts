@@ -59,7 +59,7 @@ export function featureEntriesFor(flags: FeatureFlags, brand: BrandConfig): Feat
     },
     { id: "pacing", title: "Paced sending and a daily cap", body: paced.body },
     { id: "held", title: "Held while the phone is offline", body: held.body },
-    { id: "stop", title: "STOP opt-outs, per number", body: `${stop.body} START brings them back.` },
+    { id: "stop", title: "STOP opt-outs, per sub-account", body: stop.body },
   ];
   if (flags.dndSyncLive) {
     entries.push({

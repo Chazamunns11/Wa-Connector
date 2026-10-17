@@ -53,6 +53,9 @@ import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
+import { defaultGhlProviderDeps } from "@/lib/ghl-provider";
+import { defaultTriggerDeps, isWorkflowTriggersEnabled } from "@/lib/ghl-triggers";
+import { defaultSessionTriggerDeps, drainSessionTriggers } from "@/lib/session-triggers";
 
 /** Verbatim copy of `GET /api/cron/reminders`'s identical helper — see that route's own comment for why this is duplicated rather than shared. */
 function constantTimeEqualStr(a: string, b: string): boolean {
@@ -60,6 +63,9 @@ function constantTimeEqualStr(a: string, b: string): boolean {
   const bBuf = Buffer.from(b, "utf8");
   return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf);
 }
+
+/** The inbound drain then the session trigger drain run back to back, with fires in the background; same ceiling as the cron route. */
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   const secret = process.env.WHATSAPP_INBOUND_POKE_SECRET;
@@ -82,5 +88,15 @@ export async function POST(request: Request) {
   // location (PortalHub's coach drain, processInboundWhatsappReplies, is
   // Hub-only). Same no-data poke, same never-throws contract.
   const ghlInboundReplies = await drainGhlInboundReplies(repo);
-  return NextResponse.json({ ok: true, ghlInboundReplies });
+  // The bridge also pokes on every connection open or close: check the
+  // disconnected / reconnected triggers (flag-gated, never throws into the poke).
+  let sessionTriggers = { fired: 0 };
+  if (isWorkflowTriggersEnabled()) {
+    try {
+      sessionTriggers = await drainSessionTriggers(repo, defaultSessionTriggerDeps(defaultTriggerDeps(defaultGhlProviderDeps)));
+    } catch {
+      console.error("[whatsapp-replies] session trigger drain failed (non-fatal)");
+    }
+  }
+  return NextResponse.json({ ok: true, ghlInboundReplies, sessionTriggers });
 }

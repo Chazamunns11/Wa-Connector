@@ -16,13 +16,37 @@
  *     whatsapp_messages ledger at session start (`store.getDailyActivity`),
  *     so a bridge restart cannot reset a coach's spent budget — and budget
  *     is additionally RESERVED at accept time in sessions.ts's `send()`
- *     (`sentTodayCount() + queue.length`), not only counted at dispatch, so
- *     a burst of accepts arriving faster than the pacer can drain cannot
- *     overshoot the cap before any of them has actually dispatched.
+ *     (`sentTodayCount() + inFlight + queued units + units`), not only counted at
+ *     dispatch, so a burst of accepts arriving faster than the pacer can
+ *     drain cannot overshoot the cap before any of them has actually
+ *     dispatched. Units, not sends: a group send costs 5 (src/groups.ts's
+ *     `GROUP_SEND_CAP_UNITS`), both when reserved and when recorded.
  *
  * Pure in-memory arithmetic + an injected clock, so the unit tests
  * (test/pacing.test.ts) exercise real decisions without real waiting.
  */
+
+/**
+ * Warm-up schedule (WA_WARMUP_ENABLED). A freshly linked number sending its
+ * full daily cap on day one is a classic ban pattern, so while warm-up is on
+ * a number's cap ramps with its age since it was linked
+ * (`whatsapp_sessions.phone_linked_at`). Ages are in days; the first row
+ * whose `untilDays` the age is below wins. Past the last row the normal
+ * WA_DAILY_CAP applies alone. The pacer always takes min(dailyCap, this).
+ */
+export const WARMUP_SCHEDULE: readonly { untilDays: number; cap: number }[] = [
+  { untilDays: 3, cap: 20 },
+  { untilDays: 7, cap: 50 },
+  { untilDays: 14, cap: 100 },
+];
+
+/** The warm-up cap for a number this many days old, or `null` once it has graduated. A negative age (clock skew) counts as brand new. */
+export function warmupCapForAgeDays(ageDays: number): number | null {
+  const age = Math.max(0, ageDays);
+  return WARMUP_SCHEDULE.find((step) => age < step.untilDays)?.cap ?? null;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface PacerConfig {
   minGapMs: number;
@@ -34,6 +58,8 @@ export class SessionPacer {
   private lastSendAtMs: number | null;
   private sentToday: number;
   private dayKey: string;
+  /** When the current number was linked, if warm-up applies — see `setLinkedAt`. */
+  private linkedAtMs: number | null = null;
 
   constructor(
     private readonly config: PacerConfig,
@@ -69,15 +95,42 @@ export class SessionPacer {
     }
   }
 
+  /**
+   * Turns warm-up on for this session's number (`linkedAtMs` = when it was
+   * linked) or off (`null`). sessions.ts calls this on every 'open' when
+   * WA_WARMUP_ENABLED is set, and never otherwise, so with the flag off the
+   * cap is exactly `dailyCap` as before.
+   */
+  setLinkedAt(linkedAtMs: number | null): void {
+    this.linkedAtMs = linkedAtMs;
+  }
+
+  /** Today's cap: `dailyCap`, lowered by the warm-up schedule while the number is young. */
+  effectiveDailyCap(): number {
+    if (this.linkedAtMs === null) return this.config.dailyCap;
+    const warm = warmupCapForAgeDays((this.now() - this.linkedAtMs) / DAY_MS);
+    return warm === null ? this.config.dailyCap : Math.min(this.config.dailyCap, warm);
+  }
+
+  /**
+   * True while this number is inside the warm-up window (first 14 days since
+   * it was linked). Only ever true with WA_WARMUP_ENABLED, because
+   * `setLinkedAt` is only called then. Group creation and direct adds are
+   * refused while this holds (src/group-limits.ts's callers).
+   */
+  isInWarmup(): boolean {
+    return this.linkedAtMs !== null && warmupCapForAgeDays((this.now() - this.linkedAtMs) / DAY_MS) !== null;
+  }
+
   /** True when this session has spent its daily budget — the send ROUTE checks this up front so the caller gets an immediate 429 instead of a message that sits queued until midnight. */
   atDailyCap(): boolean {
     this.rollDayIfNeeded();
-    return this.sentToday >= this.config.dailyCap;
+    return this.sentToday >= this.effectiveDailyCap();
   }
 
   remainingToday(): number {
     this.rollDayIfNeeded();
-    return Math.max(0, this.config.dailyCap - this.sentToday);
+    return Math.max(0, this.effectiveDailyCap() - this.sentToday);
   }
 
   sentTodayCount(): number {
@@ -98,10 +151,13 @@ export class SessionPacer {
     return Math.max(0, earliest - this.now());
   }
 
-  /** Record an actual (attempted) send — advances both the gap clock and the daily counter. Counted on ATTEMPT, not success: a failed attempt still hit WhatsApp's servers, which is what the cap protects. */
-  recordSend(): void {
+  /**
+   * Record an actual (attempted) send — advances both the gap clock and the daily counter. Counted on ATTEMPT, not success: a failed attempt still hit WhatsApp's servers, which is what the cap protects.
+   * @param units daily-cap units this send costs: 1 for a 1:1 part, `GROUP_SEND_CAP_UNITS` (5, src/groups.ts) for a group send, which reaches every member at once. The gap clock advances once either way.
+   */
+  recordSend(units = 1): void {
     this.rollDayIfNeeded();
     this.lastSendAtMs = this.now();
-    this.sentToday += 1;
+    this.sentToday += units;
   }
 }

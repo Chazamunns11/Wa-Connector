@@ -26,7 +26,7 @@ function loc(locationId: string): GhlAccountSummary {
   return { locationId, tenantId: `t-${locationId}` } as GhlAccountSummary;
 }
 
-function harness(accounts: Account[], locs: Record<string, string[]>) {
+function harness(accounts: Account[], locs: Record<string, string[]>, extraNumbers: Record<string, string[]> = {}) {
   const cutoffs: string[] = [];
   const activated: Array<[string, string | null]> = [];
   const billing: Array<[string, unknown]> = [];
@@ -42,6 +42,12 @@ function harness(accounts: Account[], locs: Record<string, string[]>) {
     updateAccountBilling: async (id, patch) => {
       billing.push([id, patch]);
     },
+    // Multiple numbers (merge): slot 1 is the location's own tenant; extra
+    // numbers are seeded per location.
+    listLocationNumbers: async (locationId) => [
+      { tenantId: `t-${locationId}`, slot: 1, isDefault: true, label: null },
+      ...(extraNumbers[locationId] ?? []).map((tenantId, i) => ({ tenantId, slot: (i + 2) as 2 | 3, isDefault: false, label: null })),
+    ],
   };
   return { repo, cutoffs, activated, billing };
 }
@@ -101,4 +107,19 @@ test("is idempotent and logs no secrets", async () => {
   }
   const out = lines.join("\n");
   assert.doesNotMatch(out, /cus_secret|sub_secret|tok_secret|@x\.co/);
+});
+
+test("multiple numbers: every number of a location is logged out, not only the default", async () => {
+  const h = harness([acct("a")], { a: ["l1"] }, { l1: ["t-l1-slot2", "t-l1-slot3"] });
+  const logged: string[] = [];
+  const result = await purgeCancelledAccounts(h.repo, {
+    now: () => NOW,
+    logout: async (tenantId) => {
+      logged.push(tenantId);
+      return { ok: true };
+    },
+  });
+  assert.deepEqual(result, { accounts: 1, locations: 1, failures: 0 });
+  assert.deepEqual(logged.sort(), ["t-l1", "t-l1-slot2", "t-l1-slot3"]);
+  assert.deepEqual(h.billing, [["a", { cleanedUpAt: NOW.toISOString() }]]);
 });

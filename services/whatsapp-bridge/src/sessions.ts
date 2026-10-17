@@ -25,12 +25,23 @@
  *
  *   PACED (hard rule 4): each session has its own SessionPacer; the worker
  *   sleeps `msUntilNextSendAllowed()` between dispatches, and `send()` now
- *   reserves budget at ACCEPT time too (`sentTodayCount() + queue.length`),
- *   not only at dispatch time — a burst of N accepts arriving faster than
- *   the pacer can drain (e.g. an hourly cron finding 60 due steps at once)
- *   used to sail straight through the daily cap, because the cap counter
- *   only advanced on dispatch, 45-75s apart, while every queued accept saw
- *   the same stale "under cap" reading.
+ *   reserves budget at ACCEPT time too (`sentTodayCount() + inFlight + queued +
+ *   units`), not only at dispatch time — a burst of N accepts arriving
+ *   faster than the pacer can drain (e.g. an hourly cron finding 60 due
+ *   steps at once) used to sail straight through the daily cap, because the
+ *   cap counter only advanced on dispatch, 45-75s apart, while every queued
+ *   accept saw the same stale "under cap" reading. Budget is in UNITS: a
+ *   1:1 part costs 1, a group send `GROUP_SEND_CAP_UNITS` (5).
+ *
+ *   GROUPS (opt-in — src/groups.ts's header): a send may target an enabled
+ *   WhatsApp group instead of a phone (`sendToGroup`). The JID must pass
+ *   `isGroupJid` and be in the session's in-memory `enabledGroups` (loaded
+ *   from `whatsapp_groups` on every 'open' and on /groups/refresh; empty —
+ *   fail closed — until a load lands or after one fails). The worker swaps
+ *   the `onWhatsApp` existence check for a participant check
+ *   (`checkGroupMembership`, `sock.groupMetadata`) and sends to the stored
+ *   JID itself, which came from WhatsApp's own group list — hard rule 3
+ *   still holds. Group names and JIDs are never logged.
  *
  * CONCURRENCY (fix for "two concurrent /connect calls open two sockets"):
  * `startSession` used to check-then-await-then-write the session map with no
@@ -100,17 +111,50 @@ import type { WASocket } from "@whiskeysockets/baileys";
 import type { Boom } from "@hapi/boom";
 import type { Logger } from "pino";
 import type { BridgeConfig } from "./config.js";
-import type { BridgeStore, MessageRecord, SessionStatus } from "./store.js";
+import type { BridgeStore, MessageRecord, MessageTarget, SessionStatus } from "./store.js";
 import { useSupabaseAuthState } from "./auth-state.js";
 import { SessionLock } from "./lock.js";
 import { PendingWrites } from "./pending-writes.js";
 import { SessionPacer } from "./pacing.js";
+import { simulateTyping, typingDurationMs } from "./typing.js";
 import { isE164 } from "./phone.js";
+import {
+  GROUP_SEND_CAP_UNITS,
+  GROUP_SYNC_OFF_REASON,
+  NOT_IN_GROUP_REASON,
+  checkGroupMembership,
+  isGroupJid,
+  toGroupList,
+  type GroupDetail,
+  type GroupListEntry,
+  type GroupMetadataLike,
+} from "./groups.js";
+import { GroupActionLimits } from "./group-limits.js";
+import {
+  CreateRequestCache,
+  createGroup as createManagedGroup,
+  getGroupDetail as getManagedGroupDetail,
+  getGroupInviteLink as getManagedGroupInviteLink,
+  leaveGroup as leaveManagedGroup,
+  updateGroup as updateManagedGroup,
+  updateGroupParticipants as updateManagedGroupParticipants,
+  withRecentlyCreated,
+  type CreateGroupInput,
+  type CreatedGroup,
+  type GroupOpContext,
+  type GroupOpOutcome,
+  type GroupPatch,
+  type ParticipantResult,
+  type ParticipantsRequest,
+} from "./group-management.js";
 import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
+import { MissedCallTracker } from "./calls.js";
+import { ReceiptApplier } from "./receipts.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
 import { runMediaCapture } from "./media-capture.js";
-import { resolveOutboundAttachment } from "./media-fetch.js";
-import { buildBaileysMediaContent } from "./media.js";
+import { prepareOutboundAudio, resolveOutboundAttachment } from "./media-fetch.js";
+import { buildBaileysMediaContent, extensionForMime, ftypBrandForLog, type SniffedMime } from "./media.js";
+import type { TranscodeResult } from "./voice-transcode.js";
 import type { PortalPoke } from "./poke.js";
 
 /** How long a boot-interrupted 'accepted' message may wait before it is failed instead of re-enqueued — see store.sweepInterruptedMessages. */
@@ -157,16 +201,47 @@ export interface OutboundAttachment {
   fileName?: string;
 }
 
+/**
+ * Outbound media seams (voice notes plan, Task 3). `resolveAttachment`
+ * defaults to the real SSRF-guarded fetch (tests inject a fake). `transcode`
+ * null or absent = voice transcoding off: main.ts passes it only when
+ * WA_VOICE_TRANSCODE_ENABLED is on AND the boot probe found ffmpeg with
+ * libopus, so with it off outbound audio behaves exactly as before.
+ */
+export interface SessionMediaDeps {
+  resolveAttachment?: typeof resolveOutboundAttachment;
+  transcode?: ((buf: Buffer, mime: SniffedMime) => Promise<TranscodeResult>) | null;
+}
+
 /** Media plan (docs/MEDIA-PLAN.md §5.1/§5.3) — a queued send is EITHER a text part or an attachment part, never both (mirrors the bridge API's own xor contract). */
 type QueuePayload = { kind: "text"; text: string } | { kind: "attachment"; attachment: OutboundAttachment };
 
 interface QueueItem {
   record: MessageRecord;
   payload: QueuePayload;
+  /** Daily-cap units this item costs: 1 for a 1:1 part, `GROUP_SEND_CAP_UNITS` for a group send — reserved at accept time (`queuedUnits`), recorded at dispatch. */
+  units: number;
+}
+
+/** Units reserved by a session's queue — what the accept-time cap check counts, so a queued group send weighs 5, not 1. Summed from the queue itself, so it can never drift from it. */
+function queuedUnits(session: { queue: readonly QueueItem[] }): number {
+  return session.queue.reduce((sum, item) => sum + item.units, 0);
+}
+
+/** What an error log may carry for this row: the message for a 1:1 send (as before), only the error's NAME for a group send — a Baileys message can quote the group JID, and group JIDs are never logged (src/groups.ts). */
+function logSafeError(err: Error, record: MessageRecord): string {
+  return record.groupJid !== null ? err.name : err.message;
+}
+
+/** True iff a ledger row's target is exactly `target` — the idempotency replay/conflict test. A phone row never matches a group target, or the other way round. */
+function sameTarget(record: MessageRecord, target: MessageTarget): boolean {
+  return "groupJid" in target ? record.groupJid === target.groupJid : record.groupJid === null && record.toPhone === target.toPhone;
 }
 
 interface Session {
   coachId: string;
+  /** The delayed down-poke armed by `recordClosed`; cleared on open and at shutdown. */
+  downPokeTimer: NodeJS.Timeout | null;
   sock: WASocket | null;
   lock: SessionLock;
   pacer: SessionPacer;
@@ -204,15 +279,42 @@ interface Session {
    * (docs/MEDIA-PLAN.md §2 rule 4/§8).
    */
   mediaAbuseGate: MediaAbuseGate;
+  /**
+   * Daily group create/add limits (src/group-limits.ts), built once per
+   * session beside `mediaAbuseGate` and seeded lazily from
+   * `whatsapp_group_actions`, so a socket bounce or restart keeps the day's
+   * spend.
+   */
+  groupLimits: GroupActionLimits;
+  /** Create `requestId`s seen in the last 10 minutes (src/group-management.ts) — a retried create replays, never makes a second group. */
+  groupCreateRequests: CreateRequestCache;
+  /** Groups this session created in the last 10 minutes (JID -> created at, ms). `loadEnabledGroups` keeps them in the enabled set until the app's record and refresh have surely landed. */
+  recentlyCreated: Map<string, number>;
+  /**
+   * The group JIDs this number's owner has enabled (src/groups.ts) — the
+   * ONLY groups inbound accepts and outbound sends to. Starts EMPTY (fail
+   * closed) and is replaced wholesale by `loadEnabledGroups`, on every
+   * 'open' and on /groups/refresh; a failed load empties it again.
+   */
+  enabledGroups: Set<string>;
+  /** Generation counter for `loadEnabledGroups` — only the newest load may write `enabledGroups`, so a slow, stale read can never overwrite a fresher one. */
+  enabledGroupsLoad: number;
+  /** Cap units of the item the drain worker has shifted off the queue but not yet recorded (`recordSend`) or let go undispatched — counted by the accept-time reservation alongside `queuedUnits`. 0 when nothing is in flight. */
+  inFlightUnits: number;
 }
 
 export type SendOutcome =
   | { kind: "accepted"; record: MessageRecord; fresh: boolean }
   | { kind: "invalid_phone" }
+  | { kind: "group_not_enabled" }
   | { kind: "idempotency_conflict"; existing: MessageRecord }
   | { kind: "session_not_connected"; status: SessionStatus }
   | { kind: "daily_cap_reached"; cap: number }
   | { kind: "lease_unavailable" };
+
+export type GroupListOutcome = { kind: "ok"; groups: GroupListEntry[] } | { kind: "session_not_connected"; status: SessionStatus } | { kind: "list_failed" };
+
+export type GroupRefreshOutcome = { kind: "refreshed" } | { kind: "session_not_connected"; status: SessionStatus } | { kind: "refresh_failed" };
 
 export interface SessionSnapshot {
   coachId: string;
@@ -222,7 +324,12 @@ export interface SessionSnapshot {
   qr: string | null;
   sentToday: number;
   dailyCap: number;
+  /** Items waiting in the send queue. */
   queueLength: number;
+  /** Daily-cap units those queued items will cost (a group send is `GROUP_SEND_CAP_UNITS`, a 1:1 part 1). */
+  queuedUnits: number;
+  /** Daily-cap units of the item being dispatched right now (0 when none). */
+  inFlightUnits: number;
 }
 
 /**
@@ -336,6 +443,39 @@ export function recordReconnected(poke: PortalPoke | null): void {
   poke?.schedule();
 }
 
+/** 5 minutes (the portal's "down long enough" rule) plus a 15 second margin, so the portal's check sees the number as down for at least 5 minutes. */
+export const DOWN_POKE_DELAY_MS = 5 * 60 * 1000 + 15 * 1000;
+
+/** The fields the delayed down-poke touches. */
+export interface DownPokeSession {
+  status: SessionStatus;
+  downPokeTimer: NodeJS.Timeout | null;
+}
+
+/** Cancels the session's delayed down-poke, if any. */
+export function clearDownPoke(session: Pick<DownPokeSession, "downPokeTimer">): void {
+  if (session.downPokeTimer) clearTimeout(session.downPokeTimer);
+  session.downPokeTimer = null;
+}
+
+/**
+ * A connection closed: pokes the portal now (it records the number as down) and
+ * once more after `DOWN_POKE_DELAY_MS` if the session still is not open, so the
+ * portal fires "WhatsApp disconnected" without waiting for the hourly cron. At
+ * most one timer per session; it is unref'd so it never holds the process open.
+ */
+export function recordClosed(session: DownPokeSession, poke: PortalPoke | null, delayMs: number = DOWN_POKE_DELAY_MS): void {
+  poke?.schedule();
+  clearDownPoke(session);
+  if (!poke) return;
+  const timer = setTimeout(() => {
+    if (session.downPokeTimer === timer) session.downPokeTimer = null;
+    if (session.status !== "connected") poke.schedule();
+  }, delayMs);
+  timer.unref();
+  session.downPokeTimer = timer;
+}
+
 /**
  * The exact fields `shutdownOneSession` touches, and nothing else —
  * deliberately STRUCTURAL rather than importing `Session` itself, so
@@ -350,6 +490,7 @@ export function recordReconnected(poke: PortalPoke | null): void {
 export interface ShutdownableSession {
   coachId: string;
   stopping: boolean;
+  downPokeTimer?: NodeJS.Timeout | null;
   sock: { end: (error: Error | undefined) => void } | null;
   pendingWrites: PendingWrites;
   lock: { release: () => Promise<void> };
@@ -401,6 +542,8 @@ export interface ShutdownableSession {
 export async function shutdownOneSession(session: ShutdownableSession, opts: { flushTimeoutMs: number }, log: Logger): Promise<void> {
   const { coachId } = session;
   session.stopping = true;
+  if (session.downPokeTimer) clearTimeout(session.downPokeTimer);
+  session.downPokeTimer = null;
   try {
     session.sock?.end(undefined);
   } catch {
@@ -521,6 +664,8 @@ export class SessionManager {
   /** In-flight `startSession` calls per coach — collapses concurrent callers onto one attempt instead of letting them race independent socket opens (see file header). */
   private readonly starting = new Map<string, Promise<Session>>();
   private claimRetryTimer: NodeJS.Timeout | null = null;
+  /** Delivered / read receipts (src/receipts.ts); null unless WA_READ_RECEIPTS_ENABLED. Shared across sessions: its keys include the coach id. */
+  private readonly receipts: ReceiptApplier | null;
   readonly instanceId = crypto.randomUUID();
   /**
    * Set exactly once, at the very top of `shutdown()`, before anything else
@@ -611,8 +756,12 @@ export class SessionManager {
      * `whatsapp_messages` either way; only the "tell the portal within
      * seconds" latency optimisation is gated on this.
      */
-    private readonly outboundPoke: PortalPoke | null = null
-  ) {}
+    private readonly outboundPoke: PortalPoke | null = null,
+    /** Outbound media seams — see `SessionMediaDeps`. */
+    private readonly mediaDeps: SessionMediaDeps = {}
+  ) {
+    this.receipts = config.readReceiptsEnabled ? new ReceiptApplier(store, Date.now, log) : null;
+  }
 
   /**
    * Boot: resume every coach that already has linked creds, then keep
@@ -741,6 +890,7 @@ export class SessionManager {
         undefined,
         activity.lastAttemptAt ? Date.parse(activity.lastAttemptAt) : null
       ),
+      downPokeTimer: null,
       status: "disconnected",
       phoneNumber: null,
       qr: null,
@@ -754,6 +904,12 @@ export class SessionManager {
         countSenderToday: (tenantId, senderPhone) => this.store.countInboundMediaAttemptsForSenderToday(tenantId, senderPhone),
         countTenantToday: (tenantId) => this.store.countInboundMediaAttemptsForTenantToday(tenantId),
       }),
+      groupLimits: new GroupActionLimits(this.store, { createDaily: this.config.groupCreateDaily, addDaily: this.config.groupAddDaily }),
+      groupCreateRequests: new CreateRequestCache(),
+      recentlyCreated: new Map(),
+      enabledGroups: new Set(),
+      enabledGroupsLoad: 0,
+      inFlightUnits: 0,
     };
 
     // Re-checked immediately before claiming — shutdown may have begun
@@ -1016,16 +1172,41 @@ export class SessionManager {
         const rawId = sock.user?.id ?? "";
         const number = rawId.split(":")[0]?.split("@")[0] ?? "";
         session.phoneNumber = number ? `+${number}` : null;
-        void this.persistStatus(session, "connected", { phoneNumber: session.phoneNumber, touchLastConnected: true, disconnectReason: null });
+        let persisted: Promise<void>;
+        if (this.config.warmupEnabled && session.phoneNumber) {
+          // Warm-up (src/pacing.ts): assume brand new until the ledger says
+          // otherwise, so the window before the read lands is stricter, never
+          // looser. markPhoneLinked compares against the stored number, so it
+          // runs before the status write replaces it.
+          session.pacer.setLinkedAt(Date.now());
+          const phoneNumber = session.phoneNumber;
+          persisted = (async () => {
+            await this.safely(session.coachId, async () => session.pacer.setLinkedAt(await this.store.markPhoneLinked(session.coachId, phoneNumber)));
+            await this.persistStatus(session, "connected", { phoneNumber, touchLastConnected: true, disconnectReason: null });
+          })();
+        } else {
+          persisted = this.persistStatus(session, "connected", { phoneNumber: session.phoneNumber, touchLastConnected: true, disconnectReason: null });
+        }
+        // Opt-in groups (src/groups.ts): re-read the enabled set on every
+        // open, so a toggle made while the socket was down still lands.
+        // Never awaited; until it resolves the set stays as it was (empty on
+        // a fresh session — fail closed).
+        void this.loadEnabledGroups(session);
         void this.drainQueue(session);
-        recordReconnected(this.outboundPoke);
+        clearDownPoke(session);
+        // Poke only after the "connected" status is written, so the portal never reads a stale "down".
+        void persisted.catch(() => {}).finally(() => recordReconnected(this.outboundPoke));
       }
 
       if (connection === "close") {
         session.sock = null;
         session.qr = null;
         const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
-        void this.handleClose(session, statusCode);
+        // Poke after handleClose has written the final status (logged_out / banned
+        // included), so the portal reads the number as down; and again after 5 min 15 s.
+        void this.handleClose(session, statusCode).finally(() => {
+          if (!this.shuttingDown) recordClosed(session, this.outboundPoke);
+        });
       }
     });
 
@@ -1065,6 +1246,12 @@ export class SessionManager {
         // its own `sock`, so a stale reference to a previous socket's
         // repository is never possible here.
         resolvePnForLid: (lidJid) => sock.signalRepository.lidMapping.getPNForLID(lidJid),
+        // Opt-in groups (src/inbound.ts "GROUPS") — read at event time, so a
+        // refresh that replaced the set applies to the very next batch.
+        enabledGroups: session.enabledGroups,
+        // Edits, reactions, deletes and quoted replies (src/inbound.ts).
+        // Off = events dropped and quotes ignored, exactly as before.
+        events: this.config.inboundEventsEnabled,
         log: this.log,
       }).catch((err) => {
         // processInboundBatch is itself per-message try/catch'd — this
@@ -1073,6 +1260,31 @@ export class SessionManager {
         this.log.error({ coachId, err: (err as Error).message }, "processInboundBatch threw unexpectedly — should be impossible");
       });
     });
+
+    // Missed calls (src/calls.ts) — observe only, never answer or reject.
+    // Subscribed only when WA_MISSED_CALLS_ENABLED is on.
+    if (this.config.missedCallsEnabled) {
+      const tracker = new MissedCallTracker({
+        resolvePnForLid: (lidJid) => sock.signalRepository.lidMapping.getPNForLID(lidJid),
+        hasRecentMissedCall: (id, phone, since) => this.store.hasRecentMissedCall(id, phone, since, this.log),
+        recordInboundMessage: (input) => this.store.recordInboundMessage(input),
+        schedulePoke: () => this.poke?.schedule(),
+        ownPhone: () => session.phoneNumber,
+        log: this.log,
+      });
+      sock.ev.on("call", (events) => {
+        void tracker.handle(coachId, events);
+      });
+    }
+
+    // Delivered / read receipts (src/receipts.ts). Subscribed only when
+    // WA_READ_RECEIPTS_ENABLED is on.
+    if (this.config.readReceiptsEnabled && this.receipts) {
+      const receipts = this.receipts;
+      sock.ev.on("messages.update", (updates) => {
+        void receipts.handle(coachId, updates);
+      });
+    }
   }
 
   /**
@@ -1206,7 +1418,7 @@ export class SessionManager {
    *      reusing the same run id would report "accepted" while the
    *      corrected number is never actually messaged.
    *   3. Daily-cap accounting now reserves budget at ACCEPT time
-   *      (`sentTodayCount() + queue.length`), not only at dispatch time —
+   *      (`sentTodayCount() + inFlight + queued units + units`), not at dispatch only —
    *      the pacer's counter previously only advanced on dispatch (45-75s
    *      apart), so a burst of due sends arriving together (e.g. an hourly
    *      cron finding 60 due steps at once) could all see the same
@@ -1214,7 +1426,23 @@ export class SessionManager {
    *      before any of them had actually dispatched.
    */
   async send(coachId: string, to: string, text: string, idempotencyKey: string): Promise<SendOutcome> {
-    return this.acceptAndEnqueue(coachId, to, idempotencyKey, "text", { kind: "text", text });
+    return this.acceptAndEnqueue(coachId, { toPhone: to }, idempotencyKey, "text", { kind: "text", text });
+  }
+
+  /**
+   * Opt-in groups (file header GROUPS, src/groups.ts) — `send()` to an
+   * enabled WhatsApp group instead of a phone. Same accept-time contract
+   * (`acceptAndEnqueue`), plus: the JID must pass `isGroupJid` and be in
+   * this session's `enabledGroups`, else `group_not_enabled`; and the cap
+   * reservation is `GROUP_SEND_CAP_UNITS`, not 1.
+   */
+  async sendToGroup(coachId: string, groupJid: string, text: string, idempotencyKey: string): Promise<SendOutcome> {
+    return this.acceptAndEnqueue(coachId, { groupJid }, idempotencyKey, "text", { kind: "text", text });
+  }
+
+  /** `sendAttachment()` to an enabled group — see `sendToGroup`. */
+  async sendAttachmentToGroup(coachId: string, groupJid: string, attachment: OutboundAttachment, idempotencyKey: string): Promise<SendOutcome> {
+    return this.acceptAndEnqueue(coachId, { groupJid }, idempotencyKey, "media", { kind: "attachment", attachment });
   }
 
   /**
@@ -1230,7 +1458,7 @@ export class SessionManager {
    * logic).
    */
   async sendAttachment(coachId: string, to: string, attachment: OutboundAttachment, idempotencyKey: string): Promise<SendOutcome> {
-    return this.acceptAndEnqueue(coachId, to, idempotencyKey, "media", { kind: "attachment", attachment });
+    return this.acceptAndEnqueue(coachId, { toPhone: to }, idempotencyKey, "media", { kind: "attachment", attachment });
   }
 
   /**
@@ -1243,16 +1471,20 @@ export class SessionManager {
    */
   private async acceptAndEnqueue(
     coachId: string,
-    to: string,
+    target: MessageTarget,
     idempotencyKey: string,
     kind: "text" | "media",
     payload: QueuePayload
   ): Promise<SendOutcome> {
-    if (!isE164(to)) return { kind: "invalid_phone" }; // route checked already — belt and braces (hard rule 3).
+    // Route checked already — belt and braces (hard rule 3).
+    const isGroup = "groupJid" in target;
+    if (isGroup ? !isGroupJid(target.groupJid) : !isE164(target.toPhone)) {
+      return isGroup ? { kind: "group_not_enabled" } : { kind: "invalid_phone" };
+    }
 
     const existing = await this.store.getMessage(coachId, idempotencyKey);
     if (existing) {
-      if (existing.toPhone !== to) {
+      if (!sameTarget(existing, target)) {
         return { kind: "idempotency_conflict", existing };
       }
       return { kind: "accepted", record: existing, fresh: false };
@@ -1262,21 +1494,31 @@ export class SessionManager {
     if (!session || session.status !== "connected" || !session.sock) {
       return { kind: "session_not_connected", status: session?.status ?? "disconnected" };
     }
-    // Each part (text OR attachment) is one cap unit and one pacer slot
-    // (plan §5.6 decision O3 — "the pacer must count what WhatsApp counts").
-    if (session.pacer.atDailyCap() || session.pacer.sentTodayCount() + session.queue.length >= this.config.dailyCap) {
-      return { kind: "daily_cap_reached", cap: this.config.dailyCap };
+    // Opt-in groups: only a group the owner enabled (and the number has not
+    // left), per this session's in-memory set. After the replay check above,
+    // so a retry of an already-sent group message still gets its true row.
+    if (isGroup && !session.enabledGroups.has(target.groupJid)) {
+      return { kind: "group_not_enabled" };
+    }
+    // Each part (text OR attachment) is one pacer slot; a 1:1 part is one
+    // cap unit (plan §5.6 decision O3 — "the pacer must count what WhatsApp
+    // counts"), a group send `GROUP_SEND_CAP_UNITS`. Queued UNITS are
+    // reserved, not queue.length, so a queued group send weighs 5 — plus the
+    // item the drain is mid-way through dispatching (`inFlightUnits`).
+    const units = isGroup ? GROUP_SEND_CAP_UNITS : 1;
+    if (session.pacer.atDailyCap() || session.pacer.sentTodayCount() + session.inFlightUnits + queuedUnits(session) + units > session.pacer.effectiveDailyCap()) {
+      return { kind: "daily_cap_reached", cap: session.pacer.effectiveDailyCap() };
     }
 
-    const { record, fresh } = await this.store.acceptMessage(coachId, idempotencyKey, to, kind);
+    const { record, fresh } = await this.store.acceptMessage(coachId, idempotencyKey, target, kind);
     if (!fresh) {
       // Someone else inserted between our lookup above and this insert (a
       // genuine race, not the common case) — apply the same mismatch check.
-      if (record.toPhone !== to) return { kind: "idempotency_conflict", existing: record };
+      if (!sameTarget(record, target)) return { kind: "idempotency_conflict", existing: record };
       return { kind: "accepted", record, fresh: false };
     }
 
-    session.queue.push({ record, payload });
+    session.queue.push({ record, payload, units });
     void this.drainQueue(session);
     return { kind: "accepted", record, fresh: true };
   }
@@ -1309,86 +1551,320 @@ export class SessionManager {
 
         const item = session.queue.shift();
         if (!item) break;
-        const { record, payload } = item;
-        const sock = session.sock;
-
-        let claimed: boolean;
+        const { record, payload, units } = item;
+        // In flight from here until `recordSend(units)` moves them into
+        // `sentToday` (same synchronous step) or the item exits undispatched:
+        // the accept-time reservation counts these units too, so the awaits
+        // below (claim, existence/membership check, attachment fetch, typing)
+        // can never open a window where they are counted nowhere. The
+        // `finally` clears them on EVERY exit path, `continue` included.
+        session.inFlightUnits = units;
         try {
-          claimed = await this.store.claimMessage(record.id);
-        } catch (err) {
-          this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "claim failed before dispatch");
-          await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "internal error before dispatch — not sent", false));
-          continue;
-        }
-        if (!claimed) continue; // someone else resolved this row (boot sweep / rival) — never double-send.
+          const sock = session.sock;
 
-        // Existence check (hard rule 3): ask WhatsApp, and send to the JID
-        // IT returns — never to a JID we built by string concatenation.
-        let jid: string | undefined;
-        try {
-          const results = await sock.onWhatsApp(record.toPhone);
-          jid = results?.find((r) => r.exists)?.jid;
-        } catch (err) {
-          // The send API was never reached — safe to reissue under a new key.
-          this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "existence check failed");
-          await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("existence_check"), false));
-          continue;
-        }
-        if (!jid) {
-          await recordNotOnWhatsapp(this.store, this.outboundPoke, record.id);
-          continue;
-        }
-
-        // Media plan (docs/MEDIA-PLAN.md §5.4) — an attachment part resolves
-        // (fetch + sniff + type-cap + map) HERE, after the existence check
-        // and BEFORE `pacer.recordSend()` — a fetch/sniff/cap/type failure
-        // never consumes a pacer slot or a `sendMessage` call, exactly
-        // mirroring the existence-check failure branch just above (never
-        // dispatched -> `dispatchAttempted: false`, safe to reissue).
-        let messageContent: { text: string; linkPreview: null } | Record<string, unknown>;
-        if (payload.kind === "text") {
-          messageContent = buildOutboundTextContent(payload.text);
-        } else {
-          const resolved = await resolveOutboundAttachment(payload.attachment.url, {
-            timeoutMs: this.config.mediaFetchTimeoutMs,
-            caps: {
-              image: this.config.mediaMaxImageBytes,
-              video: this.config.mediaMaxVideoBytes,
-              audio: this.config.mediaMaxAudioBytes,
-              document: this.config.mediaMaxDocumentBytes,
-            },
-          });
-          if (!resolved.ok) {
-            const reason =
-              resolved.reason === "unsupported_type"
-                ? "attachment type is not supported for WhatsApp delivery"
-                : resolved.reason === "too_large_for_type"
-                  ? "attachment exceeds the size limit for its type"
-                  : "attachment could not be fetched";
-            this.log.warn({ coachId: session.coachId, messageId: record.id, reason: resolved.reason }, "outbound attachment resolution failed — not dispatched");
-            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, reason, false));
+          let claimed: boolean;
+          try {
+            claimed = await this.store.claimMessage(record.id);
+          } catch (err) {
+            this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "claim failed before dispatch");
+            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "internal error before dispatch — not sent", false));
             continue;
           }
-          messageContent = buildBaileysMediaContent(resolved, payload.attachment.fileName);
-        }
+          if (!claimed) continue; // someone else resolved this row (boot sweep / rival) — never double-send.
 
-        session.pacer.recordSend(); // count the ATTEMPT — see pacer JSDoc.
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Baileys' AnyMessageContent union is intentionally not re-imported into media.ts (see buildBaileysMediaContent's own JSDoc); both branches above already produce a shape Baileys accepts.
-          const sent = await sock.sendMessage(jid, messageContent as any);
-          await recordSent(this.store, this.outboundPoke, record.id, sent?.key?.id ?? null);
-        } catch (err) {
-          // sendMessage WAS invoked — the frame may already be with
-          // WhatsApp (e.g. an ack timeout after transmit). Never log the
-          // body or the error object wholesale (Baileys errors can embed
-          // frames) — message + ids only, and only a fixed reason persists.
-          this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "send attempt failed");
-          await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("send"), true));
+          let jid: string | undefined;
+          if (record.groupJid !== null) {
+            // Opt-in group (file header GROUPS). The target is the stored JID
+            // itself — it came from WhatsApp's own group list and passed
+            // `isGroupJid` at accept — so hard rule 3 holds without
+            // `onWhatsApp`. Two checks replace it, both before anything is
+            // dispatched (every failure here is dispatchAttempted=false):
+            //   1. still enabled — the owner may have switched the group off
+            //      since this was accepted ("disabling stops outbound at once");
+            //   2. our number is still a participant (`groupMetadata`).
+            // Never log the group JID or name — ids only.
+            const groupJid = record.groupJid;
+            if (!session.enabledGroups.has(groupJid)) {
+              this.log.warn({ coachId: session.coachId, messageId: record.id }, "group no longer enabled — not dispatched");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, GROUP_SYNC_OFF_REASON, false));
+              continue;
+            }
+            const membership = await checkGroupMembership(sock, groupJid);
+            if (membership.kind === "check_failed") {
+              // Same as a failed existence check: never reached the send API.
+              // The error's name only — its message could quote the JID.
+              this.log.error({ coachId: session.coachId, messageId: record.id, err: membership.err.name }, "group membership check failed");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("existence_check"), false));
+              continue;
+            }
+            if (membership.kind === "not_member") {
+              this.log.warn({ coachId: session.coachId, messageId: record.id }, "number is no longer in the group — not dispatched");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, NOT_IN_GROUP_REASON, false));
+              continue;
+            }
+            jid = groupJid;
+          } else {
+            // Existence check (hard rule 3): ask WhatsApp, and send to the JID
+            // IT returns — never to a JID we built by string concatenation.
+            try {
+              // A non-group row always has to_phone (0008's one-target CHECK).
+              const results = await sock.onWhatsApp(record.toPhone ?? "");
+              jid = results?.find((r) => r.exists)?.jid;
+            } catch (err) {
+              // The send API was never reached — safe to reissue under a new key.
+              this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "existence check failed");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("existence_check"), false));
+              continue;
+            }
+            if (!jid) {
+              await recordNotOnWhatsapp(this.store, this.outboundPoke, record.id);
+              continue;
+            }
+          }
+
+          // Media plan (docs/MEDIA-PLAN.md §5.4) — an attachment part resolves
+          // (fetch + sniff + type-cap + map) HERE, after the existence check
+          // and BEFORE `pacer.recordSend()` — a fetch/sniff/cap/type failure
+          // never consumes a pacer slot or a `sendMessage` call, exactly
+          // mirroring the existence-check failure branch just above (never
+          // dispatched -> `dispatchAttempted: false`, safe to reissue).
+          let messageContent: { text: string; linkPreview: null } | Record<string, unknown>;
+          if (payload.kind === "text") {
+            messageContent = buildOutboundTextContent(payload.text);
+          } else {
+            const transcode = this.mediaDeps.transcode ?? null;
+            const resolveAttachment = this.mediaDeps.resolveAttachment ?? resolveOutboundAttachment;
+            const resolved = await resolveAttachment(payload.attachment.url, {
+              timeoutMs: this.config.mediaFetchTimeoutMs,
+              voiceTranscode: transcode !== null,
+              caps: {
+                image: this.config.mediaMaxImageBytes,
+                video: this.config.mediaMaxVideoBytes,
+                audio: this.config.mediaMaxAudioBytes,
+                document: this.config.mediaMaxDocumentBytes,
+              },
+            });
+            if (!resolved.ok) {
+              const reason =
+                resolved.reason === "unsupported_type"
+                  ? "attachment type is not supported for WhatsApp delivery"
+                  : resolved.reason === "too_large_for_type"
+                    ? "attachment exceeds the size limit for its type"
+                    : "attachment could not be fetched";
+              this.log.warn({ coachId: session.coachId, messageId: record.id, reason: resolved.reason }, "outbound attachment resolution failed — not dispatched");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, reason, false));
+              continue;
+            }
+            let content: Parameters<typeof buildBaileysMediaContent>[0] = resolved;
+            // A transcode candidate's fallback is named by the bridge
+            // (`voice-note.<ext>` for a webm/wav document), never by GHL —
+            // except a video (`has_video`): that is the coach's file, sent as
+            // a document under GHL's own name (or a generic one).
+            let fileName = resolved.transcodeCandidate ? undefined : payload.attachment.fileName;
+            if (resolved.transcodeCandidate && transcode !== null) {
+              // Voice note (voice notes plan, Task 3): non-opus audio becomes
+              // an ogg/opus voice note. Any failure, whatever its reason, sends
+              // the original file instead (prepareOutboundAudio's fallback) —
+              // never a failed row. Like the typing window below, the socket
+              // can drop while ffmpeg runs: nothing is dispatched yet, so a
+              // drop fails the row as NOT attempted (safe to reissue).
+              const startedAt = Date.now();
+              const prepared = await prepareOutboundAudio(resolved, { transcode });
+              this.log.info(
+                { coachId: session.coachId, messageId: record.id, mime: resolved.mimetype, outcome: prepared.outcome, ms: Date.now() - startedAt },
+                "outbound voice note prepared"
+              );
+              if (session.sock !== sock || session.status !== "connected") {
+                await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "session disconnected before sending — not dispatched", false));
+                continue;
+              }
+              // The owner may also have switched the group off while ffmpeg
+              // ran ("disabling stops outbound at once") — re-check it here.
+              if (record.groupJid !== null && !session.enabledGroups.has(record.groupJid)) {
+                this.log.warn({ coachId: session.coachId, messageId: record.id }, "group no longer enabled — not dispatched");
+                await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, GROUP_SYNC_OFF_REASON, false));
+                continue;
+              }
+              content = prepared.content;
+              if (prepared.outcome === "has_video") fileName = payload.attachment.fileName ?? `attachment.${extensionForMime(resolved.mimetype)}`;
+            }
+            // One line per outbound attachment (the real-device check reads it):
+            // the sniffed type of the bytes GHL sent and the shape we send.
+            // Never the file name, URL, bytes or a group JID.
+            const ftypBrand = ftypBrandForLog(resolved.buffer, resolved.mimetype);
+            this.log.info(
+              {
+                coachId: session.coachId,
+                messageId: record.id,
+                sniffedMime: resolved.mimetype,
+                ...(ftypBrand !== undefined ? { ftypBrand } : {}),
+                kind: content.kind,
+                ptt: content.ptt === true,
+              },
+              "outbound attachment"
+            );
+            messageContent = buildBaileysMediaContent(content, fileName);
+          }
+
+          // Typing simulation (src/typing.ts) — "typing…" before a TEXT part,
+          // to the JID WhatsApp returned above (or the group's own JID — a
+          // person typing into a group shows as composing there too). Best effort: presence errors
+          // never fail the send. The socket can drop during the window, so it
+          // is re-checked after: nothing has been dispatched yet, so a drop
+          // here fails the row as NOT attempted (safe to reissue), the same as
+          // the existence-check failure branch above.
+          if (payload.kind === "text") {
+            const typingMs = typingDurationMs(payload.text, { enabled: this.config.typingIndicatorEnabled, maxMs: this.config.typingMaxMs });
+            await simulateTyping(sock, jid, typingMs, sleep, (err) =>
+              this.log.warn({ coachId: session.coachId, messageId: record.id, err: logSafeError(err, record) }, "typing presence update failed — sending anyway")
+            );
+            if (session.sock !== sock || session.status !== "connected") {
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "session disconnected before sending — not dispatched", false));
+              continue;
+            }
+          }
+
+          session.pacer.recordSend(units); // count the ATTEMPT, in cap units (5 for a group) — see pacer JSDoc.
+          session.inFlightUnits = 0; // now in sentToday — never count them twice.
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Baileys' AnyMessageContent union is intentionally not re-imported into media.ts (see buildBaileysMediaContent's own JSDoc); both branches above already produce a shape Baileys accepts.
+            const sent = await sock.sendMessage(jid, messageContent as any);
+            await recordSent(this.store, this.outboundPoke, record.id, sent?.key?.id ?? null);
+            // An ack may have beaten markMessageSent; apply it now (never throws).
+            if (this.receipts && sent?.key?.id) await this.receipts.afterSent(session.coachId, sent.key.id);
+          } catch (err) {
+            // sendMessage WAS invoked — the frame may already be with
+            // WhatsApp (e.g. an ack timeout after transmit). Never log the
+            // body or the error object wholesale (Baileys errors can embed
+            // frames) — message + ids only, and only a fixed reason persists.
+            this.log.error({ coachId: session.coachId, messageId: record.id, err: logSafeError(err as Error, record) }, "send attempt failed");
+            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("send"), true));
+          }
+        } finally {
+          session.inFlightUnits = 0;
         }
       }
     } finally {
       session.draining = false;
     }
+  }
+
+  /**
+   * Replaces `session.enabledGroups` with the tenant's current enabled,
+   * not-left groups (`store.listEnabledGroupJids`, already `isGroupJid`-
+   * filtered). Generation-guarded: if a newer load started while this one
+   * was in flight, this one's result is discarded. A failed read EMPTIES
+   * the set (fail closed — a group switched off must stop at once, so
+   * "unknown" can never mean "keep forwarding") and returns false. Never
+   * throws, never logs a JID.
+   */
+  private async loadEnabledGroups(session: Session): Promise<boolean> {
+    const generation = ++session.enabledGroupsLoad;
+    try {
+      const jids = await this.store.listEnabledGroupJids(session.coachId);
+      const { enabled, lookupFailed } = await withRecentlyCreated(jids.filter(isGroupJid), session.recentlyCreated, Date.now(), (pending) =>
+        this.store.groupRowStates(session.coachId, pending)
+      );
+      if (lookupFailed) this.log.error({ coachId: session.coachId }, "recently created groups could not be checked — not kept enabled by this load");
+      if (session.enabledGroupsLoad === generation) session.enabledGroups = enabled;
+      return true;
+    } catch (err) {
+      this.log.error({ coachId: session.coachId, err: (err as Error).message }, "enabled-groups load failed — group traffic dropped until the next load");
+      if (session.enabledGroupsLoad === generation) session.enabledGroups = new Set();
+      return false;
+    }
+  }
+
+  /** POST /sessions/:coachId/groups/refresh — reloads the enabled set for a session this instance holds (any status; 'open' reloads again anyway). */
+  async refreshEnabledGroups(coachId: string): Promise<GroupRefreshOutcome> {
+    const session = this.sessions.get(coachId);
+    if (!session) return { kind: "session_not_connected", status: "disconnected" };
+    return (await this.loadEnabledGroups(session)) ? { kind: "refreshed" } : { kind: "refresh_failed" };
+  }
+
+  /**
+   * GET /sessions/:coachId/groups — the groups this number is in, straight
+   * from WhatsApp (`groupFetchAllParticipating`), for the owner to choose
+   * from. Connected sessions only. Nothing here is stored or logged.
+   */
+  async listGroups(coachId: string): Promise<GroupListOutcome> {
+    const session = this.sessions.get(coachId);
+    if (!session || session.status !== "connected" || !session.sock) {
+      return { kind: "session_not_connected", status: session?.status ?? "disconnected" };
+    }
+    try {
+      const all = await session.sock.groupFetchAllParticipating();
+      return { kind: "ok", groups: toGroupList(all as Record<string, GroupMetadataLike>) };
+    } catch (err) {
+      // The error's name only — a Baileys error message could quote group detail.
+      this.log.error({ coachId, err: (err as Error).name }, "group list fetch failed");
+      return { kind: "list_failed" };
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Group management — the rules and Baileys calls live in
+  // src/group-management.ts; these only resolve the session and delegate.
+  // Connected sessions only.
+  // -------------------------------------------------------------------------
+
+  private groupOpContext(coachId: string): GroupOpContext | null {
+    const session = this.sessions.get(coachId);
+    if (!session || session.status !== "connected" || !session.sock) return null;
+    return {
+      coachId,
+      sock: session.sock,
+      groups: session,
+      limits: session.groupLimits,
+      createDaily: this.config.groupCreateDaily,
+      inWarmup: () => session.pacer.isInWarmup(),
+      store: this.store,
+      createRequests: session.groupCreateRequests,
+      log: this.log,
+      now: Date.now,
+    };
+  }
+
+  /** POST /sessions/:coachId/groups — creates a group, empty if WhatsApp allows, and adds it to the enabled set. */
+  async createGroup(coachId: string, input: CreateGroupInput): Promise<GroupOpOutcome<CreatedGroup>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? createManagedGroup(ctx, input) : { kind: "session_not_connected" };
+  }
+
+  /** GET /sessions/:coachId/groups/:jid — an enabled group's settings and members. */
+  async getGroupDetail(coachId: string, jid: string): Promise<GroupOpOutcome<GroupDetail>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? getManagedGroupDetail(ctx, jid) : { kind: "session_not_connected" };
+  }
+
+  /** PATCH /sessions/:coachId/groups/:jid — name, description, admins-only messages, join approval. Admins only. */
+  async updateGroup(coachId: string, jid: string, patch: GroupPatch): Promise<GroupOpOutcome<null>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? updateManagedGroup(ctx, jid, patch) : { kind: "session_not_connected" };
+  }
+
+  /** POST /sessions/:coachId/groups/:jid/participants — add by phone; remove/promote/demote by member id. Admins only. */
+  async updateGroupParticipants(coachId: string, jid: string, req: ParticipantsRequest): Promise<GroupOpOutcome<ParticipantResult[]>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? updateManagedGroupParticipants(ctx, jid, req) : { kind: "session_not_connected" };
+  }
+
+  /** GET /sessions/:coachId/groups/:jid/invite — the group's current invite link. Admins only. */
+  async getGroupInviteLink(coachId: string, jid: string): Promise<GroupOpOutcome<{ link: string }>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? getManagedGroupInviteLink(ctx, jid) : { kind: "session_not_connected" };
+  }
+
+  /** POST /sessions/:coachId/groups/:jid/invite/reset — revokes the link and returns the new one. Admins only. */
+  async resetGroupInviteLink(coachId: string, jid: string): Promise<GroupOpOutcome<{ link: string }>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? getManagedGroupInviteLink(ctx, jid, true) : { kind: "session_not_connected" };
+  }
+
+  /** POST /sessions/:coachId/groups/:jid/leave — our number leaves; the group drops out of the enabled set. */
+  async leaveGroup(coachId: string, jid: string): Promise<GroupOpOutcome<null>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? leaveManagedGroup(ctx, jid) : { kind: "session_not_connected" };
   }
 
   /**
@@ -1442,8 +1918,10 @@ export class SessionManager {
       phoneNumber: session.phoneNumber,
       qr: session.status === "waiting_qr" && qrFresh ? session.qr : null,
       sentToday: session.pacer.sentTodayCount(),
-      dailyCap: this.config.dailyCap,
+      dailyCap: session.pacer.effectiveDailyCap(),
       queueLength: session.queue.length,
+      queuedUnits: queuedUnits(session),
+      inFlightUnits: session.inFlightUnits,
     };
   }
 

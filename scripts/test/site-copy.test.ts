@@ -47,10 +47,10 @@ test("daily-cap, stop and white-label answers state the real behaviour", () => {
   const get = (id: string) => faqEntries(brand).find((e) => e.id === id)!.answer;
   assert.match(get("daily-cap"), /reported back to GoHighLevel as not sent/);
   assert.match(get("daily-cap"), /midnight \(UTC\)/);
-  assert.match(get("stop"), /from that number/);
+  assert.match(get("stop"), /from that sub-account/);
   assert.match(get("white-label"), /It depends on the agency/);
   assert.match(get("white-label"), /ask your agency to allow Testbrand/);
-  assert.match(get("trial"), /After that it's £14\.99 a month per number\. Connect 10 or more and every number drops to £7\.99 a month\./);
+  assert.match(get("trial"), /After that it's £9\.99 a month per sub-account, with up to 3 WhatsApp numbers included\. 11 to 24 sub-accounts: £7\.99 each\. 25 or more sub-accounts: £5\.99 each\. The tier you reach applies to every sub-account\./);
   assert.ok(!salesCopy(brand).safety.some((s) => /from your account/.test(s.body)));
 });
 
@@ -96,7 +96,9 @@ test("the home FAQ says the uncomfortable things plainly now the disclosure bloc
   assert.match(d, /can't promise/);
   assert.match(d, /dedicated business number/);
   const stop = salesCopy(brand).safety[2].body;
-  assert.match(stop, /from that number/);
+  // Merge ruling: a STOP blocks every number of that sub-account (a STOP is
+  // the contact's choice about the business), never the whole account.
+  assert.match(stop, /from that sub-account's WhatsApp numbers/);
   assert.ok(!/from your account/.test(stop));
 });
 
@@ -205,7 +207,21 @@ test("W40: no 'one price', 'same price' or 'flat price' wording survives", () =>
   assert.deepEqual(hits, []);
 });
 
-test("W40: the trial paragraph, our comparison column and the other price copy state the two prices", () => {
-  assert.match(pricingCopy().trialTerms[0], /£14\.99 a month per number\. Connect 10 or more and every number drops to £7\.99 a month\./);
-  assert.deepEqual(ourColumn("GBP")[0], "£14.99 a month per number, or £7.99 each once you connect 10 or more.");
+test("W40: the trial paragraph, our comparison column and the other price copy state the three prices", () => {
+  assert.match(pricingCopy().trialTerms[0], /£9\.99 a month per sub-account, with up to 3 WhatsApp numbers included\. 11 to 24 sub-accounts: £7\.99 each\. 25 or more sub-accounts: £5\.99 each\./);
+  assert.deepEqual(ourColumn("GBP")[0], "£9.99 a month per sub-account, with up to 3 WhatsApp numbers included. 11 to 24 sub-accounts: £7.99 each. 25 or more sub-accounts: £5.99 each. The tier you reach applies to every sub-account.");
+});
+
+test("trial copy says no card is needed and never that we take one", () => {
+  const signup = readFileSync(join(process.cwd(), "src/app/(site)/signup/page.tsx"), "utf8");
+  const sources = {
+    sales: strings(salesCopy(brand)).join(" "),
+    faq: faqEntries(brand).find((e) => e.id === "trial")!.answer,
+    pricing: pricingCopy().trialTerms.join(" "),
+    signup,
+  };
+  for (const [k, v] of Object.entries(sources)) {
+    assert.doesNotMatch(v, /take a card|card up front|card is needed|card when you sign up/i, k);
+    assert.match(v, /-day free trial, no card needed/, k);
+  }
 });

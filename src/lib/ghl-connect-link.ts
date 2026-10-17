@@ -43,6 +43,19 @@
  * migration 0075's own header for why a version counter rather than a
  * boolean or timestamp.
  *
+ * AND `s`, THE NUMBER'S SLOT (several WhatsApp numbers per location, Task 4).
+ * A connect link is per NUMBER: `{ locationId, v, s }`, where `s` is 1, 2 or
+ * 3 — the slot in `ghl_location_numbers`, NEVER the tenant id (the token is
+ * read by a browser, and a tenant id never goes to one). The server resolves
+ * the slot to its tenant on every call, within the token's own location
+ * (`src/app/api/connect/guard.ts`, check 8). A token with no `s` — every link
+ * minted before this change — means slot 1, so existing links keep working
+ * and keep reaching the number they always did (0006's backfill made each
+ * location's original tenant slot 1). A present `s` that isn't exactly 1-3
+ * fails verify as `invalid`, same as a malformed `v`. The session token
+ * carries the same `s` the link token did (`POST /api/connect/session`), so
+ * a session can never drift to a different number than its link named.
+ *
  * `ONBOARD_STATE_SECRET` ONLY — DELIBERATELY NOT `GHL_SSO_SHARED_SECRET`.
  * `isConnectLinkConfigured()` below checks exactly one env var. The GHL
  * Custom Page embed (`src/lib/ghl-embed.ts`) is dark for want of
@@ -88,6 +101,7 @@
  * mid-migration costs eleven clients a fresh link, not eleven support calls.
  */
 import { signKindedState, verifyKindedStateWithReason } from "@/lib/signed-state";
+import { parseSlotParam, type LocationSlot } from "@/lib/location-numbers";
 
 // ---------------------------------------------------------------------------
 // Config gate
@@ -179,6 +193,8 @@ interface ConnectTokenData {
   locationId: string;
   /** `GhlAccount.connectLinkVersion` at mint time — checked against the CURRENT column value on every verify. */
   v: number;
+  /** The number's slot (Task 4). Absent on pre-slot tokens, which means slot 1. See this file's header. */
+  s?: LocationSlot;
   [key: string]: unknown;
 }
 
@@ -192,11 +208,25 @@ interface ConnectTokenData {
  * case — see `assertConfigured` below.
  */
 export type ConnectTokenVerifyResult =
-  | { ok: true; locationId: string; v: number }
+  | { ok: true; locationId: string; v: number; slot: LocationSlot }
   | { ok: false; reason: "invalid" | "expired" | "wrong_kind" | "missing_state_secret" };
 
 function isValidTokenData(d: Record<string, unknown>): d is ConnectTokenData {
-  return typeof d.locationId === "string" && d.locationId.length > 0 && typeof d.v === "number" && Number.isInteger(d.v) && d.v >= 0;
+  return (
+    typeof d.locationId === "string" &&
+    d.locationId.length > 0 &&
+    typeof d.v === "number" &&
+    Number.isInteger(d.v) &&
+    d.v >= 0 &&
+    // `s` absent -> slot 1; present must be exactly 1, 2 or 3 (see this file's header).
+    parseSlotParam(d.s).ok
+  );
+}
+
+/** The verified payload's slot — `isValidTokenData` has already proved it parses. */
+function slotOf(d: ConnectTokenData): LocationSlot {
+  const parsed = parseSlotParam(d.s);
+  return parsed.ok ? parsed.slot : 1;
 }
 
 /**
@@ -244,11 +274,13 @@ export function mintConnectLinkToken(
    * the safer of the two, and the long-lived variant is only ever reachable
    * by asking for it explicitly.
    */
-  lifetime: "send" | "menu" = "send"
+  lifetime: "send" | "menu" = "send",
+  /** Which of the location's numbers this link connects (Task 4) — a SLOT, never a tenant id. Defaults to slot 1, the number every pre-slot link meant. */
+  slot: LocationSlot = 1
 ): string {
   assertConfigured("mintConnectLinkToken");
   const ttl = lifetime === "menu" ? CONNECT_LINK_MENU_TTL_MS : CONNECT_LINK_TTL_MS;
-  return signKindedState("ghl-connect-link", { locationId, v: version }, ttl);
+  return signKindedState("ghl-connect-link", { locationId, v: version, s: slot }, ttl);
 }
 
 /**
@@ -268,7 +300,7 @@ export function verifyConnectLinkToken(token: string): ConnectTokenVerifyResult 
   const result = verifyKindedStateWithReason("ghl-connect-link", token);
   if (!result.ok) return result;
   if (!isValidTokenData(result.d)) return { ok: false, reason: "invalid" };
-  return { ok: true, locationId: result.d.locationId, v: result.d.v };
+  return { ok: true, locationId: result.d.locationId, v: result.d.v, slot: slotOf(result.d) };
 }
 
 // ---------------------------------------------------------------------------
@@ -286,9 +318,14 @@ export function verifyConnectLinkToken(token: string): ConnectTokenVerifyResult 
  * Throws if `ONBOARD_STATE_SECRET` is unset, same posture as
  * `mintConnectLinkToken`.
  */
-export function mintConnectSessionToken(locationId: string, version: number): string {
+export function mintConnectSessionToken(
+  locationId: string,
+  version: number,
+  /** The link token's own slot, copied verbatim (Task 4 — see this file's header). Defaults to slot 1. */
+  slot: LocationSlot = 1
+): string {
   assertConfigured("mintConnectSessionToken");
-  return signKindedState("ghl-connect-session", { locationId, v: version }, CONNECT_SESSION_TTL_MS);
+  return signKindedState("ghl-connect-session", { locationId, v: version, s: slot }, CONNECT_SESSION_TTL_MS);
 }
 
 /**
@@ -306,5 +343,5 @@ export function verifyConnectSessionToken(token: string): ConnectTokenVerifyResu
   const result = verifyKindedStateWithReason("ghl-connect-session", token);
   if (!result.ok) return result;
   if (!isValidTokenData(result.d)) return { ok: false, reason: "invalid" };
-  return { ok: true, locationId: result.d.locationId, v: result.d.v };
+  return { ok: true, locationId: result.d.locationId, v: result.d.v, slot: slotOf(result.d) };
 }

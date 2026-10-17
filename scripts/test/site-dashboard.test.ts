@@ -48,12 +48,15 @@ test("pages gate on requireAccountSession and pass the session to the data sourc
   }
 });
 
-test("a pending account gets a working add-a-card form button, not a link to nowhere", () => {
+test("the banner button is a working form: start the trial when pending, add a card when the trial has ended", () => {
   const header = read("src/components/app/PlanHeader.tsx");
-  assert.match(header, /pendingCheckoutAction/);
-  assert.match(header, /Add a card to start your trial/);
-  assert.match(read("src/app/(app)/dashboard/page.tsx"), /pendingCheckoutAction=\{[^}]*startCheckoutAction/);
+  assert.match(header, /<form action=\{bannerAction\.action\}/);
+  const page = read("src/app/(app)/dashboard/page.tsx");
+  assert.match(page, /\{ action: startCheckoutAction, label: "Start your free trial" \}/);
+  assert.match(page, /\{ action: addCardAction, label: "Add a card" \}/);
+  assert.match(page, /bannerAction=\{bannerAction\}/);
   assert.match(read("src/app/(app)/dashboard/billing/actions.ts"), /export async function startCheckoutAction/);
+  assert.match(read("src/app/(app)/dashboard/billing/actions.ts"), /export async function addCardAction/);
 });
 
 test("the connect button leaves the app for the OAuth start route", () => {

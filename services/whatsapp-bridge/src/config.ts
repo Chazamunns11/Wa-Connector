@@ -27,6 +27,16 @@ export interface BridgeConfig {
   sendJitterMs: number;
   /** Max sends per coach per UTC day. */
   dailyCap: number;
+  /** Ramp a newly linked number's daily cap up over 14 days (src/pacing.ts WARMUP_SCHEDULE). Off by default. */
+  warmupEnabled: boolean;
+  /** Max groups one number may create per UTC day (src/group-limits.ts). Mass group creation is a ban trigger. */
+  groupCreateDaily: number;
+  /** Max people one number may add directly to groups per UTC day (src/group-limits.ts); the rest get an invite link. Mass adds are a ban trigger. */
+  groupAddDaily: number;
+  /** Show "typing…" before each outbound text part (src/typing.ts). */
+  typingIndicatorEnabled: boolean;
+  /** Longest single typing window (ms); 0 disables typing like the flag does. */
+  typingMaxMs: number;
   /**
    * Session-lease heartbeat interval (ms) — see src/lock.ts. Default 10s.
    * `lockTtlMs` is 3x this: a holder is declared dead only after missing 3
@@ -127,6 +137,23 @@ export interface BridgeConfig {
   inboundMediaPerTenantDaily: number;
   /** Supabase Storage bucket for inbound media (plan §6.2/§7d). */
   mediaBucket: string;
+  /**
+   * Voice notes (docs/superpowers/plans/2026-10-17-voice-notes.md) — transcode a
+   * non-ogg/opus outbound audio attachment to an ogg/opus voice note with
+   * ffmpeg (src/voice-transcode.ts). Default off; needs ffmpeg with libopus in
+   * the image, probed at boot. Off (or ffmpeg missing) = audio sends as a file.
+   */
+  voiceTranscodeEnabled: boolean;
+  /** Log missed WhatsApp calls as inbound rows (src/calls.ts). Default off until the real-device check passes. */
+  missedCallsEnabled: boolean;
+  /** Record delivered / read receipts on sent messages (src/receipts.ts). Default off until the real-device check passes. */
+  readReceiptsEnabled: boolean;
+  /**
+   * Record a contact's edits, reactions and deletes as event rows and render
+   * quoted replies (src/inbound.ts, migration 0011). Default off: events are
+   * dropped and quotes ignored, exactly as before.
+   */
+  inboundEventsEnabled: boolean;
 }
 
 function required(name: string): string {
@@ -184,6 +211,11 @@ export function loadConfig(): BridgeConfig {
     sendMinGapMs: intWithDefault("WA_SEND_MIN_GAP_MS", 45_000),
     sendJitterMs: intWithDefault("WA_SEND_JITTER_MS", 30_000),
     dailyCap: intWithDefault("WA_DAILY_CAP", 150),
+    warmupEnabled: boolWithDefault("WA_WARMUP_ENABLED", false),
+    groupCreateDaily: intWithDefault("WA_GROUP_CREATE_DAILY", 3),
+    groupAddDaily: intWithDefault("WA_GROUP_ADD_DAILY", 50),
+    typingIndicatorEnabled: boolWithDefault("WA_TYPING_INDICATOR_ENABLED", true),
+    typingMaxMs: intWithDefault("WA_TYPING_MAX_MS", 4_000),
     lockHeartbeatMs: intWithDefault("WA_LOCK_HEARTBEAT_MS", 10_000),
     lockTtlMs: intWithDefault("WA_LOCK_TTL_MS", 30_000),
     shutdownFlushTimeoutMs: intWithDefault("WA_SHUTDOWN_FLUSH_TIMEOUT_MS", 5_000),
@@ -203,6 +235,10 @@ export function loadConfig(): BridgeConfig {
     inboundMediaPerSenderDaily: intWithDefault("WA_INBOUND_MEDIA_PER_SENDER_DAILY", 20),
     inboundMediaPerTenantDaily: intWithDefault("WA_INBOUND_MEDIA_PER_TENANT_DAILY", 300),
     mediaBucket: process.env.WA_MEDIA_BUCKET?.trim() || "wa-media",
+    voiceTranscodeEnabled: boolWithDefault("WA_VOICE_TRANSCODE_ENABLED", false),
+    missedCallsEnabled: boolWithDefault("WA_MISSED_CALLS_ENABLED", false),
+    readReceiptsEnabled: boolWithDefault("WA_READ_RECEIPTS_ENABLED", false),
+    inboundEventsEnabled: boolWithDefault("WA_INBOUND_EVENTS_ENABLED", false),
   };
 
   if (config.lockTtlMs <= config.lockHeartbeatMs) {

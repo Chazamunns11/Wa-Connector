@@ -24,6 +24,7 @@ const POKE_KEYS = ["PORTAL_INBOUND_URL", "PORTAL_OUTBOUND_URL", "WA_INBOUND_POKE
 const MEDIA_KEYS = [
   "WA_MEDIA_OUTBOUND_ENABLED",
   "WA_MEDIA_INBOUND_ENABLED",
+  "WA_MISSED_CALLS_ENABLED",
   "WA_MEDIA_FETCH_TIMEOUT_MS",
   "WA_MEDIA_MAX_IMAGE_BYTES",
   "WA_MEDIA_MAX_AUDIO_BYTES",
@@ -33,12 +34,15 @@ const MEDIA_KEYS = [
   "WA_INBOUND_MEDIA_PER_SENDER_DAILY",
   "WA_INBOUND_MEDIA_PER_TENANT_DAILY",
   "WA_MEDIA_BUCKET",
+  "WA_VOICE_TRANSCODE_ENABLED",
 ];
 /** Ratchet-desync fix (src/pending-writes.ts) — the one new shutdown-flush tunable, same "clear before every test" discipline as the media/poke keys above. */
 const SHUTDOWN_FLUSH_KEYS = ["WA_SHUTDOWN_FLUSH_TIMEOUT_MS"];
 /** Session-lease heartbeat/TTL (src/lock.ts) — same "clear before every test" discipline as the keys above. */
 const LOCK_KEYS = ["WA_LOCK_HEARTBEAT_MS", "WA_LOCK_TTL_MS"];
-const CLEARED_KEYS = [...POKE_KEYS, ...MEDIA_KEYS, ...SHUTDOWN_FLUSH_KEYS, ...LOCK_KEYS];
+/** Group management daily limits (src/group-limits.ts). */
+const GROUP_LIMIT_KEYS = ["WA_GROUP_CREATE_DAILY", "WA_GROUP_ADD_DAILY"];
+const CLEARED_KEYS = [...POKE_KEYS, ...MEDIA_KEYS, ...SHUTDOWN_FLUSH_KEYS, ...LOCK_KEYS, ...GROUP_LIMIT_KEYS];
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void): void {
   const previous: Record<string, string | undefined> = {};
@@ -306,4 +310,44 @@ test("config: WA_LOCK_TTL_MS just above WA_LOCK_HEARTBEAT_MS boots fine — the 
     assert.equal(config.lockHeartbeatMs, 10_000);
     assert.equal(config.lockTtlMs, 10_001);
   });
+});
+
+test("config: WA_VOICE_TRANSCODE_ENABLED defaults to false, reads true, and refuses anything but true/false", () => {
+  withEnv({}, () => {
+    assert.equal(loadConfig().voiceTranscodeEnabled, false);
+  });
+  withEnv({ WA_VOICE_TRANSCODE_ENABLED: "true" }, () => {
+    assert.equal(loadConfig().voiceTranscodeEnabled, true);
+  });
+  withEnv({ WA_VOICE_TRANSCODE_ENABLED: "yes" }, () => {
+    assert.throws(() => loadConfig(), /WA_VOICE_TRANSCODE_ENABLED must be exactly "true" or "false"/);
+  });
+});
+
+test("config: group limits default to 3 creates and 50 direct adds a day, and read overrides", () => {
+  withEnv({}, () => {
+    const config = loadConfig();
+    assert.equal(config.groupCreateDaily, 3);
+    assert.equal(config.groupAddDaily, 50);
+  });
+  withEnv({ WA_GROUP_CREATE_DAILY: "1", WA_GROUP_ADD_DAILY: "10" }, () => {
+    const config = loadConfig();
+    assert.equal(config.groupCreateDaily, 1);
+    assert.equal(config.groupAddDaily, 10);
+  });
+});
+
+test("config: WA_MISSED_CALLS_ENABLED defaults to false and reads true", () => {
+  withEnv({}, () => assert.equal(loadConfig().missedCallsEnabled, false));
+  withEnv({ WA_MISSED_CALLS_ENABLED: "true" }, () => assert.equal(loadConfig().missedCallsEnabled, true));
+});
+
+test("config: WA_READ_RECEIPTS_ENABLED defaults to false and reads true", () => {
+  withEnv({}, () => assert.equal(loadConfig().readReceiptsEnabled, false));
+  withEnv({ WA_READ_RECEIPTS_ENABLED: "true" }, () => assert.equal(loadConfig().readReceiptsEnabled, true));
+});
+
+test("config: WA_INBOUND_EVENTS_ENABLED defaults to false and reads true", () => {
+  withEnv({}, () => assert.equal(loadConfig().inboundEventsEnabled, false));
+  withEnv({ WA_INBOUND_EVENTS_ENABLED: "true" }, () => assert.equal(loadConfig().inboundEventsEnabled, true));
 });

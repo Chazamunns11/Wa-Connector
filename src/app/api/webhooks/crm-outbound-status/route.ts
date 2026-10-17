@@ -31,8 +31,10 @@
 import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
-import { drainGhlOutboundStatuses } from "@/lib/ghl-provider";
+import { defaultGhlProviderDeps, drainGhlOutboundStatuses } from "@/lib/ghl-provider";
 import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
+import { defaultTriggerDeps, isWorkflowTriggersEnabled } from "@/lib/ghl-triggers";
+import { defaultSessionTriggerDeps, drainSessionTriggers } from "@/lib/session-triggers";
 
 /** Verbatim copy of `GET /api/cron/reminders`'s identical helper (same rationale as `whatsapp-replies/route.ts`'s own copy — small enough that duplicating beats a shared import for one function). */
 function constantTimeEqualStr(a: string, b: string): boolean {
@@ -61,5 +63,16 @@ export async function POST(request: Request) {
   // the DB session status; the bridge's live answer decides), then drains.
   await releaseHeldOutboundMessages(repo);
   const result = await drainGhlOutboundStatuses(repo);
-  return NextResponse.json({ ok: true, ...result });
+  // The bridge's connection pokes (open, close, and 5 min 15 s after a close)
+  // land here: check the disconnected / reconnected triggers. Flag-gated and
+  // never throws into the poke.
+  let sessionTriggers = { fired: 0 };
+  if (isWorkflowTriggersEnabled()) {
+    try {
+      sessionTriggers = await drainSessionTriggers(repo, defaultSessionTriggerDeps(defaultTriggerDeps(defaultGhlProviderDeps)));
+    } catch {
+      console.error("[crm-outbound-status] session trigger drain failed (non-fatal)");
+    }
+  }
+  return NextResponse.json({ ok: true, ...result, sessionTriggers });
 }

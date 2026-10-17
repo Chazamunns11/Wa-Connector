@@ -75,15 +75,22 @@ export interface BridgeSessionSnapshot {
   qr: string | null;
   sentToday: number;
   dailyCap: number;
+  /** Items waiting in the bridge's send queue. */
   queueLength: number;
+  /** Daily-cap units the queued items will cost (a group send is 5). Absent from a bridge build before groups. */
+  queuedUnits?: number;
+  /** Daily-cap units of the item being dispatched right now. Absent from a bridge build before groups. */
+  inFlightUnits?: number;
 }
 
 /** Mirrors the bridge's message row shape (services/whatsapp-bridge/src/server.ts). */
 export interface BridgeMessage {
   id: string;
   idempotencyKey: string;
-  /** The recipient this row was actually accepted for — compare against the request's `to` to catch an idempotency-key reuse mismatch (see 'idempotency_conflict' below). */
-  toPhone: string;
+  /** The recipient this row was actually accepted for — compare against the request's `to` to catch an idempotency-key reuse mismatch (see 'idempotency_conflict' below). `null` for a group send. */
+  toPhone: string | null;
+  /** Opt-in groups — the group this row was accepted for; `null` (or absent, from a bridge build before groups) for a one-to-one send. */
+  groupJid?: string | null;
   status: "accepted" | "sending" | "sent" | "failed" | "not_on_whatsapp";
   waMessageId: string | null;
   error: string | null;
@@ -94,7 +101,7 @@ export interface BridgeMessage {
 /**
  * Every failure shape this module can return. `code` values:
  *   'unconfigured'          — env vars unset (demo/dev) — render "not set up", not an error.
- *   'unreachable'           — network error or the 5s timeout — bridge down/slow.
+ *   'unreachable'           — network error or the timeout (5s, or the per-call timeout for a slow group call) — bridge down/slow.
  *   'unauthorized'          — secret mismatch (config error, alert-worthy).
  *   'not_found'             — no session/message for that id.
  *   'invalid_phone' | 'invalid_text' | 'invalid_idempotency_key' | 'invalid_coach_id' | 'invalid_body'
@@ -104,6 +111,9 @@ export interface BridgeMessage {
  *                             DIFFERENT recipient — choose a new key (422).
  *   'daily_cap_reached'     — pacing cap hit; resumes at UTC midnight (429).
  *   'lease_unavailable'     — bridge mid-redeploy handoff; retry shortly (503).
+ *   'group_not_enabled'     — `groupJid` is malformed or not an enabled group for this number (400).
+ *   'groups_unavailable'    — the bridge could not fetch the number's groups from WhatsApp (502).
+ *   'groups_refresh_failed' — the bridge could not reload its enabled groups; group traffic is paused until a reload succeeds (502).
  *   'internal'              — anything else, including a 2xx response whose
  *                             body didn't match the expected shape (treated
  *                             as a bridge-contract violation, never trusted
@@ -120,26 +130,207 @@ export type BridgeSendResult = { ok: true; replay: boolean; message: BridgeMessa
 export type BridgeMessageResult = { ok: true; message: BridgeMessage } | BridgeFailure;
 export type BridgeOkResult = { ok: true } | BridgeFailure;
 
-export interface SendWhatsappInput {
-  coachId: string;
-  /** Strict E.164 ONLY (src/lib/phone.ts's contract) — pass `calls.prospectPhone` verbatim; the bridge 422s anything else rather than normalising (see services/whatsapp-bridge/src/phone.ts for why refusal beats repair). */
-  to: string;
-  text: string;
-  /** Caller-chosen dedupe key, [A-Za-z0-9_-]{1,128} — see this file's IDEMPOTENCY note. */
-  idempotencyKey: string;
+/** One of the number's WhatsApp groups, live from the bridge (`GET /sessions/:id/groups`). Shown to the owner; the bridge never stores it. */
+export interface BridgeGroup {
+  jid: string;
+  name: string;
+  /** Member count. */
+  size: number;
+}
+
+export type BridgeGroupsResult = { ok: true; groups: BridgeGroup[] } | BridgeFailure;
+
+/**
+ * The bridge's group-JID shape — byte-identical to its `GROUP_JID_RE`
+ * (services/whatsapp-bridge/src/groups.ts) and to 0007's/0008's CHECKs.
+ */
+export const WHATSAPP_GROUP_JID_RE = /^[0-9]+(-[0-9]+)?@g\.us$/;
+
+/** True iff `jid` is a well-formed WhatsApp group id (`120363…@g.us`, or the older `<creator>-<timestamp>@g.us`). */
+export function isWhatsappGroupJid(jid: string): boolean {
+  return typeof jid === "string" && WHATSAPP_GROUP_JID_RE.test(jid);
+}
+
+// ---------------------------------------------------------------------------
+// Group management (services/whatsapp-bridge/src/group-routes.ts). Types
+// mirror the bridge's group-management.ts / groups.ts exactly. A refusal
+// comes back as a BridgeFailure whose `code` is the bridge's error code
+// (create_limit, add_limit, warmup, needs_member, not_admin,
+// limits_unavailable, group_not_enabled, session_not_connected, ...) and
+// whose `message` is the bridge's fixed string for 422/403/503 refusals.
+// Nothing here logs a name, JID, phone, member id or invite link.
+// ---------------------------------------------------------------------------
+
+/** One member as group details show it. `memberId` addresses remove/promote/demote; `phone` is null for a LID-only member. */
+export interface BridgeMemberView {
+  memberId: string;
+  phone: string | null;
+  admin: "admin" | "superadmin" | null;
+  isUs: boolean;
+}
+
+export interface BridgeGroupDetail {
+  jid: string;
+  name: string;
+  description: string | null;
+  announcement: boolean;
+  approval: boolean;
+  weAreAdmin: boolean;
+  members: BridgeMemberView[];
+}
+
+export type BridgeParticipantOutcome =
+  | "ok"
+  | "invite_required"
+  | "not_eligible"
+  | "not_on_whatsapp"
+  | "already_member"
+  | "limit_reached"
+  | "warmup"
+  | "self"
+  | "last_admin"
+  | "not_member"
+  | "duplicate"
+  | "failed";
+
+export interface BridgeParticipantResult {
+  phone?: string;
+  memberId?: string;
+  result: BridgeParticipantOutcome;
+}
+
+export interface CreateWhatsappGroupInput {
+  /** Idempotency key, `[A-Za-z0-9_-]{1,128}`: a repeat within 10 minutes replays the first outcome. */
+  requestId: string;
+  name: string;
+  description?: string;
+  /** E.164 fallback candidates for the first member, used only if WhatsApp refuses an empty group. */
+  participants: string[];
+}
+
+export interface BridgeCreatedGroup {
+  jid: string;
+  name: string;
+  addedPhone: string | null;
+  path: "empty" | "with_member";
+  /** The bridge served this from its request cache: the first call with this requestId made the group and owns its record and invites. */
+  replayed?: true;
+}
+
+export interface WhatsappGroupPatch {
+  name?: string;
+  description?: string;
+  announcement?: boolean;
+  approval?: boolean;
+}
+
+export type WhatsappParticipantsRequest = { action: "add"; phones: string[] } | { action: "remove" | "promote" | "demote"; memberIds: string[] };
+
+export type BridgeCreateGroupResult = ({ ok: true } & BridgeCreatedGroup) | BridgeFailure;
+export type BridgeGroupDetailResult = { ok: true; group: BridgeGroupDetail } | BridgeFailure;
+export type BridgeParticipantsResult = { ok: true; results: BridgeParticipantResult[] } | BridgeFailure;
+export type BridgeInviteResult = { ok: true; link: string } | BridgeFailure;
+
+const PARTICIPANT_OUTCOMES: readonly string[] = [
+  "ok", "invite_required", "not_eligible", "not_on_whatsapp", "already_member", "limit_reached", "warmup", "self", "last_admin", "not_member", "duplicate", "failed",
+];
+
+/** Mirrors the bridge exactly: it builds `https://chat.whatsapp.com/<code>` only for a code matching `^[A-Za-z0-9_-]{6,64}$` (services/whatsapp-bridge/src/group-management.ts `INVITE_CODE_RE`). */
+const INVITE_LINK_RE = /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9_-]{6,64}$/;
+
+/** True iff `v` is a WhatsApp invite link (`https://chat.whatsapp.com/<code>`). Anything else from the bridge is treated as a contract violation. */
+export function isValidInviteLink(v: unknown): v is string {
+  return typeof v === "string" && INVITE_LINK_RE.test(v);
+}
+
+function isValidMemberView(m: unknown): m is BridgeMemberView {
+  if (typeof m !== "object" || m === null) return false;
+  const x = m as Record<string, unknown>;
+  return (
+    typeof x.memberId === "string" &&
+    (x.phone === null || typeof x.phone === "string") &&
+    (x.admin === null || x.admin === "admin" || x.admin === "superadmin") &&
+    typeof x.isUs === "boolean"
+  );
+}
+
+/** Shape guard for the group-details body — every field and every member must look right, or the whole body is a contract violation. */
+export function isValidGroupDetail(v: unknown): v is BridgeGroupDetail {
+  if (typeof v !== "object" || v === null) return false;
+  const g = v as Record<string, unknown>;
+  return (
+    typeof g.jid === "string" &&
+    typeof g.name === "string" &&
+    (g.description === null || typeof g.description === "string") &&
+    typeof g.announcement === "boolean" &&
+    typeof g.approval === "boolean" &&
+    typeof g.weAreAdmin === "boolean" &&
+    Array.isArray(g.members) &&
+    g.members.every(isValidMemberView)
+  );
+}
+
+function isValidParticipantResults(v: unknown): v is BridgeParticipantResult[] {
+  return (
+    Array.isArray(v) &&
+    v.every((r) => {
+      if (typeof r !== "object" || r === null) return false;
+      const x = r as Record<string, unknown>;
+      return (
+        typeof x.result === "string" &&
+        PARTICIPANT_OUTCOMES.includes(x.result) &&
+        (x.phone === undefined || typeof x.phone === "string") &&
+        (x.memberId === undefined || typeof x.memberId === "string")
+      );
+    })
+  );
+}
+
+function isValidCreatedGroup(v: Record<string, unknown>): boolean {
+  return (
+    typeof v.jid === "string" &&
+    isWhatsappGroupJid(v.jid) &&
+    typeof v.name === "string" &&
+    (v.addedPhone === null || typeof v.addedPhone === "string") &&
+    (v.path === "empty" || v.path === "with_member") &&
+    (v.replayed === undefined || v.replayed === true)
+  );
 }
 
 /**
+ * One text send. EXACTLY ONE target, enforced by the type (the bridge also
+ * 400s both): `to` for a one-to-one send, or `groupJid` for an enabled group.
+ */
+export type SendWhatsappInput = {
+  coachId: string;
+  text: string;
+  /** Caller-chosen dedupe key, [A-Za-z0-9_-]{1,128} — see this file's IDEMPOTENCY note. */
+  idempotencyKey: string;
+} & (
+  | {
+      /** Strict E.164 ONLY (src/lib/phone.ts's contract) — pass `calls.prospectPhone` verbatim; the bridge 422s anything else rather than normalising (see services/whatsapp-bridge/src/phone.ts for why refusal beats repair). */
+      to: string;
+      groupJid?: never;
+    }
+  | {
+      /** A group JID as stored in `whatsapp_groups` (never built by concatenation — bridge hard rule 3). The bridge refuses it with 'group_not_enabled' unless the group is enabled for this number. */
+      groupJid: string;
+      to?: never;
+    }
+);
+
+/**
  * Media plan (docs/MEDIA-PLAN.md §5.3) — the attachment counterpart to
- * `SendWhatsappInput`, mirroring the bridge's own `{ to, idempotencyKey,
- * attachment: { url, fileName? } }` body shape exactly (services/whatsapp-bridge/src/server.ts).
+ * `SendWhatsappInput`, mirroring the bridge's own `{ to | groupJid,
+ * idempotencyKey, attachment: { url, fileName? } }` body shape exactly
+ * (services/whatsapp-bridge/src/server.ts). Same EXACTLY-ONE-target rule as
+ * `SendWhatsappInput`.
  * Only ever sent when `WA_MEDIA_OUTBOUND_ENABLED` is on — see
  * `src/lib/ghl.ts`'s `isMediaOutboundEnabled`, the portal-side gate this
  * function's only caller (`src/lib/ghl-provider.ts`) checks first.
  */
-export interface SendWhatsappAttachmentInput {
+export type SendWhatsappAttachmentInput = {
   coachId: string;
-  to: string;
   attachment: {
     /** https:// only, ≤2048 chars — the bridge itself is the final validator (server.ts); this module passes the URL through untouched. */
     url: string;
@@ -147,7 +338,18 @@ export interface SendWhatsappAttachmentInput {
     fileName?: string;
   };
   idempotencyKey: string;
-}
+} & (
+  | {
+      /** Strict E.164, exactly as `SendWhatsappInput.to`. */
+      to: string;
+      groupJid?: never;
+    }
+  | {
+      /** Opt-in groups — an enabled group's JID, exactly as `SendWhatsappInput.groupJid`; the bridge's send route takes it with an attachment too. */
+      groupJid: string;
+      to?: never;
+    }
+);
 
 /**
  * Every operation a WhatsApp send/session transport must support — see this
@@ -171,6 +373,10 @@ export interface WhatsappTransport {
   sendAttachment(input: SendWhatsappAttachmentInput): Promise<BridgeSendResult>;
   /** Post-hoc delivery status of a previously accepted send, by the same idempotency key. */
   getMessageStatus(coachId: string, idempotencyKey: string): Promise<BridgeMessageResult>;
+  /** Opt-in groups — the number's groups, live (connected sessions only). */
+  listGroups(coachId: string): Promise<BridgeGroupsResult>;
+  /** Opt-in groups — make the transport reload its enabled-group set after `whatsapp_groups` changed. */
+  refreshGroups(coachId: string): Promise<BridgeOkResult>;
 }
 
 /** `WHATSAPP_BRIDGE_URL` must be https (a plain-http localhost is allowed for local dev only) — see `bridgeEnv`'s JSDoc. */
@@ -202,6 +408,21 @@ function isValidSession(v: unknown): v is BridgeSessionSnapshot {
   return typeof v === "object" && v !== null && typeof (v as { coachId?: unknown }).coachId === "string" && typeof (v as { status?: unknown }).status === "string";
 }
 
+/** Same shape guard as `isValidSession`, for the group list — every entry must look right, or the whole body is treated as a contract violation. */
+function isValidGroupList(v: unknown): v is BridgeGroup[] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (g) =>
+        typeof g === "object" &&
+        g !== null &&
+        typeof (g as { jid?: unknown }).jid === "string" &&
+        typeof (g as { name?: unknown }).name === "string" &&
+        typeof (g as { size?: unknown }).size === "number"
+    )
+  );
+}
+
 /** Same shape guard as `isValidSession`, for message rows. */
 function isValidMessage(v: unknown): v is BridgeMessage {
   return typeof v === "object" && v !== null && typeof (v as { id?: unknown }).id === "string" && typeof (v as { status?: unknown }).status === "string";
@@ -214,7 +435,7 @@ function isValidMessage(v: unknown): v is BridgeMessage {
  */
 async function bridgeFetch(
   path: string,
-  init: { method: "GET" | "POST"; body?: unknown }
+  init: { method: "GET" | "POST" | "PATCH"; body?: unknown; timeoutMs?: number }
 ): Promise<{ status: number; body: Record<string, unknown> } | BridgeFailure> {
   const env = bridgeEnv();
   if (!env) {
@@ -222,7 +443,7 @@ async function bridgeFetch(
   }
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), BRIDGE_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? BRIDGE_TIMEOUT_MS);
     try {
       const res = await fetch(`${env.url}${path}`, {
         method: init.method,
@@ -307,7 +528,10 @@ const bridgeTransport: WhatsappTransport = {
   async send(input: SendWhatsappInput): Promise<BridgeSendResult> {
     const res = await bridgeFetch(`/sessions/${encodeURIComponent(input.coachId)}/send`, {
       method: "POST",
-      body: { to: input.to, text: input.text, idempotencyKey: input.idempotencyKey },
+      body:
+        input.groupJid !== undefined
+          ? { groupJid: input.groupJid, text: input.text, idempotencyKey: input.idempotencyKey }
+          : { to: input.to, text: input.text, idempotencyKey: input.idempotencyKey },
     });
     if ("ok" in res) return res;
     if (res.status === 200 || res.status === 202) {
@@ -330,7 +554,10 @@ const bridgeTransport: WhatsappTransport = {
   async sendAttachment(input: SendWhatsappAttachmentInput): Promise<BridgeSendResult> {
     const res = await bridgeFetch(`/sessions/${encodeURIComponent(input.coachId)}/send`, {
       method: "POST",
-      body: { to: input.to, attachment: input.attachment, idempotencyKey: input.idempotencyKey },
+      body:
+        input.groupJid !== undefined
+          ? { groupJid: input.groupJid, attachment: input.attachment, idempotencyKey: input.idempotencyKey }
+          : { to: input.to, attachment: input.attachment, idempotencyKey: input.idempotencyKey },
     });
     if ("ok" in res) return res;
     if (res.status === 200 || res.status === 202) {
@@ -351,6 +578,25 @@ const bridgeTransport: WhatsappTransport = {
       if (!isValidMessage(res.body.message)) return { ok: false, code: "internal", message: "bridge returned a malformed message body" };
       return { ok: true, message: res.body.message };
     }
+    return toFailure(res.status, res.body);
+  },
+
+  /** `GET /sessions/:coachId/groups` — 409 'session_not_connected' unless the number is linked and open. */
+  async listGroups(coachId: string): Promise<BridgeGroupsResult> {
+    const res = await bridgeFetch(`/sessions/${encodeURIComponent(coachId)}/groups`, { method: "GET" });
+    if ("ok" in res) return res;
+    if (res.status === 200) {
+      if (!isValidGroupList(res.body.groups)) return { ok: false, code: "internal", message: "bridge returned a malformed groups body" };
+      return { ok: true, groups: res.body.groups };
+    }
+    return toFailure(res.status, res.body);
+  },
+
+  /** `POST /sessions/:coachId/groups/refresh` — on failure the bridge pauses group traffic (fail closed) until a later refresh lands. */
+  async refreshGroups(coachId: string): Promise<BridgeOkResult> {
+    const res = await bridgeFetch(`/sessions/${encodeURIComponent(coachId)}/groups/refresh`, { method: "POST" });
+    if ("ok" in res) return res;
+    if (res.status === 200) return { ok: true };
     return toFailure(res.status, res.body);
   },
 };
@@ -405,6 +651,110 @@ export function sendWhatsappAttachment(input: SendWhatsappAttachmentInput): Prom
 /** Post-hoc status of a previously accepted send, by the same idempotency key. */
 export function getWhatsappMessageStatus(coachId: string, idempotencyKey: string): Promise<BridgeMessageResult> {
   return activeTransport.getMessageStatus(coachId, idempotencyKey);
+}
+
+/** Opt-in groups — the number's WhatsApp groups, live from the bridge (connected sessions only). For the owner's group picker; never stored as-is. */
+export function listWhatsappGroups(coachId: string): Promise<BridgeGroupsResult> {
+  return activeTransport.listGroups(coachId);
+}
+
+/** Opt-in groups — call after changing a number's `whatsapp_groups` rows so the bridge reloads which groups it forwards and accepts sends to. */
+export function refreshWhatsappGroups(coachId: string): Promise<BridgeOkResult> {
+  return activeTransport.refreshGroups(coachId);
+}
+
+// ---------------------------------------------------------------------------
+// Group management calls. Same contract as everything above: hard timeout,
+// never throw, 'unconfigured' without a network attempt. The JID is
+// encodeURIComponent'd into the path. Not on the swappable transport: group
+// management exists only on the Baileys bridge.
+// ---------------------------------------------------------------------------
+
+const groupPath = (coachId: string, jid: string, suffix = ""): string =>
+  `/sessions/${encodeURIComponent(coachId)}/groups/${encodeURIComponent(jid)}${suffix}`;
+
+const MALFORMED = (what: string): BridgeFailure => ({ ok: false, code: "internal", message: `bridge returned a malformed ${what} body` });
+
+/**
+ * Per-call timeouts for the slow group calls. A create can make up to two
+ * `groupCreate` round trips, an `onWhatsApp` lookup per fallback candidate,
+ * and a "did it get made?" scan after an ambiguous error. A participants call
+ * runs `onWhatsApp` plus one `groupParticipantsUpdate` for up to 50 people.
+ * The default 5 s would abort both while WhatsApp is still working.
+ */
+export const BRIDGE_CREATE_GROUP_TIMEOUT_MS = 75_000;
+export const BRIDGE_GROUP_PARTICIPANTS_TIMEOUT_MS = 30_000;
+
+/** `POST /sessions/:id/groups` — a failed create keeps the bridge's error code (the caller decides which failures mean "the group may exist"). */
+export async function createWhatsappGroup(coachId: string, input: CreateWhatsappGroupInput): Promise<BridgeCreateGroupResult> {
+  const res = await bridgeFetch(`/sessions/${encodeURIComponent(coachId)}/groups`, { method: "POST", body: input, timeoutMs: BRIDGE_CREATE_GROUP_TIMEOUT_MS });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidCreatedGroup(res.body)) return MALFORMED("create-group");
+    const b = res.body as unknown as BridgeCreatedGroup;
+    return { ok: true, jid: b.jid, name: b.name, addedPhone: b.addedPhone, path: b.path, ...(b.replayed === true ? { replayed: true as const } : {}) };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `GET /sessions/:id/groups/:jid` */
+export async function getWhatsappGroupDetail(coachId: string, jid: string): Promise<BridgeGroupDetailResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid), { method: "GET" });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidGroupDetail(res.body.group)) return MALFORMED("group");
+    return { ok: true, group: res.body.group };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `PATCH /sessions/:id/groups/:jid` — name, description, announcement, approval. */
+export async function updateWhatsappGroup(coachId: string, jid: string, patch: WhatsappGroupPatch): Promise<BridgeOkResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid), { method: "PATCH", body: patch });
+  if ("ok" in res) return res;
+  if (res.status === 200) return { ok: true };
+  return toFailure(res.status, res.body);
+}
+
+/** `POST /sessions/:id/groups/:jid/participants` — add by phone; remove/promote/demote by member id. */
+export async function updateWhatsappGroupParticipants(coachId: string, jid: string, req: WhatsappParticipantsRequest): Promise<BridgeParticipantsResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid, "/participants"), { method: "POST", body: req, timeoutMs: BRIDGE_GROUP_PARTICIPANTS_TIMEOUT_MS });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidParticipantResults(res.body.results)) return MALFORMED("participants");
+    return { ok: true, results: res.body.results };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `GET /sessions/:id/groups/:jid/invite` */
+export async function getWhatsappGroupInvite(coachId: string, jid: string): Promise<BridgeInviteResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid, "/invite"), { method: "GET" });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidInviteLink(res.body.link)) return MALFORMED("invite");
+    return { ok: true, link: res.body.link };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `POST /sessions/:id/groups/:jid/invite/reset` — revokes the old link. */
+export async function resetWhatsappGroupInvite(coachId: string, jid: string): Promise<BridgeInviteResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid, "/invite/reset"), { method: "POST" });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidInviteLink(res.body.link)) return MALFORMED("invite");
+    return { ok: true, link: res.body.link };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `POST /sessions/:id/groups/:jid/leave` */
+export async function leaveWhatsappGroup(coachId: string, jid: string): Promise<BridgeOkResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid, "/leave"), { method: "POST" });
+  if ("ok" in res) return res;
+  if (res.status === 200) return { ok: true };
+  return toFailure(res.status, res.body);
 }
 
 /**

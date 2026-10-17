@@ -29,7 +29,7 @@ function heldRow(n: number, ageHours: number, over: Partial<GhlOutboundMessage> 
   return {
     id: `row-${n}`, locationId: LOC, tenantId: TENANT, ghlMessageId: `m${n}`, ghlContactId: "c",
     idempotencyKey: `key-${n}`, toPhone: "+447700900123", hadAttachments: false, sendState: "held", sendAttempts: 0,
-    pendingText: `text ${n}`, refusalReason: null, reportedStatus: null, reportedAt: null, reportError: null,
+    pendingText: `text ${n}`, refusalReason: null, reportedStatus: null, reportedAt: null, reportError: null, readReportedAt: null, readReportError: null,
     createdAt: new Date(NOW - ageHours * 3_600_000).toISOString(), ...over,
   };
 }
@@ -39,6 +39,10 @@ function setup(rowList: GhlOutboundMessage[]) {
   const optOuts = new Set<string>();
   const ledger = new Set<string>();
   const parts = new Map<string, GhlOutboundAttachment>();
+  // Multiple numbers and groups (merge): the location's numbers (slot 1 is
+  // the account's own tenant) and group contacts keyed by GHL contact id.
+  const numbers: { tenantId: string; slot: 1 | 2 | 3; isDefault: boolean; label: string | null }[] = [{ tenantId: TENANT, slot: 1, isDefault: true, label: null }];
+  const groups = new Map<string, { tenantId: string; groupJid: string; enabled: boolean; left: boolean; numberRemoved: boolean }>();
   let failListTenants = false;
   let onIsOptedOut: (() => void) | undefined;
   let onLedgerRead: (() => void) | undefined;
@@ -49,6 +53,8 @@ function setup(rowList: GhlOutboundMessage[]) {
     },
     async isOptedOut(t: string, p: string) { onIsOptedOut?.(); return optOuts.has(`${t}:${p}`); },
     async getWhatsappSessionSummary() { return null; },
+    async listLocationNumbers() { return numbers.map((n) => ({ ...n })); },
+    async getWhatsappGroupByContact(_locationId: string, contactId: string) { return groups.get(contactId) ?? null; },
     async getWhatsappMessagesByTenantKeys(pairs: { tenantId: string; idempotencyKey: string }[]) {
       onLedgerRead?.();
       return pairs.filter((p) => ledger.has(p.idempotencyKey)).map((p) => ({ coachId: p.tenantId, idempotencyKey: p.idempotencyKey, status: "sent", error: null }));
@@ -63,8 +69,11 @@ function setup(rowList: GhlOutboundMessage[]) {
     },
     async markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundMessage["reportedStatus"]; reportError: string | null }) {
       const row = rows.get(id)!;
+      // Mirrors the real write: conditional on reported_status IS NULL.
+      if (row.reportedStatus !== null) return false;
       if (patch.reportedStatus !== null) row.reportedStatus = patch.reportedStatus;
       row.reportError = patch.reportError;
+      return true;
     },
     async claimGhlTokenRefresh() { return true; },
     async saveGhlTokens() {},
@@ -110,7 +119,7 @@ function setup(rowList: GhlOutboundMessage[]) {
     notify: () => {},
   } as unknown as GhlProviderDeps;
   return {
-    repo, deps, rows, parts, optOuts, ledger, sendCalls, attachCalls, statusCalls,
+    repo, deps, rows, parts, optOuts, ledger, sendCalls, attachCalls, statusCalls, numbers, groups,
     setAttach(fn: typeof attachImpl) { attachImpl = fn; },
     setSend(fn: typeof sendImpl) { sendImpl = fn; },
     failTenants() { failListTenants = true; },
@@ -349,6 +358,62 @@ test("F2 release: opted out after the text part already went -> remaining parts 
   await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
   assert.equal(s.sendCalls.length + s.attachCalls.length, 0);
   assert.deepEqual(partStates(s), ["refused", "refused"]);
+  assert.equal(s.rows.get("row-1")!.sendState, "accepted");
+  assert.equal(s.statusCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Merge: multiple numbers and opt-in groups
+// ---------------------------------------------------------------------------
+
+const SECOND = "22222222-2222-4222-8222-222222222222";
+const GROUP_JID = "120363012345678901@g.us";
+
+test("merge: a held row on a non-default number is released from THAT number only", async () => {
+  const h = setup([heldRow(1, 1, { tenantId: SECOND })]);
+  h.numbers.push({ tenantId: SECOND, slot: 2, isDefault: false, label: "Sales" });
+  const r = await releaseHeldOutboundMessages(h.repo, h.deps, NOW, {});
+  assert.equal(r.released, 1);
+  assert.deepEqual(h.sendCalls.map((c) => c.coachId), [SECOND]);
+});
+
+test("merge: a held GROUP row (no phone) is released to its group on the row's own number", async () => {
+  const h = setup([heldRow(1, 1, { tenantId: SECOND, toPhone: null, ghlContactId: "group-contact" })]);
+  h.numbers.push({ tenantId: SECOND, slot: 2, isDefault: false, label: null });
+  h.groups.set("group-contact", { tenantId: SECOND, groupJid: GROUP_JID, enabled: true, left: false, numberRemoved: false });
+  const r = await releaseHeldOutboundMessages(h.repo, h.deps, NOW, {});
+  assert.equal(r.released, 1);
+  assert.equal(h.sendCalls.length, 1);
+  assert.equal(h.sendCalls[0].coachId, SECOND);
+  assert.equal((h.sendCalls[0] as { groupJid?: string }).groupJid, GROUP_JID);
+  assert.equal((h.sendCalls[0] as { to?: string }).to, undefined);
+});
+
+test("merge: a STOP recorded on ANOTHER number of the location refuses the held row with the other-number string", async () => {
+  const h = setup([heldRow(1, 1, { tenantId: SECOND })]);
+  h.numbers.push({ tenantId: SECOND, slot: 2, isDefault: false, label: null });
+  h.optOuts.add(`${TENANT}:+447700900123`);
+  const r = await releaseHeldOutboundMessages(h.repo, h.deps, NOW, {});
+  assert.equal(r.refused, 1);
+  assert.equal(h.sendCalls.length, 0);
+  assert.equal(h.rows.get("row-1")!.refusalReason, GHL_PROVIDER_REASONS.optedOutOtherNumber);
+});
+
+test("app-originated: a held pwapp_ row whose contact has since sent STOP is refused and reported locally, never to GHL", async () => {
+  const s = setup([heldRow(1, 5, { ghlMessageId: "pwapp_0123456789abcdef0123456789abcdef" })]);
+  s.optOuts.add(`${TENANT}:+447700900123`);
+  const res = await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.sendCalls.length, 0);
+  assert.equal(s.rows.get("row-1")!.refusalReason, GHL_PROVIDER_REASONS.optedOut);
+  assert.equal(s.rows.get("row-1")!.reportedStatus, "failed");
+  assert.equal(s.statusCalls.length, 0);
+  assert.equal(res.refused, 1);
+});
+
+test("app-originated: a held pwapp_ row released and accepted never PUTs a status to GHL", async () => {
+  const s = setup([heldRow(1, 5, { ghlMessageId: "pwapp_0123456789abcdef0123456789abcdef" })]);
+  await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.sendCalls.length, 1);
   assert.equal(s.rows.get("row-1")!.sendState, "accepted");
   assert.equal(s.statusCalls.length, 0);
 });

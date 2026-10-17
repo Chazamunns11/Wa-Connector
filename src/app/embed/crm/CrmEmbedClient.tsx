@@ -2,9 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardHeader } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Chip } from "@/components/ui/Chip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { WhatsappConnectionPanel, type WhatsappPanelCopy } from "@/components/whatsapp/WhatsappConnectionPanel";
+import { embedPausedMessage } from "@/app/api/crm/embed/session/logic";
 import type { GhlEmbedWhatsappSummary } from "@/lib/types";
+import { MAX_NUMBER_LABEL_LENGTH, parseLabelInput, type LocationSlot } from "@/lib/location-numbers";
+import { CreateGroupForm } from "./CreateGroupForm";
+import { GroupManagePanel } from "./GroupManagePanel";
+import { MessageEventSettings } from "./MessageEventSettings";
 import type { BridgeOkResult, BridgeSessionResult } from "@/lib/whatsapp-bridge";
 
 /**
@@ -90,6 +97,19 @@ const HANDSHAKE_TIMEOUT_MS = 5000;
 
 const NOT_IN_HIGHLEVEL_MESSAGE = "This page only works inside HighLevel.";
 
+/** The most numbers one sub-account can have — mirrors the server's limit (`nextFreeSlot` in src/lib/location-numbers.ts). */
+const MAX_NUMBERS = 3;
+
+/** One WhatsApp number as `POST /api/crm/embed/session` and `/api/crm/embed/numbers` return it — a slot, never a tenant id. */
+interface EmbedNumber {
+  slot: LocationSlot;
+  /** Opaque per-number id (not the tenant id): the React key, so a removed-then-re-added slot starts fresh. */
+  key: string;
+  label: string | null;
+  isDefault: boolean;
+  summary: GhlEmbedWhatsappSummary | null;
+}
+
 type Phase = "handshaking" | "handshake_error" | "not_installed" | "disabled" | "unclaimed" | "billing_paused" | "not_activated" | "ready";
 
 /**
@@ -105,9 +125,11 @@ interface EmbedSessionResponse {
   ok: boolean;
   state?: "ok" | "not_installed" | "disabled" | "unclaimed" | "billing_paused" | "not_activated";
   claimUrl?: string | null;
+  /** With `billing_paused`: set when the free trial ended with no card. */
+  reason?: "trial_ended";
   token?: string;
   label?: string;
-  summary?: GhlEmbedWhatsappSummary | null;
+  numbers?: EmbedNumber[];
   bridgeReachable?: boolean | null;
 }
 
@@ -119,11 +141,11 @@ interface EmbedSessionResponse {
  * `phase`.
  */
 type HandshakeOutcome =
-  | { kind: "ok"; token: string; summary: GhlEmbedWhatsappSummary | null; label: string | null; bridgeReachable: boolean | null }
+  | { kind: "ok"; token: string; numbers: EmbedNumber[]; label: string | null; bridgeReachable: boolean | null }
   | { kind: "not_installed" }
   | { kind: "disabled" }
   | { kind: "unclaimed"; claimUrl: string | null }
-  | { kind: "billing_paused" }
+  | { kind: "billing_paused"; trialEnded: boolean }
   | { kind: "not_activated" }
   | { kind: "error" };
 
@@ -154,17 +176,22 @@ async function runHandshake(): Promise<HandshakeOutcome> {
   if (json.state === "not_installed") return { kind: "not_installed" };
   if (json.state === "disabled") return { kind: "disabled" };
   if (json.state === "unclaimed") return { kind: "unclaimed", claimUrl: typeof json.claimUrl === "string" ? json.claimUrl : null };
-  if (json.state === "billing_paused") return { kind: "billing_paused" };
+  if (json.state === "billing_paused") return { kind: "billing_paused", trialEnded: json.reason === "trial_ended" };
   if (json.state === "not_activated") return { kind: "not_activated" };
   if (json.state !== "ok" || typeof json.token !== "string") return { kind: "error" };
 
   return {
     kind: "ok",
     token: json.token,
-    summary: json.summary ?? null,
+    numbers: sortedNumbers(json.numbers),
     label: json.label ?? null,
     bridgeReachable: typeof json.bridgeReachable === "boolean" ? json.bridgeReachable : null,
   };
+}
+
+/** Numbers ordered by slot; anything that is not an array (an old server) is no numbers. */
+function sortedNumbers(raw: unknown): EmbedNumber[] {
+  return Array.isArray(raw) ? [...(raw as EmbedNumber[])].sort((a, b) => a.slot - b.slot) : [];
 }
 
 /**
@@ -223,7 +250,7 @@ export interface CrmEmbedClientProps {
 
 export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brandName }: CrmEmbedClientProps) {
   const [phase, setPhase] = useState<Phase>("handshaking");
-  const [summary, setSummary] = useState<GhlEmbedWhatsappSummary | null>(null);
+  const [numbers, setNumbers] = useState<EmbedNumber[]>([]);
   const [label, setLabel] = useState<string | null>(null);
   // Adversarial review lens 4, finding 4 (MINOR) — this used to be a page
   // prop computed by an unauthenticated server-render `/health` probe; it
@@ -233,11 +260,12 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
   // handshake, same "nothing to show yet" meaning it always had.
   const [bridgeReachable, setBridgeReachable] = useState<boolean | null>(null);
   const [claimUrl, setClaimUrl] = useState<string | null>(null);
+  const [trialEnded, setTrialEnded] = useState(false);
 
   // The embed token itself — a ref, not state: every closure below reads
   // `tokenRef.current` synchronously at call time rather than closing over a
   // possibly-stale state value, and updating it must never by itself cause a
-  // re-render (only `phase`/`summary`/`label`/`bridgeReachable` changes should).
+  // re-render (only `phase`/`numbers`/`label`/`bridgeReachable` changes should).
   const tokenRef = useRef<string | null>(null);
 
   /**
@@ -268,12 +296,17 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
       setPhase("unclaimed");
       return null;
     }
-    if (outcome.kind === "billing_paused" || outcome.kind === "not_activated") {
+    if (outcome.kind === "billing_paused") {
+      setTrialEnded(outcome.trialEnded);
+      setPhase("billing_paused");
+      return null;
+    }
+    if (outcome.kind === "not_activated") {
       setPhase(outcome.kind);
       return null;
     }
     tokenRef.current = outcome.token;
-    setSummary(outcome.summary);
+    setNumbers(outcome.numbers);
     setLabel(outcome.label);
     setBridgeReachable(outcome.bridgeReachable);
     setPhase("ready");
@@ -297,7 +330,7 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
     const outcome = await runHandshake();
     if (outcome.kind !== "ok") return;
     tokenRef.current = outcome.token;
-    setSummary(outcome.summary);
+    setNumbers(outcome.numbers);
     setLabel(outcome.label);
     setBridgeReachable(outcome.bridgeReachable);
   }, []);
@@ -322,27 +355,35 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
   }, [embedConfigured, refreshSession]);
 
   /**
-   * One authenticated POST to an `/api/crm/embed/whatsapp/*` route, with the
+   * One authenticated call to an `/api/crm/embed/*` route, with the
    * transparent re-handshake-and-retry-once on a 401 described in this
-   * file's header. Never throws on a bridge-side failure (those come back
+   * file's header. The body (always `{ slot }` for the `whatsapp/*` routes)
+   * goes as JSON. Never throws on a bridge-side failure (those come back
    * as an ordinary `{ ok: false, code, message }` body the panel already
    * knows how to render) — only throws when the SESSION ITSELF could not be
    * re-established, which the panel's own error handling (its `catch` around
    * `connect`/`poll`/`logout`) already surfaces as plain text.
    */
-  const callEmbedWhatsappApi = useCallback(
-    async (path: string): Promise<Record<string, unknown>> => {
+  const callEmbedApi = useCallback(
+    async (path: string, method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const send = (token: string) =>
+        fetch(path, {
+          method,
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+
       let token = tokenRef.current;
       if (!token) {
         token = await refreshSession();
         if (!token) throw new Error(NOT_IN_HIGHLEVEL_MESSAGE);
       }
 
-      const res = await fetch(path, { method: "POST", headers: { authorization: `Bearer ${token}` } });
+      const res = await send(token);
       if (res.status === 401) {
         const fresh = await refreshSession();
         if (!fresh) throw new Error("This session has expired — reload this page inside HighLevel to reconnect.");
-        const retryRes = await fetch(path, { method: "POST", headers: { authorization: `Bearer ${fresh}` } });
+        const retryRes = await send(fresh);
         return (await retryRes.json()) as Record<string, unknown>;
       }
       return (await res.json()) as Record<string, unknown>;
@@ -350,32 +391,27 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
     [refreshSession]
   );
 
-  const connect = useCallback(
-    () => callEmbedWhatsappApi("/api/crm/embed/whatsapp/connect") as Promise<BridgeSessionResult>,
-    [callEmbedWhatsappApi]
+  /**
+   * One numbers change (add, remove, make default, rename). Resolves with
+   * `null` on success — after replacing `numbers` with the list the server
+   * just returned — or with the server's own `message`, verbatim, on any
+   * refusal.
+   */
+  const changeNumbers = useCallback(
+    async (method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>): Promise<string | null> => {
+      try {
+        const json = await callEmbedApi("/api/crm/embed/numbers", method, body);
+        if (json.ok === true && Array.isArray(json.numbers)) {
+          setNumbers(sortedNumbers(json.numbers));
+          return null;
+        }
+        return typeof json.message === "string" ? json.message : "Something went wrong. Please try again.";
+      } catch (err) {
+        return err instanceof Error ? err.message : "Something went wrong. Please try again.";
+      }
+    },
+    [callEmbedApi]
   );
-
-  const logout = useCallback(
-    () => callEmbedWhatsappApi("/api/crm/embed/whatsapp/logout") as Promise<BridgeOkResult>,
-    [callEmbedWhatsappApi]
-  );
-
-  const poll = useCallback(async (): Promise<BridgeSessionResult> => {
-    const result = (await callEmbedWhatsappApi("/api/crm/embed/whatsapp/status")) as BridgeSessionResult;
-    if (result.ok && (result.session.status === "connected" || result.session.status === "logged_out" || result.session.status === "banned")) {
-      // See this file's header, "WRAPPER RESPONSIBILITIES" — the panel's own
-      // `router.refresh()` is a no-op here; this is what actually updates
-      // `summary` for the SteadyView the panel renders next. Fire-and-forget:
-      // this tick's `result` already carries everything the panel needs to
-      // render immediately, so nothing here needs to be awaited before
-      // returning. `refreshSummaryOnly`, NOT `refreshSession` — adversarial
-      // review lens 4, finding 9: this call must never be able to flip
-      // `phase` to `"handshake_error"` out from under a panel that just
-      // showed "Connected".
-      void refreshSummaryOnly();
-    }
-    return result;
-  }, [callEmbedWhatsappApi, refreshSummaryOnly]);
 
   // ---- Render ----
 
@@ -453,7 +489,10 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
     return (
       <Card>
         <CardHeader title="WhatsApp" />
-        <EmptyState title="Sending is paused" description="The account owner needs to update billing." />
+        <EmptyState
+          title="Sending is paused"
+          description={embedPausedMessage(trialEnded)}
+        />
       </Card>
     );
   }
@@ -483,28 +522,491 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
   }
 
   return (
-    <WhatsappConnectionPanel
-      copy={buildEmbedCopy(label)}
-      // `coachId: ""` is a STRUCTURAL PLACEHOLDER ONLY, never real data
-      // (adversarial review lens 4, finding 2 — MAJOR). The shared panel's
-      // prop type is `WhatsappSessionSummary | null`, which still declares
-      // `coachId: string` — a field this embed's `summary` state
-      // (`GhlEmbedWhatsappSummary`) structurally cannot carry, because
-      // `POST /api/crm/embed/session` never puts it on the wire in the first
-      // place (see that route's header, "NEVER THE TENANT ID EITHER"). The
-      // panel itself never reads `summary.coachId` (grep-verified; it is
-      // documented as holding no id at all — this file's header) — this
-      // empty string exists purely to satisfy the shared prop's TypeScript
-      // shape without touching `WhatsappConnectionPanel.tsx`, and is never
-      // derived from, or capable of leaking, the real tenant id.
-      summary={summary ? { ...summary, coachId: "" } : null}
-      bridgeConfigured={bridgeConfigured}
-      bridgeReachable={bridgeReachable}
-      nowMs={nowMs}
-      connect={connect}
-      poll={poll}
-      logout={logout}
-    />
+    <div className="flex flex-col gap-4">
+      {numbers.map((number) => (
+        <EmbedNumberCard
+          key={number.key}
+          number={number}
+          copy={buildEmbedCopy(label)}
+          bridgeConfigured={bridgeConfigured}
+          bridgeReachable={bridgeReachable}
+          nowMs={nowMs}
+          callEmbedApi={callEmbedApi}
+          refreshSummaryOnly={refreshSummaryOnly}
+          changeNumbers={changeNumbers}
+          onlyNumber={numbers.length === 1}
+        />
+      ))}
+      {numbers.length < MAX_NUMBERS ? <AddNumber changeNumbers={changeNumbers} /> : null}
+      <MessageEventSettings callEmbedApi={callEmbedApi} />
+    </div>
+  );
+}
+
+/**
+ * One number: its heading row (label or "Number <slot>", a "Default" chip,
+ * Make default / Rename / Remove) above the shared `WhatsappConnectionPanel`,
+ * rendered UNMODIFIED. The panel's zero-arg `connect`/`poll`/`logout` closures
+ * post `{ slot }`, the only way the server is told which number is meant —
+ * never a tenant id. A poll that reaches a terminal status re-mints the
+ * session (summary-only, see this file's header) so every number's summary
+ * catches up.
+ */
+function EmbedNumberCard({
+  number,
+  copy,
+  bridgeConfigured,
+  bridgeReachable,
+  nowMs,
+  callEmbedApi,
+  refreshSummaryOnly,
+  changeNumbers,
+  onlyNumber,
+}: {
+  number: EmbedNumber;
+  copy: WhatsappPanelCopy;
+  bridgeConfigured: boolean;
+  bridgeReachable: boolean | null;
+  nowMs: number;
+  callEmbedApi: (path: string, method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  refreshSummaryOnly: () => Promise<void>;
+  changeNumbers: (method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>) => Promise<string | null>;
+  onlyNumber: boolean;
+}) {
+  const { slot } = number;
+  const [mode, setMode] = useState<"idle" | "renaming" | "confirming_remove">("idle");
+  const [draft, setDraft] = useState(number.label ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const connect = useCallback(
+    () => callEmbedApi("/api/crm/embed/whatsapp/connect", "POST", { slot }) as Promise<BridgeSessionResult>,
+    [callEmbedApi, slot]
+  );
+  const logout = useCallback(
+    () => callEmbedApi("/api/crm/embed/whatsapp/logout", "POST", { slot }) as Promise<BridgeOkResult>,
+    [callEmbedApi, slot]
+  );
+  const poll = useCallback(async (): Promise<BridgeSessionResult> => {
+    const result = (await callEmbedApi("/api/crm/embed/whatsapp/status", "POST", { slot })) as BridgeSessionResult;
+    if (result.ok && (result.session.status === "connected" || result.session.status === "logged_out" || result.session.status === "banned")) {
+      // See this file's header, "WRAPPER RESPONSIBILITIES" — the panel's own
+      // `router.refresh()` is a no-op here; this is what actually updates
+      // the summary the panel renders next. Fire-and-forget and phase-blind
+      // (`refreshSummaryOnly`, NOT `refreshSession`): it must never be able
+      // to flip `phase` to `"handshake_error"` out from under a panel that
+      // just showed "Connected".
+      void refreshSummaryOnly();
+    }
+    return result;
+  }, [callEmbedApi, refreshSummaryOnly, slot]);
+
+  async function run(method: "DELETE" | "PATCH", body: Record<string, unknown>, onDone?: () => void) {
+    setBusy(true);
+    setError(null);
+    const message = await changeNumbers(method, body);
+    setBusy(false);
+    if (message) setError(message);
+    else onDone?.();
+  }
+
+  function saveRename() {
+    // Same trim / empty-means-no-label / 40-character rule the server applies.
+    const parsed = parseLabelInput(draft);
+    if (!parsed.ok) {
+      setError(`Names can be up to ${MAX_NUMBER_LABEL_LENGTH} characters.`);
+      return;
+    }
+    void run("PATCH", { slot, label: parsed.label }, () => setMode("idle"));
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-ink">{number.label ?? `Number ${slot}`}</h2>
+          {number.isDefault ? <Chip tone="accent">Default</Chip> : null}
+        </div>
+        {mode === "idle" ? (
+          <div className="flex flex-wrap items-center gap-1">
+            {!number.isDefault ? (
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run("PATCH", { slot, makeDefault: true })}>
+                Make default
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setDraft(number.label ?? "");
+                setError(null);
+                setMode("renaming");
+              }}
+            >
+              Rename
+            </Button>
+            {!onlyNumber ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setError(null);
+                  setMode("confirming_remove");
+                }}
+              >
+                Remove
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {mode === "renaming" ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={draft}
+            maxLength={MAX_NUMBER_LABEL_LENGTH}
+            onChange={(e) => setDraft(e.target.value)}
+            aria-label="Number name"
+            placeholder={`Number ${slot}`}
+            className="h-[34px] min-w-0 flex-1 rounded border border-border bg-transparent px-3 text-sm text-ink"
+          />
+          <Button size="sm" disabled={busy} onClick={saveRename}>
+            {busy ? "Saving…" : "Save"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              setMode("idle");
+              setError(null);
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : null}
+
+      {mode === "confirming_remove" ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-loss/40 bg-loss/10 px-3 py-2.5">
+          <span className="text-xs text-ink">Remove this number? Its WhatsApp will be logged out.</span>
+          <Button size="sm" variant="danger" disabled={busy} onClick={() => void run("DELETE", { slot })}>
+            {busy ? "Removing…" : "Remove"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              setMode("idle");
+              setError(null);
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : null}
+
+      {error ? <p className="text-xs text-loss">{error}</p> : null}
+
+      <WhatsappConnectionPanel
+        copy={copy}
+        // `coachId: ""` is a STRUCTURAL PLACEHOLDER ONLY, never real data
+        // (adversarial review lens 4, finding 2 — MAJOR). The shared panel's
+        // prop type is `WhatsappSessionSummary | null`, which still declares
+        // `coachId: string` — a field this embed's summary
+        // (`GhlEmbedWhatsappSummary`) structurally cannot carry, because
+        // `POST /api/crm/embed/session` never puts it on the wire in the first
+        // place (see that route's header, "NEVER THE TENANT ID EITHER"). The
+        // panel itself never reads `summary.coachId` — this empty string
+        // exists purely to satisfy the shared prop's TypeScript shape without
+        // touching `WhatsappConnectionPanel.tsx`, and is never derived from,
+        // or capable of leaking, the real tenant id.
+        summary={number.summary ? { ...number.summary, coachId: "" } : null}
+        bridgeConfigured={bridgeConfigured}
+        bridgeReachable={bridgeReachable}
+        nowMs={nowMs}
+        connect={connect}
+        poll={poll}
+        logout={logout}
+      />
+
+      <GroupsSection slot={slot} callEmbedApi={callEmbedApi} />
+    </div>
+  );
+}
+
+/** One group as `POST /api/crm/embed/groups` returns it — WhatsApp's own group id, never a tenant id. */
+interface EmbedGroup {
+  jid: string;
+  name: string;
+  size: number;
+  enabled: boolean;
+  /** The number is no longer in this group. */
+  left: boolean;
+  /** In WhatsApp's own list for this number right now. */
+  live: boolean;
+}
+
+/** Shown once, after the first group is switched on for this number. */
+const GROUP_TAG_HINT = "Group contacts are tagged whatsapp-group. Exclude that tag from bulk SMS workflows.";
+
+/** The groups list from a route response, or `null` when the response isn't a success. */
+function groupsFrom(json: Record<string, unknown>): EmbedGroup[] | null {
+  return json.ok === true && Array.isArray(json.groups) ? (json.groups as EmbedGroup[]) : null;
+}
+
+/**
+ * Opt-in groups (Task 9) — one number's WhatsApp groups, collapsed until the
+ * owner asks ("Show groups"). Every call posts `{ slot }` (plus the group's
+ * JID and the new switch value to change one); the server answers with the
+ * whole list (switching off answers with just that group, which is patched
+ * in place). Server `message`s are shown verbatim. A group missing from
+ * WhatsApp's list right now ("Left", or "Not found right now") has no
+ * switch, but one still syncing gets "Stop syncing".
+ */
+function GroupsSection({
+  slot,
+  callEmbedApi,
+}: {
+  slot: LocationSlot;
+  callEmbedApi: (path: string, method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [groups, setGroups] = useState<EmbedGroup[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busyJid, setBusyJid] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showHint, setShowHint] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [managingJid, setManagingJid] = useState<string | null>(null);
+
+  /** The server's list; `"switched_off"` for a switch-off (which answers without a list, so the row is patched in place); `null` on a refusal. */
+  async function request(body: Record<string, unknown>): Promise<EmbedGroup[] | "switched_off" | null> {
+    try {
+      const json = await callEmbedApi("/api/crm/embed/groups", "POST", body);
+      const list = groupsFrom(json);
+      if (list) {
+        setError(null);
+        return list;
+      }
+      if (json.ok === true && json.enabled === false) {
+        setError(null);
+        return "switched_off";
+      }
+      setError(typeof json.message === "string" ? json.message : "Something went wrong. Please try again.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    }
+    return null;
+  }
+
+  async function load() {
+    setLoading(true);
+    const list = await request({ slot });
+    setLoading(false);
+    if (Array.isArray(list)) setGroups(list);
+  }
+
+  async function toggle(group: EmbedGroup) {
+    const enabling = !group.enabled;
+    const firstEnable = enabling && !(groups ?? []).some((g) => g.enabled);
+    setBusyJid(group.jid);
+    const list = await request({ slot, groupJid: group.jid, enabled: enabling });
+    setBusyJid(null);
+    if (list === null) return;
+    if (list === "switched_off") {
+      setGroups((current) => (current ?? []).map((g) => (g.jid === group.jid ? { ...g, enabled: false } : g)));
+      return;
+    }
+    setGroups(list);
+    if (firstEnable) setShowHint(true);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-expanded={open}
+          onClick={() => {
+            const next = !open;
+            setOpen(next);
+            if (next && groups === null && !loading) void load();
+          }}
+        >
+          {open ? "Hide groups" : "Show groups"}
+        </Button>
+      </div>
+
+      {open ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-border px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-semibold text-ink">Groups</h3>
+            {groups !== null ? (
+              <Button size="sm" variant="ghost" disabled={loading} onClick={() => void load()}>
+                {loading ? "Loading…" : "Reload"}
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-xs text-ink-faint">Switch a group on to see its messages in HighLevel and reply to the whole group.</p>
+          {creating ? (
+            <CreateGroupForm slot={slot} callEmbedApi={callEmbedApi} onCreated={() => void load()} onClose={() => setCreating(false)} />
+          ) : (
+            <div>
+              <Button size="sm" variant="secondary" onClick={() => setCreating(true)}>
+                Create group
+              </Button>
+            </div>
+          )}
+
+          {loading && groups === null ? <p className="text-xs text-ink-faint">Loading groups…</p> : null}
+          {error ? <p className="text-xs text-loss">{error}</p> : null}
+          {showHint ? <p className="rounded border border-info/30 bg-info/10 px-2.5 py-2 text-xs text-info">{GROUP_TAG_HINT}</p> : null}
+
+          {groups !== null && groups.length === 0 ? <p className="text-xs text-ink-faint">This number isn&apos;t in any WhatsApp groups.</p> : null}
+          {groups !== null && groups.length > 0 ? (
+            <ul className="flex flex-col divide-y divide-border">
+              {groups.map((group) => (
+                <li key={group.jid} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm text-ink">{group.name || "Unnamed group"}</p>
+                    {group.live ? (
+                      <p className="text-xs text-ink-faint">
+                        {group.size} {group.size === 1 ? "member" : "members"}
+                      </p>
+                    ) : null}
+                  </div>
+                  {!group.live ? (
+                    <div className="flex shrink-0 items-center gap-2">
+                      {group.left ? (
+                        <Chip tone="muted" title="This number is no longer in this group">
+                          Left
+                        </Chip>
+                      ) : (
+                        <Chip tone="warn" title="WhatsApp didn't list this group for this number just now">
+                          Not found right now
+                        </Chip>
+                      )}
+                      {group.enabled ? (
+                        <Button size="sm" variant="ghost" disabled={busyJid !== null} onClick={() => void toggle(group)}>
+                          {busyJid === group.jid ? "Saving…" : "Stop syncing"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="flex shrink-0 items-center gap-2">
+                    {group.enabled ? (
+                      <Button size="sm" variant="ghost" disabled={busyJid !== null} onClick={() => setManagingJid(group.jid)}>
+                        Manage
+                      </Button>
+                    ) : null}
+                    <label className="flex shrink-0 items-center gap-2 text-xs text-ink">
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        checked={group.enabled}
+                        disabled={busyJid !== null}
+                        onChange={() => void toggle(group)}
+                        aria-label={`Sync ${group.name || "this group"} to HighLevel`}
+                        className="h-4 w-4 accent-[var(--color-accent)]"
+                      />
+                      {busyJid === group.jid ? "Saving…" : group.enabled ? "On" : "Off"}
+                    </label>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {managingJid !== null ? (
+            <GroupManagePanel
+              key={managingJid}
+              slot={slot}
+              groupJid={managingJid}
+              groupName={groups?.find((g) => g.jid === managingJid)?.name ?? ""}
+              callEmbedApi={callEmbedApi}
+              onChanged={() => void load()}
+              onLeft={() => {
+                setManagingJid(null);
+                void load();
+              }}
+              onClose={() => setManagingJid(null)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** "Add a number" — a button that opens an optional name field. The server picks the slot. */
+function AddNumber({ changeNumbers }: { changeNumbers: (method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>) => Promise<string | null> }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    const parsed = parseLabelInput(draft);
+    if (!parsed.ok) {
+      setError(`Names can be up to ${MAX_NUMBER_LABEL_LENGTH} characters.`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const message = await changeNumbers("POST", parsed.label ? { label: parsed.label } : {});
+    setBusy(false);
+    if (message) {
+      setError(message);
+      return;
+    }
+    setOpen(false);
+    setDraft("");
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {open ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={draft}
+            maxLength={MAX_NUMBER_LABEL_LENGTH}
+            onChange={(e) => setDraft(e.target.value)}
+            aria-label="Name for the new number (optional)"
+            placeholder="Name (optional), e.g. Sales line"
+            className="h-[34px] min-w-0 flex-1 rounded border border-border bg-transparent px-3 text-sm text-ink"
+          />
+          <Button size="sm" disabled={busy} onClick={() => void add()}>
+            {busy ? "Adding…" : "Add"}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              setOpen(false);
+              setError(null);
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <div>
+          <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
+            Add a number
+          </Button>
+        </div>
+      )}
+      {error ? <p className="text-xs text-loss">{error}</p> : null}
+    </div>
   );
 }
 

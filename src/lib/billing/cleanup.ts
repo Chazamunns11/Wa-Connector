@@ -6,7 +6,7 @@ export const CANCELLED_CLEANUP_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 
 export type CleanupRepo = Pick<
   GhlRepository,
-  "listAccountsCancelledBefore" | "listGhlAccountsForAccount" | "setGhlActivated" | "updateAccountBilling"
+  "listAccountsCancelledBefore" | "listGhlAccountsForAccount" | "setGhlActivated" | "updateAccountBilling" | "listLocationNumbers"
 >;
 
 export interface CleanupDeps {
@@ -17,7 +17,10 @@ export interface CleanupDeps {
 
 /**
  * Cancelled for 14+ days: log every location out of the bridge (which deletes
- * its stored credentials) and clear its activation. `cleanedUpAt` is written
+ * its stored credentials) and clear its activation. Multiple numbers (merge):
+ * EVERY number of the location (`listLocationNumbers`, plus the location's
+ * own default tenant), not only the default, so numbers 2-3 never stay
+ * linked after cleanup. `cleanedUpAt` is written
  * only when every logout succeeded, so a bridge outage simply retries on the
  * next hourly pass; logout and clearing are both safe to repeat. Logs carry
  * counts only, never ids, emails, Stripe references or bridge error text.
@@ -35,15 +38,26 @@ export async function purgeCancelledAccounts(
     const owned = await repo.listGhlAccountsForAccount(account.id);
     for (const location of owned) {
       locations += 1;
-      let ok = false;
+      let tenantIds = [location.tenantId];
       try {
-        ok = (await deps.logout(location.tenantId)).ok;
+        const numbers = await repo.listLocationNumbers(location.locationId);
+        tenantIds = [...new Set([location.tenantId, ...numbers.map((n) => n.tenantId)])];
       } catch {
-        ok = false;
-      }
-      if (!ok) {
+        // Unknown number list: log out what we know and retry the rest next pass.
         failures += 1;
         clean = false;
+      }
+      for (const tenantId of tenantIds) {
+        let ok = false;
+        try {
+          ok = (await deps.logout(tenantId)).ok;
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          failures += 1;
+          clean = false;
+        }
       }
       try {
         await repo.setGhlActivated(location.locationId, null);

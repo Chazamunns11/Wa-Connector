@@ -27,15 +27,21 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  SmsFallbackEcho,
+  LocationNumber,
   LocationStats,
   Role,
   Scope,
+  TriggerSessionRow,
+  WhatsappGroup,
   WhatsappInboundMessage,
   WhatsappSessionStatus,
   WhatsappSessionSummary,
 } from "@/lib/types";
 import { LOGO_BUCKET, LOGO_EXTENSION, normaliseHex, type SafeLogoType } from "@/lib/brand";
-import { ghlTenantKeyQueryFilters } from "@/lib/ghl";
+import { ghlTenantKeyQueryFilters, isSmsFallbackEnabled } from "@/lib/ghl";
+import { GROUP_SEND_CAP_UNITS } from "@/lib/ghl-provider";
+import { isWorkflowTriggersEnabled } from "@/lib/ghl-triggers";
 import { ActivationCapError } from "@/lib/billing/activation";
 import {
   buildGhlHealthSnapshot,
@@ -47,6 +53,9 @@ import {
   type GhlOutboundHealthRow,
   type GhlWaitingHealthRow,
 } from "@/lib/ghl-health";
+import { locationTenantIds, nextFreeSlot, promoteAfterRemoval, shouldReplaceSticky } from "@/lib/location-numbers";
+import type { TriggerKey } from "@/lib/ghl-trigger-keys";
+import { isWhatsappGroupJid } from "@/lib/whatsapp-bridge";
 import type { GhlRepository } from "./repository";
 
 /**
@@ -132,6 +141,14 @@ interface WhatsappInboundMessageRow {
   media_path?: string | null;
   media_mime?: string | null;
   media_size_bytes?: number | null;
+  /** Opt-in groups (0007) — see `WhatsappInboundMessage.groupJid`/`senderName`. */
+  group_jid?: string | null;
+  sender_name?: string | null;
+  /** Missed calls (0010) — see `WhatsappInboundMessage.eventKind`. Absent on a row read before 0010. */
+  event_kind?: string | null;
+  /** Message events (0011) — see `WhatsappInboundMessage.targetWaMessageId`/`targetFromMe`. */
+  target_wa_message_id?: string | null;
+  target_from_me?: boolean | null;
 }
 
 function mapWhatsappInboundMessage(row: WhatsappInboundMessageRow): WhatsappInboundMessage {
@@ -151,6 +168,14 @@ function mapWhatsappInboundMessage(row: WhatsappInboundMessageRow): WhatsappInbo
     mediaPath: row.media_path ?? null,
     mediaMime: row.media_mime ?? null,
     mediaSizeBytes: row.media_size_bytes ?? null,
+    groupJid: row.group_jid ?? null,
+    senderName: row.sender_name ?? null,
+    eventKind:
+      row.event_kind === "missed_call" || row.event_kind === "edit" || row.event_kind === "reaction" || row.event_kind === "delete"
+        ? row.event_kind
+        : null,
+    targetWaMessageId: row.target_wa_message_id ?? null,
+    targetFromMe: row.target_from_me ?? null,
   };
 }
 
@@ -165,8 +190,15 @@ function isFreshPendingMedia(row: WhatsappInboundMessageRow): boolean {
 /** Media plan (docs/MEDIA-PLAN.md §7d/§8) — same bucket name the bridge's own `WA_MEDIA_BUCKET` config defaults to (`services/whatsapp-bridge/src/config.ts`); read from the SAME env var name here so the two never silently drift onto different buckets. */
 const MEDIA_BUCKET = process.env.WA_MEDIA_BUCKET?.trim() || "wa-media";
 
+// `target_wa_message_id, target_from_me` (0011) sit in the BASE list as well:
+// 0011's deploy order is "apply before the portal build that reads these".
+// `event_kind` (0010) sits in the BASE list too, for the same reason: a missed
+// call read without it would be pushed to GHL as an empty message.
+// `group_jid, sender_name` (0007) sit in the BASE list: 0007's deploy order
+// is "apply before the portal build that reads these", and a group row read
+// without `group_jid` would be pushed as a one-to-one reply from its sender.
 const WHATSAPP_INBOUND_BASE_COLUMNS =
-  "id, coach_id, from_phone, body, message_type, received_at, processed_at, resolution, push_attempts, push_error, created_at";
+  "id, coach_id, from_phone, body, message_type, received_at, processed_at, resolution, push_attempts, push_error, created_at, group_jid, sender_name, event_kind, target_wa_message_id, target_from_me";
 const WHATSAPP_INBOUND_MEDIA_COLUMNS = "media_status, media_path, media_mime, media_size_bytes";
 
 /**
@@ -238,6 +270,12 @@ interface GhlAccountRow {
   /** Migration 0002 — optional for the same pre-migration reason as the 0075/0076 columns. */
   account_id?: string | null;
   activated_at?: string | null;
+  /** Migration 0011 — optional for the same `select("*")` pre-migration reason; absent reads as `false` (off). */
+  show_reactions?: boolean | null;
+  show_deletes?: boolean | null;
+  /** Migration 0014 — optional for the same pre-migration reason; absent reads as on (the column default) and not blocked. */
+  sms_fallback_enabled?: boolean | null;
+  sms_fallback_blocked_at?: string | null;
 }
 
 function mapGhlAccount(row: GhlAccountRow): GhlAccount {
@@ -271,6 +309,10 @@ function mapGhlAccount(row: GhlAccountRow): GhlAccount {
     brandAccentColor: typeof row.brand_accent_color === "string" ? row.brand_accent_color : null,
     accountId: typeof row.account_id === "string" ? row.account_id : null,
     activatedAt: typeof row.activated_at === "string" ? row.activated_at : null,
+    showReactions: row.show_reactions === true,
+    showDeletes: row.show_deletes === true,
+    smsFallbackEnabled: row.sms_fallback_enabled !== false,
+    smsFallbackBlockedAt: typeof row.sms_fallback_blocked_at === "string" ? row.sms_fallback_blocked_at : null,
   };
 }
 
@@ -364,6 +406,11 @@ interface GhlOutboundMessageRow {
   reported_status: string | null;
   reported_at: string | null;
   report_error: string | null;
+  read_reported_at: string | null;
+  read_report_error: string | null;
+  /** 0014 — absent on a pre-0014 database (`select("*")`). */
+  sms_fallback?: string | null;
+  sms_fallback_claimed_at?: string | null;
   created_at: string;
 }
 
@@ -384,6 +431,10 @@ function mapGhlOutboundMessage(row: GhlOutboundMessageRow): GhlOutboundMessage {
     reportedStatus: row.reported_status as GhlOutboundMessage["reportedStatus"],
     reportedAt: row.reported_at,
     reportError: row.report_error,
+    readReportedAt: row.read_reported_at,
+    readReportError: row.read_report_error,
+    smsFallback: row.sms_fallback === "claimed" || row.sms_fallback === "sent" || row.sms_fallback === "failed" ? row.sms_fallback : null,
+    smsFallbackClaimedAt: typeof row.sms_fallback_claimed_at === "string" ? row.sms_fallback_claimed_at : null,
     createdAt: row.created_at,
   };
 }
@@ -470,21 +521,163 @@ async function getWhatsappSentTodayByCoach(supabase: SupabaseClient, coachIds: s
   const todayStartIso = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z").toISOString();
   const PAGE_SIZE = 1000;
   for (let from = 0; ; from += PAGE_SIZE) {
+    // `select("*")`, not "coach_id, group_jid": a database before 0008 has
+    // no group_jid column, and naming it would fail the whole read (the same
+    // tolerance as the bridge's `getDailyActivity`).
     const { data, error } = await supabase
       .from("whatsapp_messages")
-      .select("coach_id")
+      .select("*")
       .in("coach_id", coachIds)
       .eq("status", "sent")
       .gte("sent_at", todayStartIso)
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw error;
-    const page = (data ?? []) as { coach_id: string }[];
-    for (const row of page) {
-      counts.set(row.coach_id, (counts.get(row.coach_id) ?? 0) + 1);
-    }
+    const page = (data ?? []) as SentTodayRow[];
+    addSentTodayUnits(counts, page);
     if (page.length < PAGE_SIZE) break;
   }
   return counts;
+}
+
+type SentTodayRow = { coach_id: string; group_jid?: string | null };
+
+/**
+ * Add each sent row's daily-cap units to its coach's count: a group send is
+ * `GROUP_SEND_CAP_UNITS`, a 1:1 send 1 — as the bridge counts them, so
+ * "Sends today" matches the cap it enforces.
+ */
+export function addSentTodayUnits(counts: Map<string, number>, rows: SentTodayRow[]): void {
+  for (const row of rows) {
+    counts.set(row.coach_id, (counts.get(row.coach_id) ?? 0) + (row.group_jid ? GROUP_SEND_CAP_UNITS : 1));
+  }
+}
+
+interface LocationNumberRow {
+  tenant_id: string;
+  slot: number;
+  is_default: boolean;
+  label: string | null;
+}
+
+const LOCATION_NUMBER_COLUMNS = "tenant_id, slot, is_default, label";
+
+function mapLocationNumber(row: LocationNumberRow): LocationNumber {
+  return { tenantId: row.tenant_id, slot: row.slot as LocationNumber["slot"], isDefault: row.is_default, label: row.label };
+}
+
+interface WhatsappGroupRow {
+  tenant_id: string;
+  group_jid: string;
+  name: string;
+  enabled: boolean;
+  ghl_contact_id: string | null;
+  left_at: string | null;
+  created_by_us: boolean;
+}
+
+const WHATSAPP_GROUP_COLUMNS = "tenant_id, group_jid, name, enabled, ghl_contact_id, left_at, created_by_us";
+
+function mapWhatsappGroup(row: WhatsappGroupRow): WhatsappGroup {
+  return {
+    tenantId: row.tenant_id,
+    groupJid: row.group_jid,
+    name: row.name,
+    enabled: row.enabled,
+    ghlContactId: row.ghl_contact_id,
+    leftAt: row.left_at,
+    createdByUs: row.created_by_us === true,
+  };
+}
+
+/**
+ * Which group (if any) a location's GHL contact stands for, given the
+ * contact's `whatsapp_groups` rows across all tenants. A group of one of the
+ * location's numbers (`locationTenants`) wins. Normally there is one: the
+ * group contact's key is per number (`ghlGroupContactKey`), so the same group
+ * on two numbers has two contacts; should two rows ever share a contact,
+ * prefer an enabled group the number is still in, then a stable order.
+ * Failing that, a group of a tenant that is no longer any location's number
+ * (not in `linkedTenants`: the number was removed) comes back switched off
+ * and flagged `numberRemoved`, so the send is refused rather than treated as
+ * a phone contact. A group of another location's current number is not this
+ * contact's group.
+ */
+export function chooseGroupForContact(
+  groups: WhatsappGroup[],
+  locationTenants: ReadonlySet<string>,
+  linkedTenants: ReadonlySet<string>
+): { tenantId: string; groupJid: string; enabled: boolean; left: boolean; numberRemoved?: true } | null {
+  const own = groups.filter((g) => locationTenants.has(g.tenantId));
+  own.sort(
+    (a, b) =>
+      Number(b.enabled) - Number(a.enabled) ||
+      Number(a.leftAt !== null) - Number(b.leftAt !== null) ||
+      a.tenantId.localeCompare(b.tenantId)
+  );
+  const group = own[0];
+  if (group) return { tenantId: group.tenantId, groupJid: group.groupJid, enabled: group.enabled, left: group.leftAt !== null };
+  const removed = groups
+    .filter((g) => !locationTenants.has(g.tenantId) && !linkedTenants.has(g.tenantId))
+    .sort((a, b) => a.tenantId.localeCompare(b.tenantId))[0];
+  return removed
+    ? { tenantId: removed.tenantId, groupJid: removed.groupJid, enabled: false, left: removed.leftAt !== null, numberRemoved: true }
+    : null;
+}
+
+/** 0007's `char_length(name) <= 100` — trimmed by whole characters (code points, as Postgres counts them), never mid-emoji. */
+const WHATSAPP_GROUP_NAME_MAX = 100;
+
+/** Postgres unique_violation. */
+function isUniqueViolation(error: { code?: string } | null): boolean {
+  return error?.code === "23505";
+}
+/**
+ * Insert the account's own tenant as slot 1 / default unless the location
+ * already has a row for it or a slot-1/default row. Conflicts on the tenant
+ * primary key or the slot/default unique indexes mean "already set up" and are
+ * ignored; an existing row is never overwritten.
+ */
+async function ensureDefaultNumberRow(locationId: string, tenantId: string) {
+  const supabase = getServiceClient();
+  const { error } = await supabase
+    .from("ghl_location_numbers")
+    .insert({ tenant_id: tenantId, location_id: locationId, slot: 1, is_default: true });
+  if (error && !isUniqueViolation(error)) throw error;
+}
+
+/**
+ * The `ghl_location_numbers` (location, tenant) pairs of the given locations.
+ * Bounded: at most three rows per location.
+ */
+async function listAllLocationNumberTenants(locationIds: string[]): Promise<{ locationId: string; tenantId: string }[]> {
+  if (locationIds.length === 0) return [];
+  const supabase = getServiceClient();
+  const { data, error } = await supabase.from("ghl_location_numbers").select("location_id, tenant_id").in("location_id", locationIds);
+  if (error) throw error;
+  return ((data ?? []) as { location_id: string; tenant_id: string }[]).map((r) => ({ locationId: r.location_id, tenantId: r.tenant_id }));
+}
+
+/** Make `number` the location's one default, and mirror its tenant to `ghl_accounts.tenant_id`. */
+async function markDefault(locationId: string, number: LocationNumber) {
+  const supabase = getServiceClient();
+  // The partial unique index allows one default per location: clear, then set.
+  const { error: clearError } = await supabase
+    .from("ghl_location_numbers")
+    .update({ is_default: false })
+    .eq("location_id", locationId)
+    .eq("is_default", true);
+  if (clearError) throw clearError;
+  const { error: setError } = await supabase
+    .from("ghl_location_numbers")
+    .update({ is_default: true })
+    .eq("location_id", locationId)
+    .eq("slot", number.slot);
+  if (setError) throw setError;
+  const { error: mirrorError } = await supabase
+    .from("ghl_accounts")
+    .update({ tenant_id: number.tenantId })
+    .eq("location_id", locationId);
+  if (mirrorError) throw mirrorError;
 }
 
 export class SupabaseGhlRepository implements GhlRepository {
@@ -497,9 +690,388 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async getGhlAccountByTenantId(tenantId: string) {
     const supabase = getServiceClient();
+    const { data: numberRow, error: numberError } = await supabase
+      .from("ghl_location_numbers")
+      .select("location_id")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (numberError) throw numberError;
+    if (numberRow) return this.getGhlAccountByLocationId((numberRow as { location_id: string }).location_id);
+    // A location installed before it has any ghl_location_numbers row (its
+    // tenant is still only on ghl_accounts) keeps resolving by the default tenant.
     const { data, error } = await supabase.from("ghl_accounts").select("*").eq("tenant_id", tenantId).maybeSingle();
     if (error) throw error;
     return data ? mapGhlAccount(data as GhlAccountRow) : null;
+  }
+
+  async listLocationNumbers(locationId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_location_numbers")
+      .select(LOCATION_NUMBER_COLUMNS)
+      .eq("location_id", locationId)
+      .order("slot", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as LocationNumberRow[]).map(mapLocationNumber);
+  }
+
+  async getLocationNumberBySlot(locationId: string, slot: number) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_location_numbers")
+      .select(LOCATION_NUMBER_COLUMNS)
+      .eq("location_id", locationId)
+      .eq("slot", slot)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapLocationNumber(data as LocationNumberRow) : null;
+  }
+
+  async addLocationNumber(locationId: string, label: string | null) {
+    const supabase = getServiceClient();
+    let tenantId: string | null = null;
+    const releaseTenant = async () => {
+      // Nothing references the tenant yet, so an unused one can go.
+      if (!tenantId) return;
+      const { error } = await supabase.from("whatsapp_tenants").delete().eq("id", tenantId);
+      // Log only: this runs on the way out of another failure, which must not be masked.
+      if (error) console.error("[supabase] addLocationNumber: could not remove the unused tenant row");
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let existing = await this.listLocationNumbers(locationId);
+      if (existing.length === 0) {
+        // A location with no number rows still has its account tenant: adopt it
+        // as slot 1 / default rather than minting a second tenant for slot 1.
+        const { data: account, error: accountError } = await supabase
+          .from("ghl_accounts")
+          .select("tenant_id")
+          .eq("location_id", locationId)
+          .maybeSingle();
+        if (accountError) throw accountError;
+        if (account) {
+          await ensureDefaultNumberRow(locationId, (account as { tenant_id: string }).tenant_id);
+          existing = await this.listLocationNumbers(locationId);
+        }
+      }
+      const slot = nextFreeSlot(existing.map((n) => n.slot));
+      if (slot === null) {
+        await releaseTenant();
+        return { ok: false as const, reason: "limit" as const };
+      }
+      tenantId ??= await this.createGhlTenant();
+      const row = { tenant_id: tenantId, location_id: locationId, slot, is_default: existing.length === 0, label };
+      const { error } = await supabase.from("ghl_location_numbers").insert(row);
+      if (!error) {
+        return { ok: true as const, number: { tenantId, slot, isDefault: row.is_default, label } };
+      }
+      if (!isUniqueViolation(error)) {
+        await releaseTenant();
+        throw error;
+      }
+      // Lost a race for the slot (or for the first/default row): re-read and retry once.
+    }
+    await releaseTenant();
+    return { ok: false as const, reason: "limit" as const };
+  }
+
+  async removeLocationNumber(locationId: string, slot: number) {
+    const supabase = getServiceClient();
+    const numbers = await this.listLocationNumbers(locationId);
+    const target = numbers.find((n) => n.slot === slot);
+    if (!target) return { ok: false as const, reason: "not_found" as const };
+    if (numbers.length <= 1) return { ok: false as const, reason: "last_number" as const };
+    const promoteSlot = promoteAfterRemoval(numbers, slot);
+
+    // Merge (STOP across numbers): opt-outs are stored per number but checked
+    // across the location's numbers (`optedOutReason`, src/lib/ghl-provider.ts).
+    // A STOP recorded on the number being removed must keep blocking the
+    // numbers that stay, so it is copied onto the number that is (or becomes)
+    // the default BEFORE anything is deleted. Idempotent: an existing opt-out
+    // on the keeper is left as it is.
+    const keeper =
+      (promoteSlot !== null ? numbers.find((n) => n.slot === promoteSlot) : undefined) ??
+      numbers.find((n) => n.isDefault && n.slot !== slot) ??
+      numbers.find((n) => n.slot !== slot)!;
+    const { data: optOutRows, error: optOutReadError } = await supabase
+      .from("whatsapp_opt_outs")
+      .select("phone, opted_out_at, keyword, ghl_contact_id")
+      .eq("tenant_id", target.tenantId);
+    if (optOutReadError) throw optOutReadError;
+    const carried = ((optOutRows ?? []) as { phone: string; opted_out_at: string; keyword: string; ghl_contact_id: string | null }[]).map((r) => ({
+      tenant_id: keeper.tenantId,
+      phone: r.phone,
+      opted_out_at: r.opted_out_at,
+      keyword: r.keyword,
+      ghl_contact_id: r.ghl_contact_id,
+    }));
+    if (carried.length > 0) {
+      const { error: carryError } = await supabase.from("whatsapp_opt_outs").upsert(carried, { onConflict: "tenant_id,phone", ignoreDuplicates: true });
+      if (carryError) throw carryError;
+    }
+
+    // Number row FIRST: ghl_location_numbers.tenant_id has no ON DELETE, so it
+    // must go before anything that touches the tenant. Sticky rows follow.
+    const { error: deleteError } = await supabase
+      .from("ghl_location_numbers")
+      .delete()
+      .eq("location_id", locationId)
+      .eq("slot", slot);
+    if (deleteError) throw deleteError;
+    const { error: stickyError } = await supabase
+      .from("ghl_contact_numbers")
+      .delete()
+      .eq("location_id", locationId)
+      .eq("tenant_id", target.tenantId);
+    if (stickyError) throw stickyError;
+    // Switch its groups off, so their GHL contacts are refused as "turned
+    // off" rather than mistaken for phone contacts.
+    const { error: groupsError } = await supabase
+      .from("whatsapp_groups")
+      .update({ enabled: false })
+      .eq("tenant_id", target.tenantId);
+    if (groupsError) throw groupsError;
+
+    if (promoteSlot !== null) {
+      const promoted = numbers.find((n) => n.slot === promoteSlot)!;
+      await markDefault(locationId, promoted);
+    }
+    return { ok: true as const, removedTenantId: target.tenantId };
+  }
+
+  async setDefaultLocationNumber(locationId: string, slot: number) {
+    const target = await this.getLocationNumberBySlot(locationId, slot);
+    if (!target) return false;
+    if (target.isDefault) return true;
+    await markDefault(locationId, target);
+    return true;
+  }
+
+  async setLocationNumberLabel(locationId: string, slot: number, label: string | null) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_location_numbers")
+      .update({ label })
+      .eq("location_id", locationId)
+      .eq("slot", slot)
+      .select("slot");
+    if (error) throw error;
+    return ((data ?? []) as unknown[]).length > 0;
+  }
+
+  async getStickyTenant(locationId: string, ghlContactId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_contact_numbers")
+      .select("tenant_id")
+      .eq("location_id", locationId)
+      .eq("ghl_contact_id", ghlContactId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? (data as { tenant_id: string }).tenant_id : null;
+  }
+
+  async recordInboundForStickiness(locationId: string, ghlContactId: string, tenantId: string, receivedAtIso: string) {
+    const supabase = getServiceClient();
+    const readExisting = async () => {
+      const { data, error } = await supabase
+        .from("ghl_contact_numbers")
+        .select("last_inbound_at")
+        .eq("location_id", locationId)
+        .eq("ghl_contact_id", ghlContactId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? (data as { last_inbound_at: string }).last_inbound_at : null;
+    };
+    let existing = await readExisting();
+    if (existing === null) {
+      const { error } = await supabase.from("ghl_contact_numbers").insert({
+        location_id: locationId,
+        ghl_contact_id: ghlContactId,
+        tenant_id: tenantId,
+        last_inbound_at: receivedAtIso,
+      });
+      if (!error) return;
+      if (!isUniqueViolation(error)) throw error;
+      // Another drain inserted first: fall through and compare against its row.
+      existing = await readExisting();
+      if (existing === null) return;
+    }
+    if (!shouldReplaceSticky(existing, receivedAtIso)) return;
+    // The .lt guard makes the write itself conditional, so a concurrent newer
+    // update between our read and write is never overwritten.
+    // PINNED (Task 3, Review Focus 3) — this must stay the SQL
+    //   update ghl_contact_numbers set tenant_id = $3, last_inbound_at = $4
+    //   where location_id = $1 and ghl_contact_id = $2
+    //     and last_inbound_at < $4
+    // Strictly-less-than, never <=, and never dropped: the inbound drain
+    // (src/lib/ghl-inbound.ts's `recordStickiness`) can replay or reorder
+    // rows, and an older inbound must never move a contact back to the
+    // number they wrote from before. The in-process `shouldReplaceSticky`
+    // check above is only the cheap early-out; this clause is the guarantee.
+    const { error } = await supabase
+      .from("ghl_contact_numbers")
+      .update({ tenant_id: tenantId, last_inbound_at: receivedAtIso })
+      .eq("location_id", locationId)
+      .eq("ghl_contact_id", ghlContactId)
+      .lt("last_inbound_at", receivedAtIso);
+    if (error) throw error;
+  }
+
+  async listWhatsappGroups(tenantId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_groups")
+      .select(WHATSAPP_GROUP_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .order("name", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as WhatsappGroupRow[]).map(mapWhatsappGroup);
+  }
+
+  async setWhatsappGroupEnabled(tenantId: string, groupJid: string, name: string, enabled: boolean) {
+    // Bridge hard rule 3: only a JID from WhatsApp's own group list, in the
+    // exact shape 0007's CHECK and the bridge's GROUP_JID_RE accept.
+    if (!isWhatsappGroupJid(groupJid)) throw new Error("setWhatsappGroupEnabled: groupJid is not a WhatsApp group id");
+    const supabase = getServiceClient();
+    const row: Record<string, unknown> = {
+      tenant_id: tenantId,
+      group_jid: groupJid,
+      name: Array.from(name.trim()).slice(0, WHATSAPP_GROUP_NAME_MAX).join(""),
+      enabled,
+    };
+    // Re-enabling a group the number had left clears the "Left" mark;
+    // switching off leaves left_at as it was. ghl_contact_id is never sent,
+    // so the upsert keeps an existing group contact.
+    if (enabled) row.left_at = null;
+    const { error } = await supabase.from("whatsapp_groups").upsert(row, { onConflict: "tenant_id,group_jid" });
+    if (error) throw error;
+  }
+
+  async recordCreatedWhatsappGroup(tenantId: string, groupJid: string, name: string) {
+    if (!isWhatsappGroupJid(groupJid)) throw new Error("recordCreatedWhatsappGroup: groupJid is not a WhatsApp group id");
+    const supabase = getServiceClient();
+    // ghl_contact_id is never sent, so the upsert keeps an existing group contact.
+    const { error } = await supabase.from("whatsapp_groups").upsert(
+      {
+        tenant_id: tenantId,
+        group_jid: groupJid,
+        name: Array.from(name.trim()).slice(0, WHATSAPP_GROUP_NAME_MAX).join(""),
+        enabled: true,
+        created_by_us: true,
+        left_at: null,
+      },
+      { onConflict: "tenant_id,group_jid" }
+    );
+    if (error) throw error;
+  }
+
+  async renameWhatsappGroup(tenantId: string, groupJid: string, name: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("whatsapp_groups")
+      .update({ name: Array.from(name.trim()).slice(0, WHATSAPP_GROUP_NAME_MAX).join("") })
+      .eq("tenant_id", tenantId)
+      .eq("group_jid", groupJid);
+    if (error) throw error;
+  }
+
+  async getGroupInviteTemplate(locationId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_accounts").select("group_invite_template").eq("location_id", locationId).maybeSingle();
+    if (error) throw error;
+    const template = (data as { group_invite_template: string | null } | null)?.group_invite_template;
+    return typeof template === "string" ? template : null;
+  }
+
+  async setGroupInviteTemplate(locationId: string, template: string | null) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_accounts").update({ group_invite_template: template }).eq("location_id", locationId);
+    if (error) throw error;
+  }
+
+  async setMessageEventSettings(locationId: string, settings: { showReactions?: boolean; showDeletes?: boolean }) {
+    const patch: Record<string, boolean> = {};
+    if (settings.showReactions !== undefined) patch.show_reactions = settings.showReactions;
+    if (settings.showDeletes !== undefined) patch.show_deletes = settings.showDeletes;
+    if (Object.keys(patch).length === 0) return;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_accounts").update(patch).eq("location_id", locationId);
+    if (error) throw error;
+  }
+
+  async hasInboundFromPhone(tenantId: string, phoneE164: string) {
+    const supabase = getServiceClient();
+    // Same query as the bridge store's hasInboundFromPhone: a non-group
+    // inbound row from this phone, received within the 90-day retention.
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("whatsapp_inbound_messages")
+      .select("id")
+      .eq("coach_id", tenantId)
+      .eq("from_phone", phoneE164)
+      .is("group_jid", null)
+      // A missed call is not a message: it never makes a number eligible for a direct add.
+      .is("event_kind", null)
+      .gte("received_at", since)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async markWhatsappGroupLeft(tenantId: string, groupJid: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("whatsapp_groups")
+      .update({ left_at: new Date().toISOString() })
+      .eq("tenant_id", tenantId)
+      .eq("group_jid", groupJid);
+    if (error) throw error;
+  }
+
+  async getWhatsappGroupByContact(locationId: string, ghlContactId: string) {
+    const supabase = getServiceClient();
+    // Every number of the location: its ghl_location_numbers rows, plus the
+    // account's own tenant (a location installed before it had any number
+    // row — same fallback as getGhlAccountByTenantId).
+    const [numbers, accountResult] = await Promise.all([
+      this.listLocationNumbers(locationId),
+      supabase.from("ghl_accounts").select("tenant_id").eq("location_id", locationId).maybeSingle(),
+    ]);
+    if (accountResult.error) throw accountResult.error;
+    const tenantIds = new Set(numbers.map((n) => n.tenantId));
+    if (accountResult.data) tenantIds.add((accountResult.data as { tenant_id: string }).tenant_id);
+    if (tenantIds.size === 0) return null;
+    // By contact across every tenant, not only this location's: a group of a
+    // number since removed from the location must still be recognised (and
+    // refused), never fall into the phone path. whatsapp_groups only holds
+    // groups an owner has switched on, so this stays small.
+    const { data, error } = await supabase.from("whatsapp_groups").select(WHATSAPP_GROUP_COLUMNS).eq("ghl_contact_id", ghlContactId);
+    if (error) throw error;
+    const groups = ((data ?? []) as WhatsappGroupRow[]).map(mapWhatsappGroup);
+    const outside = [...new Set(groups.map((g) => g.tenantId).filter((t) => !tenantIds.has(t)))];
+    // Only when no group of this location's numbers matched: which of the
+    // other tenants are still some location's number (so not removed).
+    const linked = new Set<string>();
+    if (outside.length > 0 && !groups.some((g) => tenantIds.has(g.tenantId))) {
+      const [numberRows, accountRows] = await Promise.all([
+        supabase.from("ghl_location_numbers").select("tenant_id").in("tenant_id", outside),
+        supabase.from("ghl_accounts").select("tenant_id").in("tenant_id", outside),
+      ]);
+      if (numberRows.error) throw numberRows.error;
+      if (accountRows.error) throw accountRows.error;
+      for (const r of [...(numberRows.data ?? []), ...(accountRows.data ?? [])] as { tenant_id: string }[]) linked.add(r.tenant_id);
+    }
+    return chooseGroupForContact(groups, tenantIds, linked);
+  }
+
+  async setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("whatsapp_groups")
+      .update({ ghl_contact_id: ghlContactId })
+      .eq("tenant_id", tenantId)
+      .eq("group_jid", groupJid);
+    if (error) throw error;
   }
 
   async getGhlAccounts() {
@@ -532,6 +1104,8 @@ export class SupabaseGhlRepository implements GhlRepository {
       { onConflict: "location_id" }
     );
     if (error) throw error;
+    // Every account has its tenant as a slot-1 default number (insert-if-absent).
+    await ensureDefaultNumberRow(draft.locationId, draft.tenantId);
   }
 
   /**
@@ -701,12 +1275,16 @@ export class SupabaseGhlRepository implements GhlRepository {
     const supabase = getServiceClient();
     const update: Record<string, unknown> = { send_state: patch.sendState };
     if (patch.sendAttempts !== undefined) update.send_attempts = patch.sendAttempts;
-    // 0070_ghl_outbound_pending_text.sql's whole contract: pending_text only
-    // exists for the duration a row is a bridge-send retry candidate — clear
-    // it the instant the row leaves 'pending_send' (see that migration's
-    // header and Repository.updateGhlOutboundSendState's JSDoc).
-    // A held row keeps its text: the release pass still has to send it.
-    if (patch.sendState !== "pending_send" && patch.sendState !== "held") update.pending_text = null;
+    // pending_text lifecycle (0070, extended by 0013): the text is kept while a
+    // row is 'pending_send' (a retry resends the SAME text), 'held' (the release
+    // pass still has to send it) and, only while workflow triggers are on,
+    // 'accepted' (until its status is reported, so a "not on WhatsApp" trigger
+    // can carry it; `markGhlOutboundReported` clears it, and the cron clears one
+    // never reported within 7 days). With triggers off nothing needs the text
+    // after the accept, so it is cleared then, as before 0013. The SMS fallback
+    // (0014) sends that same text as an SMS, so it is kept while either switch
+    // is on. Always cleared when the row is refused.
+    if (patch.sendState === "refused" || (patch.sendState === "accepted" && !isWorkflowTriggersEnabled() && !isSmsFallbackEnabled())) update.pending_text = null;
     // 0071_ghl_outbound_refusal_reason.sql — stamped once, alongside (not
     // instead of) report_error, and never cleared again (adversarial-review
     // finding 3 — see Repository.updateGhlOutboundSendState's JSDoc).
@@ -714,24 +1292,17 @@ export class SupabaseGhlRepository implements GhlRepository {
     let query = supabase.from("ghl_outbound_messages").update(update).eq("id", id);
     // Final cross-phase review, finding 2 — this write used to be a BLIND
     // PATCH regardless of the row's CURRENT state. `drainPendingSend`'s
-    // transient-failure branch calls this to write `send_state:
-    // 'pending_send'` back onto a row it read as 'pending_send' at the start
-    // of the pass — but a faster CONCURRENT drain pass can have already
-    // moved that same row all the way to 'accepted' (and cleared
-    // `pending_text`) in between. Without a guard, this slower pass's write
-    // would silently demote the row back to 'pending_send' with
-    // `pending_text` left NULL (this write never SETS pending_text, only
-    // clears it) — the next pass then sees an unrecoverable-looking row and
-    // (before the ghl-provider.ts finding-2 fix) reported a false 'failed'
-    // for a message the bridge had already accepted or delivered. Guarding
-    // this exact write with `.eq("send_state", "pending_send")` makes it a
-    // no-op (0 rows affected, no error) if the row has already moved on —
-    // the row's true, newer state (written by the faster pass) survives
-    // untouched. Every OTHER sendState transition this method writes
-    // ('accepted', 'refused') is unconditional as before — only the
-    // pending_send-to-pending_send retry-bookkeeping write needs this,
-    // because it's the only one that can race a state transition already in
-    // flight from elsewhere.
+    // transient-failure branch writes `send_state: 'pending_send'` back onto a
+    // row it read as 'pending_send' at the start of the pass — but a faster
+    // CONCURRENT drain pass can already have moved that same row to 'accepted'
+    // in between. An unconditional write would demote the row back to
+    // 'pending_send' and the next pass would retry a send the bridge already
+    // accepted (or report a false 'failed'). Guarding this exact write with
+    // `.eq("send_state", "pending_send")` makes it a no-op (0 rows affected, no
+    // error) if the row has already moved on, so the newer state survives.
+    // Every OTHER sendState transition this method writes ('accepted',
+    // 'refused') is unconditional — only the pending_send-to-pending_send
+    // retry-bookkeeping write can race a transition already in flight.
     // An explicit `onlyIfSendState` replaces the automatic guard: the held
     // release pass writes held -> accepted/refused, where the automatic
     // `.eq("send_state","pending_send")` would match nothing.
@@ -836,9 +1407,43 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (patch.reportedStatus !== null) {
       update.reported_status = patch.reportedStatus;
       update.reported_at = new Date().toISOString();
+      // 0013: the kept text is dropped the moment the status is reported.
+      update.pending_text = null;
     }
-    const { error } = await supabase.from("ghl_outbound_messages").update(update).eq("id", id);
+    // Conditional on the row still being unreported, so two overlapping
+    // drains cannot both "win" the same row: only the call that actually
+    // stamps it gets `true`, and only that caller remembers or fires.
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update(update)
+      .eq("id", id)
+      .is("reported_status", null)
+      .select("id");
     if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async listGhlOutboundAwaitingRead(limit: number, sinceIso: string) {
+    const supabase = getServiceClient();
+    // The join with whatsapp_messages lives in SQL (0010) so unread rows
+    // cannot fill the batch and starve the ones that were read.
+    const { data, error } = await supabase.rpc("ghl_outbound_awaiting_read", { p_since: sinceIso, p_limit: limit });
+    if (error) throw error;
+    return ((data ?? []) as unknown as (GhlOutboundMessageRow & { read_at: string })[]).map((r) => ({ message: mapGhlOutboundMessage(r), readAt: r.read_at }));
+  }
+
+  async markGhlOutboundReadReported(id: string, result: { readReportError: string | null }) {
+    const supabase = getServiceClient();
+    // Conditional, like markGhlOutboundReported: only the pass that stamps
+    // the row gets `true`, so an overlapping pass never fires message_read twice.
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update({ read_reported_at: new Date().toISOString(), read_report_error: result.readReportError })
+      .eq("id", id)
+      .is("read_reported_at", null)
+      .select("id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
   }
 
   /** Bulk insert — see `Repository.recordGhlOutboundAttachments`'s JSDoc for the "called exactly once, after every pre-dispatch refusal check" contract this relies on (no upsert/dedupe needed here — unlike `recordGhlOutboundMessage`'s GHL-redelivery dedupe, this is never called twice for the same message). */
@@ -925,16 +1530,27 @@ export class SupabaseGhlRepository implements GhlRepository {
    * to `ghl_accounts` (unlike `ghl_outbound_messages.location_id`), so this
    * is the same two-query equivalent `getUnprocessedWhatsappInboundMessages`
    * already uses for its coach-kind fence — read every ACTIVE GHL location's
-   * tenant id (bounded — one row per installed location), then `.in()`
-   * against it. See `Repository.getUnprocessedGhlInboundMessages`'s JSDoc for
+   * tenant ids (each of its numbers plus the account's own tenant; bounded —
+   * at most three numbers per installed location), then `.in()` against them. See `Repository.getUnprocessedGhlInboundMessages`'s JSDoc for
    * why `push_attempts` is deliberately NOT filtered here.
    */
   async getUnprocessedGhlInboundMessages(limit = 50) {
     const supabase = getServiceClient();
-    const { data: activeAccounts, error: accountsError } = await supabase.from("ghl_accounts").select("tenant_id").eq("status", "active");
+    const { data: activeAccounts, error: accountsError } = await supabase
+      .from("ghl_accounts")
+      .select("location_id, tenant_id")
+      .eq("status", "active");
     if (accountsError) throw accountsError;
-    const activeTenantIds = ((activeAccounts ?? []) as { tenant_id: string }[]).map((a) => a.tenant_id);
-    if (activeTenantIds.length === 0) return [];
+    const accounts = ((activeAccounts ?? []) as { location_id: string; tenant_id: string }[]).map((a) => ({
+      locationId: a.location_id,
+      tenantId: a.tenant_id,
+    }));
+    if (accounts.length === 0) return [];
+    // Every number of every active location, not just the default
+    // (`ghl_accounts.tenant_id`): replies to a non-default number, or to a
+    // number that was the default before "Make default", must drain too.
+    const numbers = await listAllLocationNumberTenants(accounts.map((a) => a.locationId));
+    const activeTenantIds = [...locationTenantIds(accounts, numbers).values()].flat();
     // Media plan (docs/MEDIA-PLAN.md §6.1/§6.5) — over-fetch by `limit` extra
     // rows before applying the fresh-pending exclusion in JS (PostgREST has
     // no clean "exclude rows matching BOTH of these two column conditions
@@ -954,6 +1570,18 @@ export class SupabaseGhlRepository implements GhlRepository {
         .limit(limit + 50)
     );
     return rows.filter((row) => !isFreshPendingMedia(row)).slice(0, limit).map(mapWhatsappInboundMessage);
+  }
+
+  async getInboundBodyByWaMessageId(tenantId: string, waMessageId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_inbound_messages")
+      .select("body")
+      .eq("coach_id", tenantId)
+      .eq("wa_message_id", waMessageId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as { body: string | null } | null)?.body ?? null;
   }
 
   /**
@@ -1003,6 +1631,27 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (!patch.unclaim) query = query.is("resolution", null);
     const { error } = await query;
     if (error) throw error;
+  }
+
+  async clearStaleOutboundPendingText(olderThanIso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update({ pending_text: null })
+      .eq("send_state", "accepted")
+      .is("reported_status", null)
+      .not("pending_text", "is", null)
+      .lt("created_at", olderThanIso)
+      .select("id");
+    if (error) throw error;
+    return (data ?? []).length;
+  }
+
+  async getTenantPhone(tenantId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("whatsapp_sessions").select("phone_number").eq("coach_id", tenantId).maybeSingle();
+    if (error) throw error;
+    return (data as { phone_number: string | null } | null)?.phone_number ?? null;
   }
 
   /**
@@ -1468,6 +2117,311 @@ export class SupabaseGhlRepository implements GhlRepository {
     return counts;
   }
 
+  async upsertTriggerSubscription(sub: {
+    id: string;
+    locationId: string;
+    workflowId: string | null;
+    triggerKey: TriggerKey;
+    targetUrl: string;
+    filters: unknown;
+  }): Promise<"ok" | "location_mismatch"> {
+    const supabase = getServiceClient();
+    const { data: existing, error: readError } = await supabase
+      .from("ghl_workflow_trigger_subscriptions")
+      .select("location_id")
+      .eq("id", sub.id)
+      .maybeSingle();
+    if (readError) throw readError;
+    if (existing && (existing as { location_id: string }).location_id !== sub.locationId) return "location_mismatch";
+    const { error } = await supabase.from("ghl_workflow_trigger_subscriptions").upsert(
+      {
+        id: sub.id,
+        location_id: sub.locationId,
+        workflow_id: sub.workflowId,
+        trigger_key: sub.triggerKey,
+        target_url: sub.targetUrl,
+        filters: sub.filters ?? [],
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }
+    );
+    if (error) throw error;
+    return "ok";
+  }
+
+  async deleteTriggerSubscription(id: string, locationId: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_workflow_trigger_subscriptions").delete().eq("id", id).eq("location_id", locationId);
+    if (error) throw error;
+  }
+
+  async listTriggerSubscriptions(locationId: string, key: TriggerKey) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_workflow_trigger_subscriptions")
+      .select("id, target_url")
+      .eq("location_id", locationId)
+      .eq("trigger_key", key)
+      .order("id", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as { id: string; target_url: string }[]).map((r) => ({ id: r.id, targetUrl: r.target_url }));
+  }
+
+  async listLocationsWithTriggerKeys(keys: TriggerKey[]) {
+    if (keys.length === 0) return [];
+    const supabase = getServiceClient();
+    const locations = new Set<string>();
+    const PAGE_SIZE = 1000;
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from("ghl_workflow_trigger_subscriptions")
+        .select("location_id")
+        .in("trigger_key", keys)
+        .order("id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      const page = (data ?? []) as { location_id: string }[];
+      for (const r of page) locations.add(r.location_id);
+      if (page.length < PAGE_SIZE) break;
+    }
+    return [...locations];
+  }
+
+  async rememberNotOnWhatsapp(locationId: string, phoneE164: string, untilIso: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_not_on_whatsapp")
+      .upsert({ location_id: locationId, phone_e164: phoneE164, until: untilIso }, { onConflict: "location_id,phone_e164" });
+    if (error) throw error;
+  }
+
+  async isRememberedNotOnWhatsapp(locationId: string, phoneE164: string, nowIso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_not_on_whatsapp")
+      .select("phone_e164")
+      .eq("location_id", locationId)
+      .eq("phone_e164", phoneE164)
+      .gt("until", nowIso)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async forgetNotOnWhatsapp(locationId: string, phoneE164: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_not_on_whatsapp").delete().eq("location_id", locationId).eq("phone_e164", phoneE164);
+    if (error) throw error;
+  }
+
+  async recordSmsFallbackEcho(
+    echo: { locationId: string; contactId: string; textSha256: string; outboundMessageId: string; expiresIso: string },
+    nowIso: string
+  ) {
+    const supabase = getServiceClient();
+    // This contact's expired echo goes first, so only an unexpired one blocks the insert.
+    const { error: cleanupError } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .delete()
+      .eq("location_id", echo.locationId)
+      .eq("contact_id", echo.contactId)
+      .lte("expires_at", nowIso);
+    if (cleanupError) throw cleanupError;
+    // INSERT ... ON CONFLICT DO NOTHING: only an inserted row comes back.
+    const { data, error } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .upsert(
+        {
+          location_id: echo.locationId,
+          contact_id: echo.contactId,
+          text_sha256: echo.textSha256,
+          outbound_message_id: echo.outboundMessageId,
+          ghl_message_id: null,
+          sent_at: null,
+          expires_at: echo.expiresIso,
+        },
+        { onConflict: "location_id,contact_id", ignoreDuplicates: true }
+      )
+      .select("location_id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async markSmsFallbackEchoSent(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string | null) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .update({ sent_at: new Date().toISOString(), ghl_message_id: ghlMessageId })
+      .eq("location_id", locationId)
+      .eq("contact_id", contactId)
+      .eq("outbound_message_id", outboundMessageId);
+    if (error) throw error;
+  }
+
+  async findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string): Promise<SmsFallbackEcho | null> {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .select("text_sha256, outbound_message_id, ghl_message_id, sent_at, expires_at")
+      .eq("location_id", locationId)
+      .eq("contact_id", contactId)
+      .gt("expires_at", nowIso)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const row = data as { text_sha256: string; outbound_message_id: string; ghl_message_id: string | null; sent_at: string | null; expires_at: string };
+    return { textSha256: row.text_sha256, outboundMessageId: row.outbound_message_id, ghlMessageId: row.ghl_message_id, sentAt: row.sent_at, expiresAt: row.expires_at };
+  }
+
+  async deleteSmsFallbackEcho(locationId: string, contactId: string, outboundMessageId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .delete()
+      .eq("location_id", locationId)
+      .eq("contact_id", contactId)
+      .eq("outbound_message_id", outboundMessageId)
+      .select("location_id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async purgeExpiredSmsFallbackEchoes(nowIso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_sms_fallback_echoes").delete().lte("expires_at", nowIso).select("location_id");
+    if (error) throw error;
+    return (data ?? []).length;
+  }
+
+  async blockSmsFallback(locationId: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_accounts")
+      .update({ sms_fallback_blocked_at: new Date().toISOString() })
+      .eq("location_id", locationId)
+      .is("sms_fallback_blocked_at", null);
+    if (error) throw error;
+  }
+
+  async setSmsFallbackEnabled(locationId: string, enabled: boolean) {
+    const patch: Record<string, unknown> = { sms_fallback_enabled: enabled };
+    if (enabled) patch.sms_fallback_blocked_at = null;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_accounts").update(patch).eq("location_id", locationId);
+    if (error) throw error;
+  }
+
+  async claimSmsFallback(id: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update({ sms_fallback: "claimed", sms_fallback_claimed_at: new Date().toISOString() })
+      .eq("id", id)
+      .is("sms_fallback", null)
+      .is("reported_status", null)
+      .select("id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async setSmsFallbackResult(id: string, result: "sent" | "failed") {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_outbound_messages").update({ sms_fallback: result }).eq("id", id).eq("sms_fallback", "claimed");
+    if (error) throw error;
+  }
+
+  async failSmsFallback(id: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update({ sms_fallback: "failed" })
+      .eq("id", id)
+      .in("sms_fallback", ["claimed", "sent"])
+      .select("id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async getGhlOutboundMessage(id: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_outbound_messages").select("*").eq("id", id).maybeSingle();
+    if (error) throw error;
+    return data ? mapGhlOutboundMessage(data as GhlOutboundMessageRow) : null;
+  }
+
+  async setSessionTriggerState(
+    tenantId: string,
+    state: { downSince: string | null; lastFired: "down" | "up" | null },
+    expectedLastFired: "down" | "up" | null
+  ) {
+    const supabase = getServiceClient();
+    let query = supabase
+      .from("whatsapp_sessions")
+      .update({ trigger_down_since: state.downSince, trigger_last_fired: state.lastFired })
+      .eq("coach_id", tenantId);
+    query = expectedLastFired === null ? query.is("trigger_last_fired", null) : query.eq("trigger_last_fired", expectedLastFired);
+    const { data, error } = await query.select("coach_id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async stampSessionTriggerPhone(tenantId: string, phoneE164: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("whatsapp_sessions").update({ trigger_phone: phoneE164 }).eq("coach_id", tenantId);
+    if (error) throw error;
+  }
+
+  async listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]> {
+    if (locationIds.length === 0) return [];
+    const supabase = getServiceClient();
+    const { data: numberData, error: numberError } = await supabase
+      .from("ghl_location_numbers")
+      .select("tenant_id, location_id, slot, label")
+      .in("location_id", locationIds);
+    if (numberError) throw numberError;
+    const numbers = (numberData ?? []) as { tenant_id: string; location_id: string; slot: number; label: string | null }[];
+    if (numbers.length === 0) return [];
+    const { data: sessionData, error: sessionError } = await supabase
+      .from("whatsapp_sessions")
+      .select("coach_id, status, phone_number, last_connected_at, trigger_down_since, trigger_last_fired, trigger_phone")
+      .in(
+        "coach_id",
+        numbers.map((n) => n.tenant_id)
+      );
+    if (sessionError) throw sessionError;
+    const sessions = new Map(
+      (
+        (sessionData ?? []) as {
+          coach_id: string;
+          status: WhatsappSessionStatus;
+          phone_number: string | null;
+          last_connected_at: string | null;
+          trigger_down_since: string | null;
+          trigger_last_fired: "down" | "up" | null;
+          trigger_phone: string | null;
+        }[]
+      ).map((r) => [r.coach_id, r])
+    );
+    const rows: TriggerSessionRow[] = [];
+    for (const n of numbers) {
+      const s = sessions.get(n.tenant_id);
+      if (!s) continue; // a number with no session row was never linked
+      rows.push({
+        tenantId: n.tenant_id,
+        locationId: n.location_id,
+        slot: n.slot,
+        label: n.label,
+        phone: s.phone_number,
+        status: s.status,
+        downSince: s.trigger_down_since,
+        lastFired: s.trigger_last_fired,
+        lastConnectedAt: s.last_connected_at,
+        triggerPhone: s.trigger_phone,
+      });
+    }
+    return rows;
+  }
+
   async recordStripeEvent(eventId: string, type: string) {
     const supabase = getServiceClient();
     const { data, error } = await supabase.from("stripe_events").insert({ id: eventId, type }).select("id");
@@ -1492,17 +2446,26 @@ export class SupabaseGhlRepository implements GhlRepository {
     // two drains do.
     const { data: accountRows, error: accountsError } = await supabase.from("ghl_accounts").select("location_id, tenant_id, label");
     if (accountsError) throw accountsError;
-    const locations: GhlHealthLocation[] = ((accountRows ?? []) as { location_id: string; tenant_id: string; label: string }[]).map((r) => ({
-      locationId: r.location_id,
-      tenantId: r.tenant_id,
-      label: r.label,
-    }));
+    const accounts = (accountRows ?? []) as { location_id: string; tenant_id: string; label: string }[];
     // Nothing installed yet — an empty snapshot with zero further reads,
     // same "no accounts, no work" short-circuit `getUnprocessedGhlInboundMessages`
     // already uses for its own tenant fence.
-    if (locations.length === 0) return buildGhlHealthSnapshot([], [], [], Date.now());
+    if (accounts.length === 0) return buildGhlHealthSnapshot([], [], [], Date.now());
+    // Every number of each location, so a non-default number's inbound
+    // failures and backlog show against its location too.
+    const numbers = await listAllLocationNumberTenants(accounts.map((a) => a.location_id));
+    const tenantIdsByLocation = locationTenantIds(
+      accounts.map((a) => ({ locationId: a.location_id, tenantId: a.tenant_id })),
+      numbers
+    );
+    const locations: GhlHealthLocation[] = accounts.map((r) => ({
+      locationId: r.location_id,
+      tenantId: r.tenant_id,
+      tenantIds: tenantIdsByLocation.get(r.location_id) ?? [r.tenant_id],
+      label: r.label,
+    }));
 
-    const tenantIds = locations.map((l) => l.tenantId);
+    const tenantIds = [...tenantIdsByLocation.values()].flat();
     const inboundWindowStartIso = new Date(Date.now() - GHL_HEALTH_INBOUND_WINDOW_DAYS * 86_400_000).toISOString();
 
     const [outboundResult, inboundResult, waitingResult] = await Promise.all([

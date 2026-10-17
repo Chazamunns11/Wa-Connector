@@ -11,6 +11,9 @@
  *
  * Boot order matters:
  *   1. loadConfig() — fail fast on missing secrets (see src/config.ts).
+ *      With WA_VOICE_TRANSCODE_ENABLED on, one optional ffmpeg probe (<= 10 s,
+ *      flag on only) also runs here, before listen; a missing ffmpeg only
+ *      logs a warning and voice notes degrade to plain audio sends.
  *   2. HTTP server up FIRST, so Railway's healthcheck passes while sessions
  *      resume (a slow resume must not fail a deploy).
  *   3. SIGTERM/SIGINT registered — BEFORE `resumeAll()` is even awaited. See
@@ -47,6 +50,32 @@ import { SessionManager } from "./sessions.js";
 import { createBridgeServer } from "./server.js";
 import { PortalPoke } from "./poke.js";
 import { installConsoleGuard } from "./console-guard.js";
+import type { BridgeConfig } from "./config.js";
+import type { SessionMediaDeps } from "./sessions.js";
+import { probeFfmpeg, realFfmpegRunner, transcodeToVoiceNote, type FfmpegRunner } from "./voice-transcode.js";
+
+export const FFMPEG_MISSING_LOG =
+  "voice transcode enabled but ffmpeg with libopus was not found — voice notes will send as audio files";
+
+/**
+ * The voice-note transcoder for SessionManager, or null (transcoding off).
+ * Flag off → null and ffmpeg is never run. Flag on → one probe; if ffmpeg
+ * with libopus is missing, log once and return null, so sends behave exactly
+ * as with the flag off (plain audio files; webm/wav still refused). Input is
+ * capped at WA_MEDIA_MAX_AUDIO_BYTES, the same cap media-fetch applies.
+ */
+export async function voiceTranscodeFor(
+  config: Pick<BridgeConfig, "voiceTranscodeEnabled" | "mediaMaxAudioBytes">,
+  run: FfmpegRunner,
+  log: { warn: (msg: string) => void }
+): Promise<NonNullable<SessionMediaDeps["transcode"]> | null> {
+  if (!config.voiceTranscodeEnabled) return null;
+  if (!(await probeFfmpeg(run))) {
+    log.warn(FFMPEG_MISSING_LOG);
+    return null;
+  }
+  return (buf, mime) => transcodeToVoiceNote(buf, mime, { maxInputBytes: config.mediaMaxAudioBytes, run });
+}
 
 /**
  * The exact surface `wireGracefulShutdown` touches on `process` —
@@ -123,7 +152,9 @@ export async function main(): Promise<void> {
   const outboundPoke = config.portalOutboundUrl && config.waInboundPokeSecret
     ? new PortalPoke({ url: config.portalOutboundUrl, secret: config.waInboundPokeSecret }, log.child({ module: "outbound-poke" }))
     : null;
-  const manager = new SessionManager(store, config, log, poke, outboundPoke);
+  // One short ffmpeg probe, only with WA_VOICE_TRANSCODE_ENABLED on (bounded by its 10 s timeout).
+  const transcode = await voiceTranscodeFor(config, realFfmpegRunner, log);
+  const manager = new SessionManager(store, config, log, poke, outboundPoke, { transcode });
   const server = createBridgeServer({ manager, store, bridgeSecret: config.bridgeSecret, log, mediaOutboundEnabled: config.mediaOutboundEnabled });
 
   server.listen(config.port, () => {

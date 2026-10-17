@@ -59,7 +59,7 @@ import type { BridgeSessionResult } from "@/lib/whatsapp-bridge";
 test("connect-link token: mint -> verify round trip returns the exact locationId and version", () => {
   const token = mintConnectLinkToken("loc-42", 3);
   const verified = verifyConnectLinkToken(token);
-  assert.deepEqual(verified, { ok: true, locationId: "loc-42", v: 3 });
+  assert.deepEqual(verified, { ok: true, locationId: "loc-42", v: 3, slot: 1 });
 });
 
 test("connect-link token: TTL is 7 days", () => {
@@ -98,7 +98,7 @@ test("connect-link token: an explicit 'menu' lifetime mints the year-long varian
 test("connect-link token: both lifetimes still verify, carry the same payload, and stay the same kind", () => {
   for (const lifetime of ["send", "menu"] as const) {
     const token = mintConnectLinkToken("loc-42", 7, lifetime);
-    assert.deepEqual(verifyConnectLinkToken(token), { ok: true, locationId: "loc-42", v: 7 }, `${lifetime} lifetime`);
+    assert.deepEqual(verifyConnectLinkToken(token), { ok: true, locationId: "loc-42", v: 7, slot: 1 }, `${lifetime} lifetime`);
   }
 });
 
@@ -108,7 +108,7 @@ test("connect-link token: a long-lived menu link is STILL killed by a version bu
   // payload exactly as it does for the short-lived variant.
   const token = mintConnectLinkToken("loc-42", 3, "menu");
   const verified = verifyConnectLinkToken(token);
-  assert.deepEqual(verified, { ok: true, locationId: "loc-42", v: 3 });
+  assert.deepEqual(verified, { ok: true, locationId: "loc-42", v: 3, slot: 1 });
   // v=3 in the token vs a bumped v=4 on the account is what the guard compares.
   assert.notEqual(verified.ok && verified.v, 4);
 });
@@ -149,7 +149,7 @@ test("connect-link token: a non-integer or negative 'v' in the payload is reject
 test("connect-session token: mint -> verify round trip returns the exact locationId and version", () => {
   const token = mintConnectSessionToken("loc-42", 5);
   const verified = verifyConnectSessionToken(token);
-  assert.deepEqual(verified, { ok: true, locationId: "loc-42", v: 5 });
+  assert.deepEqual(verified, { ok: true, locationId: "loc-42", v: 5, slot: 1 });
 });
 
 test("connect-session token: TTL is 15 minutes", () => {
@@ -390,14 +390,24 @@ function makeConnectAccount(overrides: Partial<GhlAccount> = {}): GhlAccount {
   };
 }
 
-function fakeConnectGuardRepo(accounts: GhlAccount[]): ConnectGuardRepo & { calls: string[] } {
+function fakeConnectGuardRepo(
+  accounts: GhlAccount[],
+  numbers: { locationId: string; tenantId: string; slot: 1 | 2 | 3 }[] = accounts.map((a) => ({ locationId: a.locationId, tenantId: a.tenantId, slot: 1 as const }))
+): ConnectGuardRepo & { calls: string[]; numberCalls: string[] } {
   const byLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const calls: string[] = [];
+  const numberCalls: string[] = [];
   return {
     calls,
+    numberCalls,
     async getGhlAccountByLocationId(locationId: string) {
       calls.push(locationId);
       return byLocation.get(locationId) ?? null;
+    },
+    async getLocationNumberBySlot(locationId: string, slot: number) {
+      numberCalls.push(`${locationId}:${slot}`);
+      const n = numbers.find((x) => x.locationId === locationId && x.slot === slot);
+      return n ? { tenantId: n.tenantId, slot: n.slot, isDefault: n.slot === 1, label: null } : null;
     },
   };
 }
@@ -523,13 +533,13 @@ test("connect guard: needs_reauth is NOT refused here — only 'missing', 'disab
   assert.equal(result.ok && result.account.status, "needs_reauth");
 });
 
-test("connect guard: the ok result never carries accessToken/refreshToken/coachId — only tenantId/label/status", async () => {
+test("connect guard: the ok result never carries accessToken/refreshToken/coachId — only tenantId/slot/label/status", async () => {
   const repo = fakeConnectGuardRepo([makeConnectAccount({ connectLinkVersion: 0 })]);
   const token = mintConnectSessionToken(LOCATION_ID, 0);
   const result = await authorizeConnectRequest(repo, `Bearer ${token}`);
   assert.equal(result.ok, true);
   if (result.ok) {
-    assert.deepEqual(Object.keys(result.account).sort(), ["label", "status", "tenantId"]);
+    assert.deepEqual(Object.keys(result.account).sort(), ["label", "slot", "status", "tenantId"]);
   }
 });
 
@@ -664,7 +674,12 @@ function makeSessionAccount(overrides: Partial<{ status: GhlAccountStatus; conne
 }
 
 function fakeSessionRepo(
-  accounts: ReturnType<typeof makeSessionAccount>[]
+  accounts: ReturnType<typeof makeSessionAccount>[],
+  numbers: { locationId: string; tenantId: string; slot: 1 | 2 | 3; label?: string | null }[] = accounts.map((a) => ({
+    locationId: a.locationId,
+    tenantId: a.tenantId,
+    slot: 1 as const,
+  }))
 ): ConnectSessionRepo & { accountCalls: string[]; summaryCalls: string[] } {
   const byLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const accountCalls: string[] = [];
@@ -675,6 +690,10 @@ function fakeSessionRepo(
     async getGhlAccountByLocationId(locationId: string) {
       accountCalls.push(locationId);
       return byLocation.get(locationId) ?? null;
+    },
+    async getLocationNumberBySlot(locationId: string, slot: number) {
+      const n = numbers.find((x) => x.locationId === locationId && x.slot === slot);
+      return n ? { tenantId: n.tenantId, slot: n.slot, isDefault: n.slot === 1, label: n.label ?? null } : null;
     },
     async getWhatsappSessionSummary(tenantId: string) {
       summaryCalls.push(tenantId);
@@ -697,7 +716,7 @@ function fakeSessionDeps(overrides: Partial<import("@/app/api/connect/session/lo
       state.verifyCalls += 1;
       return verifyConnectLinkToken(token);
     },
-    mintConnectSessionToken: (locationId: string, v: number) => mintConnectSessionToken(locationId, v),
+    mintConnectSessionToken: (locationId: string, v: number, slot?: 1 | 2 | 3) => mintConnectSessionToken(locationId, v, slot),
     getBridgeHealth: async () => ({ ok: true }),
     ...overrides,
   };
@@ -837,7 +856,7 @@ test("decideConnectSession: a genuinely valid token for an active, version-match
   assert.equal(decision.kind, "ok");
   if (decision.kind === "ok") {
     const verifiedSession = verifyConnectSessionToken(decision.token);
-    assert.deepEqual(verifiedSession, { ok: true, locationId: SESSION_LOCATION_ID, v: 3 });
+    assert.deepEqual(verifiedSession, { ok: true, locationId: SESSION_LOCATION_ID, v: 3, slot: 1 });
     assert.equal(decision.label, "Session Logic Test Location");
     assert.equal(decision.bridgeReachable, true);
     assert.equal(decision.summary?.heldMessages, 5);
@@ -845,4 +864,106 @@ test("decideConnectSession: a genuinely valid token for an active, version-match
   }
   assert.deepEqual(repo.accountCalls, [SESSION_LOCATION_ID]);
   assert.deepEqual(repo.summaryCalls, [SESSION_TENANT_ID]);
+});
+
+// ---------------------------------------------------------------------------
+// Several numbers per location (Task 4): connect links address a number by
+// SLOT. The link token and the session token both carry `s`; a token without
+// `s` (every link minted before this change) means slot 1, so existing links
+// keep working. The tenant id never appears in a token or a response.
+// ---------------------------------------------------------------------------
+
+const SLOT_TENANT_2 = "66666666-6666-4666-8666-666666666666";
+
+test("connect-link token: a LEGACY token with no 's' verifies as slot 1", () => {
+  const legacy = signKindedState("ghl-connect-link", { locationId: "loc-42", v: 3 }, CONNECT_LINK_TTL_MS);
+  assert.deepEqual(verifyConnectLinkToken(legacy), { ok: true, locationId: "loc-42", v: 3, slot: 1 });
+  const legacySession = signKindedState("ghl-connect-session", { locationId: "loc-42", v: 3 }, CONNECT_SESSION_TTL_MS);
+  assert.deepEqual(verifyConnectSessionToken(legacySession), { ok: true, locationId: "loc-42", v: 3, slot: 1 });
+});
+
+test("connect-link token: an explicit slot round-trips through both kinds", () => {
+  assert.deepEqual(verifyConnectLinkToken(mintConnectLinkToken("loc-42", 3, "menu", 2)), { ok: true, locationId: "loc-42", v: 3, slot: 2 });
+  assert.deepEqual(verifyConnectSessionToken(mintConnectSessionToken("loc-42", 3, 3)), { ok: true, locationId: "loc-42", v: 3, slot: 3 });
+});
+
+test("connect-link token: an 's' outside 1-3, or not an integer number, is rejected as 'invalid'", () => {
+  for (const badS of [0, 4, "1", 1.5, null]) {
+    const link = signKindedState("ghl-connect-link", { locationId: "loc-42", v: 0, s: badS });
+    assert.deepEqual(verifyConnectLinkToken(link), { ok: false, reason: "invalid" }, JSON.stringify(badS));
+    const session = signKindedState("ghl-connect-session", { locationId: "loc-42", v: 0, s: badS });
+    assert.deepEqual(verifyConnectSessionToken(session), { ok: false, reason: "invalid" }, JSON.stringify(badS));
+  }
+});
+
+test("connect-link token: the token payload never carries a tenant id — only locationId, v and s", () => {
+  const token = mintConnectLinkToken("loc-42", 3, "send", 2);
+  const verified = verifyKindedStateWithReason("ghl-connect-link", token);
+  assert.equal(verified.ok, true);
+  if (verified.ok) assert.deepEqual(Object.keys(verified.d).sort(), ["locationId", "s", "v"]);
+});
+
+test("connect guard: resolves the TOKEN's slot to its tenant within the token's location", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount()], [
+    { locationId: LOCATION_ID, tenantId: TENANT_ID, slot: 1 },
+    { locationId: LOCATION_ID, tenantId: SLOT_TENANT_2, slot: 2 },
+  ]);
+  const result = await authorizeConnectRequest(repo, `Bearer ${mintConnectSessionToken(LOCATION_ID, 0, 2)}`);
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.account.tenantId, SLOT_TENANT_2);
+  assert.equal(result.ok && result.account.slot, 2);
+  assert.deepEqual(repo.numberCalls, [`${LOCATION_ID}:2`]);
+});
+
+test("connect guard: a session token for a slot that no longer exists -> 404 unknown_number", async () => {
+  const repo = fakeConnectGuardRepo([makeConnectAccount()]); // slot 1 only
+  const result = await authorizeConnectRequest(repo, `Bearer ${mintConnectSessionToken(LOCATION_ID, 0, 2)}`);
+  assert.deepEqual(result, { ok: false, status: 404, error: "unknown_number" });
+  assert.deepEqual(guardFailureResponseBody(result as Exclude<typeof result, { ok: true }>), {
+    ok: false,
+    code: "unknown_number",
+    message: "That WhatsApp number isn't set up on this sub-account.",
+  });
+});
+
+test("connect guard: version and disabled checks still run BEFORE the slot lookup", async () => {
+  const revoked = fakeConnectGuardRepo([makeConnectAccount({ connectLinkVersion: 1 })]);
+  assert.deepEqual(await authorizeConnectRequest(revoked, `Bearer ${mintConnectSessionToken(LOCATION_ID, 0, 2)}`), {
+    ok: false,
+    status: 403,
+    error: "link_revoked",
+  });
+  const disabled = fakeConnectGuardRepo([makeConnectAccount({ status: "disabled" })]);
+  assert.deepEqual(await authorizeConnectRequest(disabled, `Bearer ${mintConnectSessionToken(LOCATION_ID, 0, 2)}`), {
+    ok: false,
+    status: 403,
+    error: "account_disabled",
+  });
+  assert.deepEqual([...revoked.numberCalls, ...disabled.numberCalls], []);
+});
+
+test("decideConnectSession: carries the link's slot into the session token and summarises THAT number", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount()], [
+    { locationId: SESSION_LOCATION_ID, tenantId: SESSION_TENANT_ID, slot: 1 },
+    { locationId: SESSION_LOCATION_ID, tenantId: SLOT_TENANT_2, slot: 2, label: "Sales line" },
+  ]);
+  const { deps } = fakeSessionDeps();
+  const token = mintConnectLinkToken(SESSION_LOCATION_ID, 0, "send", 2);
+  const decision = await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token }) });
+  assert.equal(decision.kind, "ok");
+  if (decision.kind === "ok") {
+    assert.deepEqual(verifyConnectSessionToken(decision.token), { ok: true, locationId: SESSION_LOCATION_ID, v: 0, slot: 2 });
+    assert.deepEqual(decision.number, { slot: 2, label: "Sales line", isDefault: false });
+  }
+  assert.deepEqual(repo.summaryCalls, [SLOT_TENANT_2]);
+  const json = JSON.stringify(decision);
+  assert.ok(!json.includes(SLOT_TENANT_2) && !json.includes(SESSION_TENANT_ID), `no tenant id in ${json}`);
+});
+
+test("decideConnectSession: a link for a slot that was removed decides 'unknown_number'", async () => {
+  const repo = fakeSessionRepo([makeSessionAccount()]); // slot 1 only
+  const { deps } = fakeSessionDeps();
+  const token = mintConnectLinkToken(SESSION_LOCATION_ID, 0, "send", 3);
+  assert.deepEqual(await decideConnectSession(repo, deps, { ip: null, rawBody: JSON.stringify({ token }) }), { kind: "unknown_number" });
+  assert.deepEqual(repo.summaryCalls, []);
 });

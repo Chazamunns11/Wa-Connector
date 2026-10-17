@@ -169,6 +169,6 @@ test("14B sales-copy: step 2 carries the path chip; sampleCaption gone; other st
     "Set PingWren as the Telephony Provider and the Send SMS steps you already have go out on WhatsApp. When the customer writes back, the reply lands in Conversations.",
   );
   assert.equal(c.faqAllLink, "All the questions, on one page");
-  assert.equal(c.priceStrip.terms, "The 7-day trial covers up to 3 numbers. We take a card up front, and you can cancel any time from the billing portal.");
+  assert.equal(c.priceStrip.terms, "7-day free trial, no card needed. The trial covers up to 3 sub-accounts, and you can cancel any time from the billing portal.");
   assert.ok(c.safety[0].body.startsWith("Messages leave at a steady rate"));
 });

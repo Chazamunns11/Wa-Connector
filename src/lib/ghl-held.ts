@@ -23,6 +23,11 @@
  *   missing. The parent ends `accepted` (or the internal no-text marker for an
  *   attachments-only message) and the status drain reports the aggregate.
  * - W11 stays: a daily-cap overflow is reported not sent, never carried over.
+ * - Multiple numbers and groups (merge): every row is released from its OWN
+ *   number (`row.tenantId` — the sticky/default/group number it was routed
+ *   to), never another. A group row (no phone) is released to its group
+ *   (`resolveDrainTarget`), and a non-default number's refusal strings come
+ *   from `mapSendFailureReason`.
  * Never throws.
  */
 import type { GhlRepository } from "@/lib/data";
@@ -30,10 +35,13 @@ import {
   defaultGhlProviderDeps,
   GHL_PROVIDER_REASONS,
   TEXT_PART_NOT_APPLICABLE,
+  isDefaultNumberForRow,
   isTransientBridgeFailure,
-  mapBridgeFailureReason,
+  mapSendFailureReason,
   outboundRefusalReason,
+  resolveDrainTarget,
   reportGhlOutcome,
+  isReportedOutcome,
   type GhlProviderDeps,
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
@@ -74,8 +82,8 @@ export async function releaseHeldOutboundMessages(
     if (won !== 1) return false; // another pass already moved the row; it owns the report
     const account = await repo.getGhlAccountByLocationId(row.locationId);
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", reason);
-    if (outcome !== "reported") result.reportFailed++;
-    return outcome === "reported";
+    if (!isReportedOutcome(outcome)) result.reportFailed++;
+    return isReportedOutcome(outcome);
   }
 
   /** The parts of a held picture/file message (empty for a plain text row), in seq order. */
@@ -117,14 +125,19 @@ export async function releaseHeldOutboundMessages(
   }
 
   /** Release one held picture/file message. Returns "drop" when this number's loop must stop. */
-  async function releaseMultipart(row: GhlOutboundMessage, parts: GhlOutboundAttachment[]): Promise<"done" | "drop" | "next"> {
+  async function releaseMultipart(
+    row: GhlOutboundMessage,
+    parts: GhlOutboundAttachment[],
+    target: { to: string } | { groupJid: string },
+    isDefaultNumber: boolean
+  ): Promise<"done" | "drop" | "next"> {
     const sent = await ledgerKeys(row, parts);
     type TextEnd = { kind: "accepted" } | { kind: "vacuous" } | { kind: "refused"; reason: string };
     let textEnd: TextEnd;
     if (sent.has(row.idempotencyKey)) textEnd = { kind: "accepted" };
     else if (row.pendingText === null) textEnd = { kind: "vacuous" };
     else {
-      const r = await deps.sendWhatsapp({ coachId: row.tenantId, to: row.toPhone!, text: row.pendingText, idempotencyKey: row.idempotencyKey });
+      const r = await deps.sendWhatsapp({ coachId: row.tenantId, ...target, text: row.pendingText, idempotencyKey: row.idempotencyKey });
       if (r.ok) textEnd = { kind: "accepted" };
       else if (r.code === "session_not_connected") {
         result.stillHeld++;
@@ -132,7 +145,7 @@ export async function releaseHeldOutboundMessages(
       } else if (isTransientBridgeFailure(r.code)) {
         result.stillHeld++;
         return "next";
-      } else textEnd = { kind: "refused", reason: r.code === "daily_cap_reached" ? GHL_PROVIDER_REASONS.capReached : mapBridgeFailureReason(r.code) };
+      } else textEnd = { kind: "refused", reason: r.code === "daily_cap_reached" ? GHL_PROVIDER_REASONS.capReached : mapSendFailureReason(r.code, isDefaultNumber) };
     }
     for (const part of parts) {
       if (part.sendState !== "pending_send") continue;
@@ -144,7 +157,7 @@ export async function releaseHeldOutboundMessages(
         await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: GHL_PROVIDER_REASONS.bridgeUnreachableExhausted });
         continue;
       }
-      const r = await deps.sendAttachment({ coachId: row.tenantId, to: row.toPhone!, attachment: { url: part.pendingUrl, fileName: part.fileName ?? undefined }, idempotencyKey: part.idempotencyKey });
+      const r = await deps.sendAttachment({ coachId: row.tenantId, ...target, attachment: { url: part.pendingUrl, fileName: part.fileName ?? undefined }, idempotencyKey: part.idempotencyKey });
       if (r.ok) {
         await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "accepted" });
       } else if (r.code === "session_not_connected") {
@@ -154,7 +167,7 @@ export async function releaseHeldOutboundMessages(
         result.stillHeld++;
         return "next";
       } else {
-        await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: r.code === "daily_cap_reached" ? GHL_PROVIDER_REASONS.capReached : mapBridgeFailureReason(r.code) });
+        await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: r.code === "daily_cap_reached" ? GHL_PROVIDER_REASONS.capReached : mapSendFailureReason(r.code, isDefaultNumber) });
       }
     }
     if (textEnd.kind === "accepted") await repo.updateGhlOutboundSendState(row.id, { sendState: "accepted", onlyIfSendState: "held" });
@@ -206,25 +219,29 @@ export async function releaseHeldOutboundMessages(
             result.expired++;
             continue;
           }
-          if (row.toPhone === null || (row.pendingText === null && parts.length === 0)) {
+          // A phone row goes to its phone; a group row (no phone) to its
+          // group on the row's own number (`resolveDrainTarget`).
+          const target = await resolveDrainTarget(repo, row);
+          if (target === null || (row.pendingText === null && parts.length === 0)) {
             await refuseMessage(row, parts, GHL_PROVIDER_REASONS.bridgeUnreachableExhausted);
             result.refused++;
             continue;
           }
           const account = await repo.getGhlAccountByLocationId(row.locationId);
-          const gate = await outboundRefusalReason(repo, account, row.toPhone);
+          const isDefaultNumber = isDefaultNumberForRow(row, account);
+          const gate = await outboundRefusalReason(repo, account, row);
           if (gate) {
             await refuseMessage(row, parts, gate);
             result.refused++;
             continue;
           }
           if (parts.length > 0) {
-            const outcome = await releaseMultipart(row, parts);
+            const outcome = await releaseMultipart(row, parts, target, isDefaultNumber);
             if (outcome === "drop") break; // the bridge dropped again: keep this number's remaining rows held
             continue;
           }
           if (row.pendingText === null) continue; // unreachable: refused above
-          const sent = await deps.sendWhatsapp({ coachId: row.tenantId, to: row.toPhone, text: row.pendingText, idempotencyKey: row.idempotencyKey });
+          const sent = await deps.sendWhatsapp({ coachId: row.tenantId, ...target, text: row.pendingText, idempotencyKey: row.idempotencyKey });
           if (sent.ok) {
             await repo.updateGhlOutboundSendState(row.id, { sendState: "accepted", onlyIfSendState: "held" });
             result.released++;
@@ -243,7 +260,7 @@ export async function releaseHeldOutboundMessages(
             result.stillHeld++;
             continue;
           }
-          await refuseAndReport(row, mapBridgeFailureReason(sent.code));
+          await refuseAndReport(row, mapSendFailureReason(sent.code, isDefaultNumber));
           result.refused++;
         } catch (err) {
           console.error(`[ghl-held] releasing row ${row.id} failed (non-fatal):`, err);

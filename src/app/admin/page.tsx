@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { AccountsPanel } from "@/components/owner/AccountsPanel";
-import { GhlAccountsPanel } from "@/components/owner/GhlAccountsPanel";
+import { GhlAccountsPanel, type AdminLocationNumber } from "@/components/owner/GhlAccountsPanel";
 import { GhlHealthPanel } from "@/components/owner/GhlHealthPanel";
 import { Wordmark } from "@/components/shell/Wordmark";
 import { getSession } from "@/lib/auth";
@@ -65,6 +65,30 @@ export default async function AdminPage({
   ]);
   const whatsappBridgeReachable = whatsappHealth === null ? null : whatsappHealth.ok;
 
+  // Each location's numbers, reduced to what the panel shows (slot, label,
+  // default flag, last-known status). The tenant id is used HERE, server
+  // side, to look the status up and goes no further — the client component
+  // only ever sees slots.
+  const summaryByTenant = new Map(whatsappSummaries.map((s) => [s.coachId, s]));
+  const ghlNumbers: Record<string, AdminLocationNumber[]> = {};
+  await Promise.all(
+    ghlAccounts.map(async (account) => {
+      const numbers = await repo.listLocationNumbers(account.locationId);
+      ghlNumbers[account.locationId] = numbers
+        .sort((a, b) => a.slot - b.slot)
+        .map((n) => {
+          const summary = summaryByTenant.get(n.tenantId) ?? null;
+          return {
+            slot: n.slot,
+            label: n.label,
+            isDefault: n.isDefault,
+            status: summary ? summary.status : null,
+            phoneNumber: summary ? summary.phoneNumber : null,
+          };
+        });
+    })
+  );
+
   return (
     <main className="min-h-screen bg-bg px-4 py-8 sm:px-8">
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
@@ -78,6 +102,7 @@ export default async function AdminPage({
         <GhlAccountsPanel
           accounts={ghlAccounts}
           summaries={whatsappSummaries}
+          numbersByLocation={ghlNumbers}
           bridgeConfigured={whatsappBridgeConfigured}
           bridgeReachable={whatsappBridgeReachable}
           nowMs={nowMs()}

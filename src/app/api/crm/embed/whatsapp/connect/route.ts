@@ -30,23 +30,34 @@
  * `session.coachId`, as this route's JSON body — the shared
  * `WhatsappConnectionPanel` client component already knows how to render
  * every one of its `ok`/`code` branches (it never reads `coachId`), so there
- * is nothing else to translate here.
+ * is nothing else to translate here. *
+ * WHICH NUMBER (several WhatsApp numbers per location, Task 4). The body may
+ * name a slot, `{ slot?: 1 | 2 | 3 }` (no body, or no `slot`, means slot 1 —
+ * the pre-slot client sends none and keeps working). The guard resolves it
+ * to that number's tenant WITHIN the location the verified token proves,
+ * after every older check: anything but exactly 1-3 is 400 `invalid_slot`, a
+ * slot the location has no number in is 404 `unknown_number` (see
+ * `guard.ts`'s header, the fifth check). The client still never names a
+ * tenant, and `toPanelBridgeResponse` (src/lib/bridge-panel-guard.ts) both
+ * strips `session.coachId` and scrubs the tenant out of a failure message.
  */
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { connectWhatsappSession } from "@/lib/whatsapp-bridge";
-import { authorizeGhlEmbedRequest, guardFailureResponseBody, redactBridgeSessionResult } from "@/app/api/crm/embed/guard";
+import { readSmallJsonBody, toPanelBridgeResponse } from "@/lib/bridge-panel-guard";
+import { authorizeGhlEmbedRequest, guardFailureResponseBody, requestedSlotFromBody } from "@/app/api/crm/embed/guard";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    const auth = await authorizeGhlEmbedRequest(repo, request.headers.get("authorization"));
+    const slot = requestedSlotFromBody(await readSmallJsonBody(request));
+    const auth = await authorizeGhlEmbedRequest(repo, request.headers.get("authorization"), slot);
     if (!auth.ok) {
       return NextResponse.json(guardFailureResponseBody(auth), { status: auth.status });
     }
     const result = await connectWhatsappSession(auth.account.tenantId);
-    return NextResponse.json(redactBridgeSessionResult(result));
+    return NextResponse.json(toPanelBridgeResponse(result, auth.account.tenantId));
   } catch (err) {
     // Adversarial review lens 4, finding 6 (MINOR) — same "genuinely total,
     // not just documented as such" backstop as the guard itself. Nothing

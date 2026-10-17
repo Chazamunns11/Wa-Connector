@@ -13,13 +13,17 @@ export function generateMetadata(): Metadata {
   };
 }
 
-const DOCS = [
-  { href: SITE_ROUTES.setup, title: "Setup guide", text: "Install, set the Telephony Provider, scan the QR code and send a test. About ten minutes." },
-  { href: SITE_ROUTES.connect, title: "How to connect", text: "A two-page sheet for whoever scans the QR code. Print it or send the PDF to your client." },
-  { href: SITE_ROUTES.faq, title: "FAQ", text: "Straight answers on linked devices, ban risk, the daily cap and what happens when a phone goes offline." },
-  { href: SITE_ROUTES.billingHelp, title: "Billing", text: "How the free trial works, what a failed payment does and how to cancel." },
-  { href: SITE_ROUTES.privacySummary, title: "Privacy and data", text: "What we store, for how long, and what we do not keep." },
-] as const;
+/** The docs index cards. Built per render, so the brand name comes from the runtime config. */
+function docsList(name: string) {
+  return [
+    { href: SITE_ROUTES.setup, title: "Setup guide", text: "Install, set the Telephony Provider, scan the QR code and send a test. About ten minutes." },
+    { href: SITE_ROUTES.connect, title: "How to connect", text: "A two-page sheet for whoever scans the QR code. Print it or send the PDF to your client." },
+    { href: SITE_ROUTES.faq, title: "FAQ", text: "Straight answers on linked devices, ban risk, the daily cap and what happens when a phone goes offline." },
+    { href: SITE_ROUTES.aiReplies, title: "AI replies", text: `Let GHL's Conversation AI answer on WhatsApp through ${name}, and keep it out of your groups.` },
+    { href: SITE_ROUTES.billingHelp, title: "Billing", text: "How the free trial works, what a failed payment does and how to cancel." },
+    { href: SITE_ROUTES.privacySummary, title: "Privacy and data", text: "What we store, for how long, and what we do not keep." },
+  ] as const;
+}
 
 export default function DocsIndexPage() {
   const { name } = brandConfig();
@@ -32,7 +36,7 @@ export default function DocsIndexPage() {
       <Container>
         <div className="max-w-[760px]">
           <ul role="list" className="grid list-none gap-4 p-0 sm:grid-cols-2">
-            {DOCS.map((d) => (
+            {docsList(name).map((d) => (
               <li key={d.href}>
                 <Link
                   href={d.href}

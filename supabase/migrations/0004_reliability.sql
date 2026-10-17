@@ -8,9 +8,11 @@
 --     pending_send/held": a held row keeps its pending_text.
 --
 -- (b) whatsapp_opt_outs records a contact who replied STOP. It is per
---     (tenant_id, phone), i.e. per number (ruling W10): other numbers in the
---     same account are unaffected. opted_out_at defaults to now(); keyword is
---     the canonical matched word (STOP, UNSUBSCRIBE, ...), not the raw text.
+--     (tenant_id, phone), i.e. STORED per number (ruling W10), but CHECKED
+--     across every number of the sub-account: a contact who opted out on one
+--     number is refused on all of them. When a number is removed its opt-outs
+--     are kept, moved onto the sub-account's default number. opted_out_at
+--     defaults to now(); keyword is the canonical matched word (STOP, UNSUBSCRIBE, ...), not the raw text.
 --     RLS enabled with no policies: service-role only.
 
 alter table public.ghl_outbound_messages drop constraint ghl_outbound_messages_send_state_check;
@@ -35,6 +37,6 @@ create table public.whatsapp_opt_outs (
 );
 
 comment on table public.whatsapp_opt_outs is
-  'Contacts who replied STOP (or another opt-out keyword) to a specific number. Keyed (tenant_id, phone) so an opt-out applies to one number only (W10). Removed when the contact replies START. RLS: no policies, service-role only.';
+  'Contacts who replied STOP (or another opt-out keyword) to a specific number. Keyed (tenant_id, phone), so an opt-out is stored per number (W10) but checked across every number of the sub-account, and kept on the default number when a number is removed. Removed when the contact replies START. RLS: no policies, service-role only.';
 
 alter table public.whatsapp_opt_outs enable row level security;

@@ -19,17 +19,23 @@
  * this drain level can never exercise.
  */
 import test, { beforeEach, afterEach } from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { describeInboundMediaPlaceholder } from "@/lib/ghl";
+import { describeInboundMediaPlaceholder, describeMissedCall, renderInboundEvent, stripQuotePrefix, MISSED_VIDEO_CALL_TEXT, MISSED_VOICE_CALL_TEXT } from "@/lib/ghl";
+import { optedOutReason, type GhlProviderRepo } from "@/lib/ghl-provider";
 import type { AddGhlInboundMessageResult, UpsertGhlContactResult } from "@/lib/ghl";
 import {
   drainGhlInboundReplies,
+  MISSED_CALL_STALE_MS,
+  MISSED_CALL_STALE_RESOLUTION,
   GHL_INBOUND_REASONS,
   type GhlInboundDeps,
   type GhlInboundRepo,
 } from "@/lib/ghl-inbound";
-import type { GhlAccount, WhatsappInboundMessage } from "@/lib/types";
+import { shouldReplaceSticky } from "@/lib/location-numbers";
+import type { GhlAccount, LocationNumber, WhatsappGroup, WhatsappInboundMessage } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // describeInboundMediaPlaceholder — pure, direct tests (plan §Q6 / test 6).
@@ -90,6 +96,8 @@ function makeAccount(overrides: Partial<GhlAccount> = {}): GhlAccount {
     refreshToken: "refresh-token-1",
     status: "active",
     lastError: null,
+    showReactions: false,
+    showDeletes: false,
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
     ...overrides,
@@ -118,6 +126,7 @@ function makeRow(overrides: Partial<WhatsappInboundMessage> = {}): WhatsappInbou
     mediaPath: null,
     mediaMime: null,
     mediaSizeBytes: null,
+    eventKind: null,
     ...overrides,
   };
 }
@@ -134,17 +143,42 @@ interface FakeCall {
  * (`claimWhatsappInboundMessage`, the SAME shape the coach drain uses), the
  * un-claim-on-retry contract (`recordGhlInboundPushFailure`'s `unclaim`
  * flag), and an atomic-ish `claimGhlTokenRefresh`.
+ *
+ * Multiple numbers (Task 3): `numbers` seeds a location's
+ * `ghl_location_numbers` rows (default: the one slot-1 row install creates for
+ * the account's tenant). `getGhlAccountByTenantId` resolves through them like
+ * supabase.ts does, so a second number's row finds its location's account
+ * (whose `tenantId` stays the DEFAULT number). `sticky` is the in-memory
+ * `ghl_contact_numbers`, written with the same strictly-newer rule
+ * (`shouldReplaceSticky`) the real repository applies.
  */
-function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessage[] = []) {
+function createFakeRepo(
+  accounts: GhlAccount[] = [],
+  rows: WhatsappInboundMessage[] = [],
+  numbers: Record<string, LocationNumber[]> = {},
+  groups: WhatsappGroup[] = [],
+  /** Message events — stored original bodies, keyed `tenant:waMessageId`. */
+  originals: Map<string, string> = new Map()
+) {
+  let forgetFails = false;
+  const groupsByKey = new Map(groups.map((g) => [`${g.tenantId}:${g.groupJid}`, { ...g }]));
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const rowsById = new Map(rows.map((r) => [r.id, { ...r }]));
   const calls: FakeCall[] = [];
+  const sticky = new Map<string, { tenantId: string; lastInboundAt: string }>();
   let claimedAt: number | null = null;
   /** Opt-out store keyed `tenant:phone` — mirrors the (tenant_id, phone) upsert/delete contract. */
   const optOuts = new Map<string, { keyword: string; ghlContactId: string | null }>();
 
+  function numbersFor(locationId: string): LocationNumber[] {
+    const seeded = numbers[locationId];
+    if (seeded) return seeded;
+    const account = accountsByLocation.get(locationId);
+    return account ? [{ tenantId: account.tenantId, slot: 1, isDefault: true, label: null }] : [];
+  }
+
   function accountForTenant(tenantId: string): GhlAccount | undefined {
-    return [...accountsByLocation.values()].find((a) => a.tenantId === tenantId);
+    return [...accountsByLocation.values()].find((a) => numbersFor(a.locationId).some((n) => n.tenantId === tenantId));
   }
 
   const repo: GhlInboundRepo = {
@@ -191,6 +225,11 @@ function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessag
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .slice(0, limit);
     },
+    /** Message events — the stored body of an inbound row by (tenant, wa message id); the fixtures key it via `waMessageId`. */
+    async getInboundBodyByWaMessageId(tenantId: string, waMessageId: string) {
+      calls.push({ method: "getInboundBodyByWaMessageId", args: [tenantId, waMessageId] });
+      return originals.get(`${tenantId}:${waMessageId}`) ?? null;
+    },
     async claimWhatsappInboundMessage(id: string) {
       calls.push({ method: "claimWhatsappInboundMessage", args: [id] });
       const row = rowsById.get(id);
@@ -217,6 +256,10 @@ function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessag
       calls.push({ method: "recordOptOut", args: [input] });
       optOuts.set(`${input.tenantId}:${input.phone}`, { keyword: input.keyword, ghlContactId: input.ghlContactId });
     },
+    async forgetNotOnWhatsapp(locationId: string, phone: string) {
+      calls.push({ method: "forgetNotOnWhatsapp", args: [locationId, phone] });
+      if (forgetFails) throw new Error("db down");
+    },
     async clearOptOut(tenantId: string, phone: string) {
       calls.push({ method: "clearOptOut", args: [tenantId, phone] });
       optOuts.delete(`${tenantId}:${phone}`);
@@ -227,9 +270,29 @@ function createFakeRepo(accounts: GhlAccount[] = [], rows: WhatsappInboundMessag
       if (path.startsWith(FAIL_SIGN_PREFIX)) return null;
       return `https://storage.example.supabase.co/object/sign/wa-media/${path}?token=fake`;
     },
+    async listLocationNumbers(locationId: string) {
+      calls.push({ method: "listLocationNumbers", args: [locationId] });
+      return numbersFor(locationId);
+    },
+    async recordInboundForStickiness(locationId: string, ghlContactId: string, tenantId: string, receivedAtIso: string) {
+      calls.push({ method: "recordInboundForStickiness", args: [locationId, ghlContactId, tenantId, receivedAtIso] });
+      const key = `${locationId}:${ghlContactId}`;
+      if (!shouldReplaceSticky(sticky.get(key)?.lastInboundAt ?? null, receivedAtIso)) return;
+      sticky.set(key, { tenantId, lastInboundAt: receivedAtIso });
+    },
+    async listWhatsappGroups(tenantId: string) {
+      calls.push({ method: "listWhatsappGroups", args: [tenantId] });
+      return [...groupsByKey.values()].filter((g) => g.tenantId === tenantId).map((g) => ({ ...g }));
+    },
+    async setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string) {
+      calls.push({ method: "setWhatsappGroupContact", args: [tenantId, groupJid, ghlContactId] });
+      const group = groupsByKey.get(`${tenantId}:${groupJid}`);
+      if (!group) throw new Error(`no such group ${groupJid}`);
+      group.ghlContactId = ghlContactId;
+    },
   };
 
-  return { repo, accountsByLocation, rowsById, calls, optOuts };
+  return { repo, accountsByLocation, rowsById, calls, sticky, groupsByKey, optOuts, setForgetFails: (v: boolean) => (forgetFails = v) };
 }
 
 /** Media plan test fixture marker — see `createFakeRepo`'s `createWhatsappMediaSignedUrl` fake above. */
@@ -242,16 +305,22 @@ function makeUpsertResult(overrides: Partial<Extract<UpsertGhlContactResult, { o
 function makeDeps(overrides: Partial<GhlInboundDeps> = {}): {
   deps: GhlInboundDeps;
   upsertCalls: { accessToken: string; locationId: string; phoneE164: string }[];
+  groupUpsertCalls: { accessToken: string; locationId: string; name: string; groupKey: string }[];
   postCalls: { accessToken: string; contactId: string; conversationProviderId: string; body: string; timestampIso?: string }[];
   notifyCalls: string[];
 } {
   const upsertCalls: { accessToken: string; locationId: string; phoneE164: string }[] = [];
+  const groupUpsertCalls: { accessToken: string; locationId: string; name: string; groupKey: string }[] = [];
   const postCalls: { accessToken: string; contactId: string; conversationProviderId: string; body: string; timestampIso?: string }[] = [];
   const notifyCalls: string[] = [];
   const deps: GhlInboundDeps = {
     upsertContact: async (accessToken, locationId, phoneE164) => {
       upsertCalls.push({ accessToken, locationId, phoneE164 });
       return makeUpsertResult();
+    },
+    upsertGroupContact: async (accessToken, locationId, input) => {
+      groupUpsertCalls.push({ accessToken, locationId, ...input });
+      return makeUpsertResult({ contactId: "group-contact-1" });
     },
     addInboundMessage: async (accessToken, input) => {
       postCalls.push({ accessToken, ...input });
@@ -264,7 +333,7 @@ function makeDeps(overrides: Partial<GhlInboundDeps> = {}): {
     },
     ...overrides,
   };
-  return { deps, upsertCalls, postCalls, notifyCalls };
+  return { deps, upsertCalls, groupUpsertCalls, postCalls, notifyCalls };
 }
 
 // ---------------------------------------------------------------------------
@@ -286,9 +355,13 @@ test("drainGhlInboundReplies: GHL_CONVERSATION_PROVIDER_ID unset -> zero repo re
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    groupNotEnabled: 0,
+    staleMissedCalls: 0,
+    eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: true,
+    triggersSkipped: 0,
   });
   assert.equal(calls.length, 0, "no repo method may be called at all when the provider id is unset");
   assert.equal(upsertCalls.length, 0);
@@ -672,9 +745,13 @@ test("drainGhlInboundReplies: the LIST call itself throwing -> an all-zero resul
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    groupNotEnabled: 0,
+    staleMissedCalls: 0,
+    eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: false,
+    triggersSkipped: 0,
   });
 });
 
@@ -785,6 +862,302 @@ test("describeStoredMediaLabel / describeTooLargeMediaPlaceholder — pure, dire
     describeTooLargeMediaPlaceholder("imageMessage"),
     "[Photo received on WhatsApp (too large to transfer — view it on the connected phone)]"
   );
+});
+
+// ---------------------------------------------------------------------------
+// Multiple numbers per location (Task 3) — stickiness + the inbound prefix.
+// ---------------------------------------------------------------------------
+
+const SECOND_TENANT_ID = "33333333-3333-4333-8333-333333333333";
+
+/** Slot 1 (the account's own tenant) is the unlabelled default; slot 2 is labelled "Sales". */
+const TWO_NUMBERS: Record<string, LocationNumber[]> = {
+  [LOCATION_ID]: [
+    { tenantId: TENANT_ID, slot: 1, isDefault: true, label: null },
+    { tenantId: SECOND_TENANT_ID, slot: 2, isDefault: false, label: "Sales" },
+  ],
+};
+
+test("drainGhlInboundReplies: after a successful push, stickiness is recorded with the ROW's tenant (not the account's default) and its received_at", async () => {
+  const row = makeRow({ coachId: SECOND_TENANT_ID, receivedAt: "2026-08-01T09:00:00.000Z" });
+  const { repo, calls, sticky } = createFakeRepo([makeAccount()], [row], TWO_NUMBERS);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  const recorded = calls.filter((c) => c.method === "recordInboundForStickiness");
+  assert.deepEqual(recorded.map((c) => c.args), [[LOCATION_ID, "contact-1", SECOND_TENANT_ID, "2026-08-01T09:00:00.000Z"]]);
+  assert.deepEqual(sticky.get(`${LOCATION_ID}:contact-1`), { tenantId: SECOND_TENANT_ID, lastInboundAt: "2026-08-01T09:00:00.000Z" });
+});
+
+test("drainGhlInboundReplies: stickiness is never recorded for a push that did not land", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeRow()], TWO_NUMBERS);
+  const { deps } = makeDeps({ addInboundMessage: async () => ({ ok: false, kind: "rejected", error: "GHL inbound message rejected (HTTP 400)" }) });
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.rejected, 1);
+  assert.equal(calls.filter((c) => c.method === "recordInboundForStickiness").length, 0);
+});
+
+test("drainGhlInboundReplies: an OLDER row drained after a newer one never overwrites the newer sticky number (Review Focus 3)", async () => {
+  // Drained oldest-created first, but the second-created row carries the
+  // EARLIER received_at — the out-of-order shape a replayed/late row has.
+  const newer = makeRow({ coachId: SECOND_TENANT_ID, receivedAt: "2026-08-01T10:00:00.000Z", createdAt: "2026-08-01T10:00:01.000Z" });
+  const older = makeRow({ coachId: TENANT_ID, receivedAt: "2026-08-01T09:00:00.000Z", createdAt: "2026-08-01T10:00:02.000Z" });
+  const { repo, sticky } = createFakeRepo([makeAccount()], [newer, older], TWO_NUMBERS);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 2);
+  assert.deepEqual(sticky.get(`${LOCATION_ID}:contact-1`), { tenantId: SECOND_TENANT_ID, lastInboundAt: "2026-08-01T10:00:00.000Z" });
+});
+
+test("drainGhlInboundReplies: a stickiness write that throws never un-pushes the reply — the row stays 'ghl_pushed'", async () => {
+  const row = makeRow({ coachId: SECOND_TENANT_ID });
+  const { repo, rowsById } = createFakeRepo([makeAccount()], [row], TWO_NUMBERS);
+  const throwingSticky: GhlInboundRepo = {
+    ...repo,
+    recordInboundForStickiness: async () => {
+      throw new Error("simulated Supabase error");
+    },
+  };
+  const { deps, postCalls } = makeDeps();
+  // Captured, not printed — keeps the suite output pristine and pins that the
+  // failure is logged rather than swallowed silently.
+  const errors: unknown[][] = [];
+  const realConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args);
+  };
+  let result: Awaited<ReturnType<typeof drainGhlInboundReplies>>;
+  try {
+    result = await drainGhlInboundReplies(throwingSticky, deps);
+  } finally {
+    console.error = realConsoleError;
+  }
+
+  assert.equal(result.pushed, 1);
+  assert.equal(result.retried, 0);
+  assert.equal(postCalls.length, 1);
+  assert.equal(rowsById.get(row.id)!.resolution, "ghl_pushed");
+  assert.equal(errors.length, 1);
+  assert.match(String(errors[0][0]), /pushed, but recording the contact's sticky number failed/);
+});
+
+test("drainGhlInboundReplies: the location's number list is read once per location per pass, not once per row", async () => {
+  const rows = [makeRow({ coachId: SECOND_TENANT_ID }), makeRow({ coachId: TENANT_ID }), makeRow({ coachId: SECOND_TENANT_ID })];
+  const { repo, calls } = createFakeRepo([makeAccount()], rows, TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 3);
+  assert.equal(calls.filter((c) => c.method === "listLocationNumbers").length, 1);
+});
+
+test("drainGhlInboundReplies: with more than one number, the GHL body is prefixed '[<label>] ' or '[Number <slot>] '", async () => {
+  const labelled = makeRow({ coachId: SECOND_TENANT_ID, body: "hi from the sales line" });
+  const unlabelled = makeRow({ coachId: TENANT_ID, body: "hi from the main line" });
+  const { repo } = createFakeRepo([makeAccount()], [labelled, unlabelled], TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.deepEqual(postCalls.map((c) => c.body), ["[Sales] hi from the sales line", "[Number 1] hi from the main line"]);
+});
+
+test("drainGhlInboundReplies: with more than one number, a media placeholder body is prefixed too", async () => {
+  const row = makeRow({ coachId: SECOND_TENANT_ID, body: null, messageType: "imageMessage" });
+  const { repo } = createFakeRepo([makeAccount()], [row], TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, `[Sales] ${describeInboundMediaPlaceholder("imageMessage")}`);
+});
+
+test("drainGhlInboundReplies: with one number, the GHL body is never prefixed (even when that number has a label)", async () => {
+  const numbers = { [LOCATION_ID]: [{ tenantId: TENANT_ID, slot: 1 as const, isDefault: true, label: "Main" }] };
+  const { repo } = createFakeRepo([makeAccount()], [makeRow({ body: "plain" })], numbers);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "plain");
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in WhatsApp groups (Task 8): a group row posts into ONE GHL contact
+// standing for the group, prefixed with the sender; senders are never
+// contacts; a group that is unknown or switched off never reaches GHL.
+// ---------------------------------------------------------------------------
+
+const GROUP_JID = "120363012345678901@g.us";
+
+function makeGroup(overrides: Partial<WhatsappGroup> = {}): WhatsappGroup {
+  return { tenantId: TENANT_ID, groupJid: GROUP_JID, name: "Run Club", enabled: true, ghlContactId: null, leftAt: null, createdByUs: false, ...overrides };
+}
+
+function makeGroupRow(overrides: Partial<WhatsappInboundMessage> = {}): WhatsappInboundMessage {
+  return makeRow({ groupJid: GROUP_JID, senderName: "Jane", fromPhone: "+447700900555", body: "hello", ...overrides });
+}
+
+test("drainGhlInboundReplies (groups): the first row creates the group contact once and stores it before posting; a second row reuses it", async () => {
+  const rows = [makeGroupRow({ body: "hello" }), makeGroupRow({ body: "second", senderName: "Sam" })];
+  const { repo, calls, groupsByKey, rowsById } = createFakeRepo([makeAccount()], rows, {}, [makeGroup()]);
+  const { deps, groupUpsertCalls, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 2);
+  assert.deepEqual(groupUpsertCalls, [
+    { accessToken: "access-token-fresh", locationId: LOCATION_ID, name: "Run Club", groupKey: `120363012345678901-${createHash("sha256").update(TENANT_ID).digest("hex").slice(0, 8)}` },
+  ]);
+  assert.equal(groupsByKey.get(`${TENANT_ID}:${GROUP_JID}`)!.ghlContactId, "group-contact-1");
+  const storeIndex = calls.findIndex((c) => c.method === "setWhatsappGroupContact");
+  const firstClaimIndex = calls.findIndex((c) => c.method === "claimWhatsappInboundMessage");
+  assert.ok(storeIndex >= 0 && storeIndex < firstClaimIndex, "the group contact is stored before the row is claimed and posted");
+  assert.deepEqual(calls[storeIndex].args, [TENANT_ID, GROUP_JID, "group-contact-1"]);
+  assert.deepEqual(postCalls.map((c) => [c.contactId, c.body]), [
+    ["group-contact-1", "Jane: hello"],
+    ["group-contact-1", "Sam: second"],
+  ]);
+  assert.ok([...rowsById.values()].every((r) => r.resolution === "ghl_pushed"));
+});
+
+test("drainGhlInboundReplies (groups): a group that already has a GHL contact reuses it — no contact call at all", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeGroupRow()], {}, [makeGroup({ ghlContactId: "stored-group-contact" })]);
+  const { deps, upsertCalls, groupUpsertCalls, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(groupUpsertCalls.length, 0);
+  assert.equal(upsertCalls.length, 0);
+  assert.equal(calls.filter((c) => c.method === "setWhatsappGroupContact").length, 0);
+  assert.equal(postCalls[0]?.contactId, "stored-group-contact");
+});
+
+test("drainGhlInboundReplies (groups): the sender prefix falls back to the sender's number when the name is null or blank", async () => {
+  const rows = [makeGroupRow({ senderName: null, body: "one" }), makeGroupRow({ senderName: "   ", body: "two" }), makeGroupRow({ senderName: "  Jo  ", body: "three" })];
+  const { repo } = createFakeRepo([makeAccount()], rows, {}, [makeGroup()]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.deepEqual(postCalls.map((c) => c.body), ["+447700900555: one", "+447700900555: two", "Jo: three"]);
+});
+
+test("drainGhlInboundReplies (groups): a group row never upserts the sender as a contact and never records stickiness", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeGroupRow()], {}, [makeGroup()]);
+  const { deps, upsertCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(upsertCalls.length, 0, "senders are not contacts");
+  assert.equal(calls.filter((c) => c.method === "recordInboundForStickiness").length, 0);
+});
+
+test("drainGhlInboundReplies (groups): media rows use the existing media path with the same sender prefix", async () => {
+  const rows = [
+    makeGroupRow({ body: null, messageType: "imageMessage" }),
+    makeGroupRow({ body: null, messageType: "imageMessage", mediaStatus: "stored", mediaPath: "tenant-1/WAGRP1.jpg" }),
+  ];
+  const { repo } = createFakeRepo([makeAccount()], rows, {}, [makeGroup()]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, `Jane: ${describeInboundMediaPlaceholder("imageMessage")}`);
+  assert.equal(postCalls[1]?.body, "Jane: Photo received on WhatsApp");
+  assert.deepEqual((postCalls[1] as unknown as { attachments?: string[] }).attachments, [
+    "https://storage.example.supabase.co/object/sign/wa-media/tenant-1/WAGRP1.jpg?token=fake",
+  ]);
+});
+
+test("drainGhlInboundReplies (groups): with more than one number, the number prefix comes first — '[Sales] Jane: hello'", async () => {
+  const groups = [makeGroup({ tenantId: SECOND_TENANT_ID })];
+  const { repo } = createFakeRepo([makeAccount()], [makeGroupRow({ coachId: SECOND_TENANT_ID })], TWO_NUMBERS, groups);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "[Sales] Jane: hello");
+});
+
+test("drainGhlInboundReplies (groups): a disabled or unknown group never reaches GHL — resolved 'group_not_enabled' with the fixed string", async () => {
+  const disabled = makeGroupRow();
+  const unknown = makeGroupRow({ groupJid: "999999999999@g.us" });
+  // The same JID enabled on ANOTHER tenant must not count for this row's tenant.
+  const groups = [makeGroup({ enabled: false }), makeGroup({ tenantId: SECOND_TENANT_ID, groupJid: "999999999999@g.us" })];
+  const { repo, rowsById } = createFakeRepo([makeAccount()], [disabled, unknown], {}, groups);
+  const { deps, upsertCalls, groupUpsertCalls, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.groupNotEnabled, 2);
+  assert.equal(result.pushed, 0);
+  assert.equal(upsertCalls.length + groupUpsertCalls.length + postCalls.length, 0);
+  for (const row of [disabled, unknown]) {
+    const stored = rowsById.get(row.id)!;
+    assert.notEqual(stored.processedAt, null, "claimed, so it is never listed again");
+    assert.equal(stored.resolution, "group_not_enabled");
+    assert.equal(stored.pushError, GHL_INBOUND_REASONS.groupNotEnabled);
+  }
+  assert.equal(GHL_INBOUND_REASONS.groupNotEnabled, "WhatsApp group sync is turned off for this group");
+});
+
+test("drainGhlInboundReplies (groups): a group-contact create failure is retryable pre-claim — nothing stored, nothing posted", async () => {
+  const row = makeGroupRow();
+  const { repo, rowsById, calls } = createFakeRepo([makeAccount()], [row], {}, [makeGroup()]);
+  const { deps, postCalls } = makeDeps({
+    upsertGroupContact: async () => ({ ok: false, kind: "rate_limited", error: "GHL contact upsert rejected (HTTP 429)" }),
+  });
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.retried, 1);
+  assert.equal(postCalls.length, 0);
+  assert.equal(calls.filter((c) => c.method === "setWhatsappGroupContact").length, 0);
+  const stored = rowsById.get(row.id)!;
+  assert.equal(stored.processedAt, null);
+  assert.equal(stored.pushAttempts, 1);
+  assert.equal(stored.pushError, "GHL contact upsert rejected (HTTP 429)");
+});
+
+test("drainGhlInboundReplies (groups): the tenant's group list is read once per pass, not once per row", async () => {
+  const rows = [makeGroupRow(), makeGroupRow(), makeGroupRow()];
+  const { repo, calls } = createFakeRepo([makeAccount()], rows, {}, [makeGroup()]);
+  const { deps, groupUpsertCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(calls.filter((c) => c.method === "listWhatsappGroups").length, 1);
+  assert.equal(groupUpsertCalls.length, 1);
+});
+
+test("drainGhlInboundReplies (groups): the same group on two numbers gets one contact per number — distinct keys, each stored on its own row", async () => {
+  const groups = [makeGroup(), makeGroup({ tenantId: SECOND_TENANT_ID })];
+  const rows = [makeGroupRow({ body: "via main" }), makeGroupRow({ coachId: SECOND_TENANT_ID, body: "via sales" })];
+  const { repo, groupsByKey } = createFakeRepo([makeAccount()], rows, TWO_NUMBERS, groups);
+  let n = 0;
+  const { deps, groupUpsertCalls, postCalls } = makeDeps({
+    upsertGroupContact: async (accessToken, locationId, input) => {
+      groupUpsertCalls.push({ accessToken, locationId, ...input });
+      return { ok: true, contactId: `group-contact-${++n}`, isNew: true };
+    },
+  });
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(groupUpsertCalls.length, 2);
+  assert.notEqual(groupUpsertCalls[0].groupKey, groupUpsertCalls[1].groupKey);
+  assert.equal(groupsByKey.get(`${TENANT_ID}:${GROUP_JID}`)!.ghlContactId, "group-contact-1");
+  assert.equal(groupsByKey.get(`${SECOND_TENANT_ID}:${GROUP_JID}`)!.ghlContactId, "group-contact-2");
+  assert.deepEqual(postCalls.map((c) => c.contactId), ["group-contact-1", "group-contact-2"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -945,4 +1318,703 @@ test("DND sync on: a failing or throwing DND call does not change resolution and
     assert.equal(logged.length, 1);
     assert.equal(JSON.stringify(logged).includes("access-token-fresh"), false);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Merge: STOP/START with several numbers and groups
+// ---------------------------------------------------------------------------
+
+test("merge: a member typing STOP in an enabled group records no opt-out (the group is opt-in by the owner)", async () => {
+  const { repo, optOuts, calls } = createFakeRepo([makeAccount()], [makeGroupRow({ body: "STOP" })], {}, [makeGroup()]);
+  const { deps } = makeDeps();
+  const result = await drainGhlInboundReplies(repo, deps);
+  assert.equal(result.optedOut, 0);
+  assert.equal(optOuts.size, 0);
+  assert.equal(calls.some((c) => c.method === "recordOptOut"), false);
+});
+
+test("merge: START on one number clears the contact's opt-out on every number of the location", async () => {
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [makeRow({ coachId: SECOND_TENANT_ID, body: "START" })], TWO_NUMBERS);
+  optOuts.set(`${TENANT_ID}:${PHONE}`, { keyword: "STOP", ghlContactId: null });
+  optOuts.set(`${SECOND_TENANT_ID}:${PHONE}`, { keyword: "STOP", ghlContactId: null });
+  const { deps } = makeDeps();
+  const result = await drainGhlInboundReplies(repo, deps);
+  assert.equal(result.optedIn, 1);
+  assert.equal(optOuts.size, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Missed WhatsApp calls — fixed strings, no media path, no STOP handling.
+// ---------------------------------------------------------------------------
+
+/** A receivedAt well inside the 6-hour missed-call window. */
+function freshIso(): string {
+  return new Date(Date.now() - 60_000).toISOString();
+}
+
+test("describeMissedCall: video -> video text, anything else -> voice text", () => {
+  assert.equal(MISSED_VOICE_CALL_TEXT, "📞 Missed WhatsApp call");
+  assert.equal(MISSED_VIDEO_CALL_TEXT, "📞 Missed WhatsApp video call");
+  assert.equal(describeMissedCall("missedVideoCall"), MISSED_VIDEO_CALL_TEXT);
+  assert.equal(describeMissedCall("missedVoiceCall"), MISSED_VOICE_CALL_TEXT);
+  assert.equal(describeMissedCall("something-else"), MISSED_VOICE_CALL_TEXT);
+});
+
+test("missed voice call posts \"📞 Missed WhatsApp call\" (exact body, no attachments)", async () => {
+  const row = makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: freshIso() });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(postCalls.length, 1);
+  assert.equal(postCalls[0]?.body, "📞 Missed WhatsApp call");
+  assert.equal((postCalls[0] as unknown as { attachments?: string[] }).attachments, undefined);
+});
+
+test("missed voice call on a multi-number location keeps the number prefix", async () => {
+  const labelled = makeRow({ coachId: SECOND_TENANT_ID, body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: freshIso() });
+  const unlabelled = makeRow({ coachId: TENANT_ID, body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: freshIso() });
+  const { repo } = createFakeRepo([makeAccount()], [labelled, unlabelled], TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.deepEqual(postCalls.map((c) => c.body), ["[Sales] 📞 Missed WhatsApp call", "[Number 1] 📞 Missed WhatsApp call"]);
+});
+
+test("missed video call posts the video string", async () => {
+  const row = makeRow({ body: null, messageType: "missedVideoCall", eventKind: "missed_call", receivedAt: freshIso() });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "📞 Missed WhatsApp video call");
+});
+
+test("missed call skips media resolution", async () => {
+  const row = makeRow({
+    body: null,
+    messageType: "missedVoiceCall",
+    eventKind: "missed_call", receivedAt: freshIso(),
+    mediaStatus: "stored",
+    mediaPath: "tenant-1/WAMSG1.jpg",
+  });
+  const { repo, calls } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "📞 Missed WhatsApp call");
+  assert.equal(calls.some((c) => c.method === "createWhatsappMediaSignedUrl"), false);
+});
+
+test("missed call is not treated as a STOP keyword", async () => {
+  // Even if a body were somehow present, an event row never reaches the opt-out classifier.
+  const row = makeRow({ body: "STOP", messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: freshIso() });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(optOuts.size, 0);
+  assert.equal(result.optedOut, 0);
+  assert.equal(postCalls[0]?.body, "📞 Missed WhatsApp call");
+});
+
+test("a row with eventKind null is unchanged", async () => {
+  const row = makeRow({ body: "hello", eventKind: null });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "hello");
+});
+
+test("a missed call older than 6 hours is resolved as missed_call_stale without posting", async () => {
+  const stale = makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString() });
+  const fresh = makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString() });
+  const { repo, calls } = createFakeRepo([makeAccount()], [stale, fresh]);
+  const { deps, upsertCalls, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(MISSED_CALL_STALE_MS, 6 * 60 * 60 * 1000);
+  assert.equal(MISSED_CALL_STALE_RESOLUTION, "missed_call_stale");
+  assert.equal(result.staleMissedCalls, 1);
+  assert.equal(result.pushed, 1, "the 5-hour-old call is still posted");
+  assert.equal(postCalls.length, 1);
+  assert.equal(upsertCalls.length, 1, "no contact upsert for the stale row");
+  assert.ok(calls.some((c) => c.method === "claimWhatsappInboundMessage" && c.args[0] === stale.id), "claimed so it is never listed again");
+  const resolutions = calls.filter((c) => c.method === "resolveGhlInboundMessage").map((c) => c.args);
+  assert.deepEqual(resolutions[0], [stale.id, { resolution: "missed_call_stale", pushError: null }]);
+  assert.deepEqual(resolutions[1], [fresh.id, { resolution: "ghl_pushed", pushError: null }]);
+});
+
+test("an old ordinary message is still posted (the stale rule is for missed calls only)", async () => {
+  const row = makeRow({ body: "hello", eventKind: null, receivedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.staleMissedCalls, 0);
+  assert.equal(postCalls.length, 1);
+});
+
+test("hasInboundFromPhone (portal): a missed call doesn't count as having messaged us", () => {
+  const src = readFileSync(new URL("../../src/lib/data/supabase.ts", import.meta.url), "utf8");
+  const start = src.indexOf("async hasInboundFromPhone(");
+  const body = src.slice(start, src.indexOf("\n  }\n", start));
+  assert.match(body, /\.is\("group_jid", null\)/);
+  assert.match(body, /\.is\("event_kind", null\)/);
+});
+
+// ---------------------------------------------------------------------------
+// Message events — edits, reactions and deletes.
+// ---------------------------------------------------------------------------
+
+function eventRow(kind: "edit" | "reaction" | "delete", overrides: Partial<WhatsappInboundMessage> = {}): WhatsappInboundMessage {
+  return makeRow({
+    messageType: "event",
+    eventKind: kind,
+    targetWaMessageId: "WA-TARGET-1",
+    targetFromMe: false,
+    receivedAt: freshIso(),
+    ...overrides,
+  });
+}
+
+test("renderInboundEvent: exact formats", () => {
+  assert.equal(renderInboundEvent(eventRow("edit", { body: "new text" }), null), "✏️ Edited: new text");
+  assert.equal(renderInboundEvent(eventRow("delete", { body: null }), null), "🗑 Deleted a message");
+  assert.equal(renderInboundEvent(eventRow("reaction", { body: "👍" }), "see you at six"), '👍 reacted to "see you at six"');
+  assert.equal(renderInboundEvent(eventRow("reaction", { body: "👍", targetFromMe: true }), "ignored"), "👍 reacted to your message");
+  assert.equal(renderInboundEvent(eventRow("reaction", { body: "👍" }), null), "👍 reacted to a message");
+});
+
+test("renderInboundEvent: a reaction quotes the first 80 code points of the original", () => {
+  const out = renderInboundEvent(eventRow("reaction", { body: "❤️" }), "😀".repeat(100));
+  assert.equal(out, `❤️ reacted to "${"😀".repeat(80)}"`);
+});
+
+test("renderInboundEvent: an edit is capped at 500 code points total, cutting the text", () => {
+  const out = renderInboundEvent(eventRow("edit", { body: "😀".repeat(500) }), null);
+  assert.equal(Array.from(out).length, 500);
+  assert.ok(out.startsWith("✏️ Edited: "));
+});
+
+test("reaction suppressed by default", async () => {
+  const row = eventRow("reaction", { body: "👍" });
+  const { repo, calls } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 0);
+  assert.equal(result.eventsSuppressed, 1);
+  assert.equal(result.pushed, 0);
+  const resolved = calls.find((c) => c.method === "resolveGhlInboundMessage");
+  assert.deepEqual(resolved?.args, [row.id, { resolution: "event_suppressed", pushError: null }]);
+});
+
+test("reaction posted when showReactions", async () => {
+  const row = eventRow("reaction", { body: "👍" });
+  const originals = new Map([[`${TENANT_ID}:WA-TARGET-1`, "see you at six"]]);
+  const { repo, calls } = createFakeRepo([makeAccount({ showReactions: true })], [row], {}, [], originals);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(postCalls[0]?.body, '👍 reacted to "see you at six"');
+  assert.deepEqual(calls.find((c) => c.method === "getInboundBodyByWaMessageId")?.args, [TENANT_ID, "WA-TARGET-1"]);
+});
+
+test("reaction to our own message posts without a lookup", async () => {
+  const row = eventRow("reaction", { body: "👍", targetFromMe: true });
+  const { repo, calls } = createFakeRepo([makeAccount({ showReactions: true })], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "👍 reacted to your message");
+  assert.equal(calls.some((c) => c.method === "getInboundBodyByWaMessageId"), false);
+});
+
+test("reaction to an expired message renders \"reacted to a message\"", async () => {
+  const row = eventRow("reaction", { body: "🔥" });
+  const { repo } = createFakeRepo([makeAccount({ showReactions: true })], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(postCalls[0]?.body, "🔥 reacted to a message");
+});
+
+test("delete suppressed by default", async () => {
+  const row = eventRow("delete", { body: null });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 0);
+  assert.equal(result.eventsSuppressed, 1);
+});
+
+test("delete posted when showDeletes", async () => {
+  const row = eventRow("delete", { body: null });
+  const { repo } = createFakeRepo([makeAccount({ showDeletes: true })], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "🗑 Deleted a message");
+});
+
+test("showReactions does not enable deletes, nor the reverse", async () => {
+  const del = eventRow("delete", { body: null });
+  const rea = eventRow("reaction", { body: "👍" });
+  const a = createFakeRepo([makeAccount({ showReactions: true })], [del]);
+  const b = createFakeRepo([makeAccount({ showDeletes: true })], [rea]);
+  const da = makeDeps();
+  const db = makeDeps();
+
+  await drainGhlInboundReplies(a.repo, da.deps);
+  await drainGhlInboundReplies(b.repo, db.deps);
+
+  assert.equal(da.postCalls.length, 0);
+  assert.equal(db.postCalls.length, 0);
+});
+
+test("edits post by default, with number prefix and group sender label", async () => {
+  const row = eventRow("edit", { body: "actually 7pm", coachId: SECOND_TENANT_ID });
+  const { repo } = createFakeRepo([makeAccount()], [row], TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "[Sales] ✏️ Edited: actually 7pm");
+});
+
+test("edit to STOP opts out", async () => {
+  const row = eventRow("edit", { body: "STOP" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.optedOut, 1);
+  assert.equal(optOuts.size, 1);
+  assert.equal(postCalls[0]?.body, "✏️ Edited: STOP");
+});
+
+test("reaction \"STOP\" is not a keyword", async () => {
+  const row = eventRow("reaction", { body: "STOP" });
+  const { repo, optOuts } = createFakeRepo([makeAccount({ showReactions: true })], [row]);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(optOuts.size, 0);
+  assert.equal(result.optedOut, 0);
+});
+
+test("a suppressed reaction upserts no contact and posts nothing", async () => {
+  const row = eventRow("reaction", { body: "👍" });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls, upsertCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 0);
+  assert.equal(upsertCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Message events — final review fixes.
+// ---------------------------------------------------------------------------
+
+test("stripQuotePrefix: returns the reply after the quote line, else the body unchanged", () => {
+  assert.equal(stripQuotePrefix('↩ "are you free?"\nSTOP'), "STOP");
+  assert.equal(stripQuotePrefix('↩ "a"\nline one\nline two'), "line one\nline two");
+  assert.equal(stripQuotePrefix('↩ (photo)\nyes'), "yes");
+  assert.equal(stripQuotePrefix("↩ no newline"), "↩ no newline");
+  assert.equal(stripQuotePrefix("STOP"), "STOP");
+  assert.equal(stripQuotePrefix('hello\n↩ "x"'), 'hello\n↩ "x"');
+});
+
+test("quoted STOP opts out, and the reply is still posted as stored", async () => {
+  const row = makeRow({ body: '↩ "see you at six"\nSTOP', messageType: "extendedTextMessage" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.optedOut, 1);
+  assert.deepEqual(optOuts.get(`${TENANT_ID}:${PHONE}`), { keyword: "STOP", ghlContactId: null });
+  assert.equal(postCalls[0]?.body, '↩ "see you at six"\nSTOP');
+});
+
+test("quoted START opts back in", async () => {
+  const row = makeRow({ body: '↩ "reply STOP to opt out"\nstart', messageType: "extendedTextMessage" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  optOuts.set(`${TENANT_ID}:${PHONE}`, { keyword: "STOP", ghlContactId: null });
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.optedIn, 1);
+  assert.equal(optOuts.size, 0);
+});
+
+test("quoted STOP is stored on the number it arrived on and blocks sends from every number of the location, like plain STOP", async () => {
+  const quoted = makeRow({ coachId: SECOND_TENANT_ID, body: '↩ "your booking"\nSTOP', messageType: "extendedTextMessage" });
+  const plain = makeRow({ coachId: SECOND_TENANT_ID, body: "STOP", fromPhone: "+447700900999" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [quoted, plain], TWO_NUMBERS);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.optedOut, 2);
+  assert.equal(optOuts.has(`${SECOND_TENANT_ID}:${PHONE}`), true);
+  assert.equal(optOuts.has(`${TENANT_ID}:${PHONE}`), false, "stored on the number it arrived on only");
+  const providerRepo = {
+    isOptedOut: async (tenantId: string, phone: string) => optOuts.has(`${tenantId}:${phone}`),
+    listLocationNumbers: async (locationId: string) => TWO_NUMBERS[locationId] ?? [],
+  } as unknown as GhlProviderRepo;
+  for (const phone of [PHONE, "+447700900999"]) {
+    const fromDefault = await optedOutReason(providerRepo, LOCATION_ID, TENANT_ID, phone);
+    const fromSales = await optedOutReason(providerRepo, LOCATION_ID, SECOND_TENANT_ID, phone);
+    assert.ok(fromDefault, `send from the default number to ${phone} is refused`);
+    assert.ok(fromSales, `send from the number it arrived on to ${phone} is refused`);
+  }
+  assert.equal(
+    await optedOutReason(providerRepo, LOCATION_ID, TENANT_ID, PHONE),
+    await optedOutReason(providerRepo, LOCATION_ID, TENANT_ID, "+447700900999"),
+    "quoted and plain STOP give the same refusal"
+  );
+});
+
+test("an event row with no known eventKind is claimed and resolved event_suppressed, never posted or keyword-checked", async () => {
+  const rows = [
+    makeRow({ messageType: "event", eventKind: null, body: "STOP", receivedAt: freshIso() }),
+    makeRow({ messageType: "event", eventKind: "pin" as unknown as WhatsappInboundMessage["eventKind"], body: "👍", receivedAt: freshIso() }),
+  ];
+  const { repo, rowsById, calls, optOuts } = createFakeRepo([makeAccount({ showReactions: true, showDeletes: true })], rows);
+  const { deps, postCalls, upsertCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 0);
+  assert.equal(upsertCalls.length, 0);
+  assert.equal(result.eventsSuppressed, 2);
+  assert.equal(result.optedOut, 0);
+  assert.equal(optOuts.size, 0);
+  for (const row of rows) {
+    assert.equal(rowsById.get(row.id)!.resolution, "event_suppressed");
+    assert.ok(calls.some((c) => c.method === "claimWhatsappInboundMessage" && c.args[0] === row.id));
+  }
+});
+
+test("a lost claim on the suppression path resolves nothing and counts claimLost", async () => {
+  const rows = [eventRow("reaction", { body: "👍" }), makeRow({ messageType: "event", eventKind: null, receivedAt: freshIso() })];
+  const { repo, rowsById } = createFakeRepo([makeAccount()], rows);
+  const { deps, postCalls } = makeDeps();
+  const claimAlwaysLoses: GhlInboundRepo = { ...repo, claimWhatsappInboundMessage: async () => false };
+
+  const result = await drainGhlInboundReplies(claimAlwaysLoses, deps);
+
+  assert.equal(result.claimLost, 2);
+  assert.equal(result.eventsSuppressed, 0);
+  assert.equal(postCalls.length, 0);
+  for (const row of rows) assert.equal(rowsById.get(row.id)!.resolution, null);
+});
+
+test("a group event row: sender label then the event body, and no keyword check", async () => {
+  const row = makeGroupRow({ messageType: "event", eventKind: "edit", body: "STOP", targetWaMessageId: "WA-TARGET-1", targetFromMe: false });
+  const { repo, optOuts, calls } = createFakeRepo([makeAccount()], [row], {}, [makeGroup()]);
+  const { deps, postCalls, upsertCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(postCalls[0]?.body, "Jane: ✏️ Edited: STOP");
+  assert.equal(postCalls[0]?.contactId, "group-contact-1");
+  assert.equal(upsertCalls.length, 0, "the sender is never upserted");
+  assert.equal(result.optedOut, 0);
+  assert.equal(optOuts.size, 0);
+  assert.equal(calls.some((c) => c.method === "recordOptOut" || c.method === "clearOptOut"), false);
+});
+
+test("renderInboundEvent: a reaction to a quoted reply quotes the reply, not the quote prefix", () => {
+  const out = renderInboundEvent(eventRow("reaction", { body: "👍" }), '↩ "are you free?"\nyes, see you at six');
+  assert.equal(out, '👍 reacted to "yes, see you at six"');
+});
+
+test("renderInboundEvent: a reaction to a multi-line message quotes it on one line", () => {
+  const out = renderInboundEvent(eventRow("reaction", { body: "👍" }), "line one\n\nline two\r\nline three\u2028four");
+  assert.equal(out, '👍 reacted to "line one line two line three four"');
+});
+
+test("renderInboundEvent: a reaction whose rendering passes 500 code points is cut to exactly 500", () => {
+  const out = renderInboundEvent(eventRow("reaction", { body: "😀".repeat(480) }), "see you at six");
+  assert.equal(Array.from(out).length, 500);
+  assert.ok(out.startsWith("😀".repeat(480) + " reacted to "));
+});
+
+// ---------------------------------------------------------------------------
+// Workflow triggers: fire points after a successful push.
+// ---------------------------------------------------------------------------
+
+type FiredTrigger = { locationId: string; key: string; payload: unknown };
+
+/** The repo plus the two reads the trigger payload needs (the number's phone, and subscriptions). */
+function withTriggerReads(repo: GhlInboundRepo, phone: string | null = "+447700900999"): GhlInboundRepo {
+  return {
+    ...repo,
+    async getTenantPhone() {
+      return phone;
+    },
+    async listTriggerSubscriptions() {
+      return [];
+    },
+  } as GhlInboundRepo;
+}
+
+const triggerFlagBefore = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+afterEach(() => {
+  if (triggerFlagBefore === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = triggerFlagBefore;
+});
+
+function fireRecorder(behaviour: "ok" | "throw" | "slow" = "ok") {
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
+  const fired: FiredTrigger[] = [];
+  const fireTrigger: GhlInboundDeps["fireTrigger"] = async (_repo, locationId, key, payload) => {
+    fired.push({ locationId, key, payload });
+    if (behaviour === "throw") throw new Error("boom");
+    if (behaviour === "slow") await new Promise((r) => setTimeout(r, 50));
+    return { fired: 1, failed: 0 };
+  };
+  return { fired, fireTrigger };
+}
+
+const NUMBER_FIELDS = { number: "+447700900999", numberLabel: null };
+
+test("triggers: a plain one-to-one message fires whatsapp_message_received after the push, with no text", async () => {
+  const { repo, rowsById } = createFakeRepo([makeAccount()], [makeRow({ body: "secret text", messageType: "audioMessage" })]);
+  const { fired, fireTrigger } = fireRecorder();
+  const { deps } = makeDeps({ fireTrigger });
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), deps);
+  assert.equal(result.pushed, 1);
+  assert.deepEqual(fired, [
+    { locationId: LOCATION_ID, key: "whatsapp_message_received", payload: { ...NUMBER_FIELDS, messageType: "voice_note", contactId: "contact-1" } },
+  ]);
+  assert.equal(JSON.stringify(fired).includes("secret text"), false);
+  assert.equal([...rowsById.values()][0].resolution, "ghl_pushed");
+});
+
+test("triggers: numberLabel is the number's label when it has one", async () => {
+  const numbers = { [LOCATION_ID]: [{ tenantId: TENANT_ID, slot: 1 as const, isDefault: true, label: "Sales" }] };
+  const { repo } = createFakeRepo([makeAccount()], [makeRow()], numbers);
+  const { fired, fireTrigger } = fireRecorder();
+  await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  assert.equal((fired[0].payload as { numberLabel: string | null }).numberLabel, "Sales");
+});
+
+test("triggers: a missed voice call fires whatsapp_missed_call with isVideo false, a video call true", async () => {
+  const rows = [
+    makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date().toISOString() }),
+    makeRow({ body: null, messageType: "missedVideoCall", eventKind: "missed_call", receivedAt: new Date().toISOString() }),
+  ];
+  const { repo } = createFakeRepo([makeAccount()], rows);
+  const { fired, fireTrigger } = fireRecorder();
+  await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  assert.deepEqual(
+    fired.map((f) => [f.key, f.payload]),
+    [
+      ["whatsapp_missed_call", { ...NUMBER_FIELDS, isVideo: false, contactId: "contact-1" }],
+      ["whatsapp_missed_call", { ...NUMBER_FIELDS, isVideo: true, contactId: "contact-1" }],
+    ]
+  );
+});
+
+test("triggers: group, edit, reaction, delete, stale and suppressed rows fire nothing", async () => {
+  const group: WhatsappGroup = { tenantId: TENANT_ID, groupJid: "g@g.us", name: "Team", enabled: true, ghlContactId: null } as WhatsappGroup;
+  const rows = [
+    makeRow({ groupJid: "g@g.us" }),
+    makeRow({ body: null, messageType: "event", eventKind: "edit", targetWaMessageId: "x", targetFromMe: false } as Partial<WhatsappInboundMessage>),
+    makeRow({ body: null, messageType: "event", eventKind: "reaction", targetWaMessageId: "x", targetFromMe: false } as Partial<WhatsappInboundMessage>),
+    makeRow({ body: null, messageType: "event", eventKind: "delete", targetWaMessageId: "x", targetFromMe: false } as Partial<WhatsappInboundMessage>),
+    makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date(Date.now() - MISSED_CALL_STALE_MS - 60_000).toISOString() }),
+  ];
+  const { repo } = createFakeRepo([makeAccount({ showReactions: false, showDeletes: false })], rows, {}, [group]);
+  const { fired, fireTrigger } = fireRecorder();
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  assert.equal(result.staleMissedCalls, 1);
+  assert.equal(result.eventsSuppressed, 2, "reaction and delete suppressed");
+  assert.deepEqual(fired, []);
+});
+
+test("triggers: a failed push fires nothing", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow()]);
+  const { fired, fireTrigger } = fireRecorder();
+  const { deps } = makeDeps({ fireTrigger, addInboundMessage: async () => ({ ok: false, kind: "rejected", error: "no" } as never) });
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), deps);
+  assert.equal(result.rejected, 1);
+  assert.deepEqual(fired, []);
+});
+
+test("triggers: no phone for the number skips the fire and the push still lands", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow()]);
+  const { fired, fireTrigger } = fireRecorder();
+  const result = await drainGhlInboundReplies(withTriggerReads(repo, null), makeDeps({ fireTrigger }).deps);
+  assert.equal(result.pushed, 1);
+  assert.deepEqual(fired, []);
+});
+
+test("triggers: a throwing or slow fire never changes the drain result, and a failed fire skips the rest of the pass", async () => {
+  const baseline = createFakeRepo([makeAccount()], [makeRow(), makeRow(), makeRow()]);
+  const expected = await drainGhlInboundReplies(withTriggerReads(baseline.repo), makeDeps({ fireTrigger: fireRecorder().fireTrigger }).deps);
+  assert.equal(expected.triggersSkipped, 0);
+  for (const behaviour of ["throw", "slow"] as const) {
+    const { repo, rowsById } = createFakeRepo([makeAccount()], [makeRow(), makeRow(), makeRow()]);
+    const { fired, fireTrigger } = fireRecorder(behaviour);
+    const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+    const { triggersSkipped, ...rest } = result;
+    const { triggersSkipped: _ignored, ...expectedRest } = expected;
+    void _ignored;
+    assert.deepEqual(rest, expectedRest, behaviour);
+    assert.equal(fired.length + triggersSkipped, 3, behaviour);
+    if (behaviour === "throw") assert.ok(triggersSkipped >= 1, "after the first failed fire, later fires are not started");
+    else assert.equal(triggersSkipped, 0);
+    assert.deepEqual([...rowsById.values()].map((r) => r.resolution), ["ghl_pushed", "ghl_pushed", "ghl_pushed"], behaviour);
+  }
+});
+
+test("triggers: a hanging helper across 50 rows never holds up the drain beyond the 8 s cap", async () => {
+  const rows = Array.from({ length: 50 }, () => makeRow());
+  const { repo, rowsById } = createFakeRepo([makeAccount()], rows);
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
+  let started = 0;
+  const fireTrigger: GhlInboundDeps["fireTrigger"] = () => {
+    started++;
+    return new Promise(() => {}); // never settles
+  };
+  const t0 = Date.now();
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  const elapsed = Date.now() - t0;
+  assert.equal(result.pushed, 50);
+  assert.ok([...rowsById.values()].every((r) => r.resolution === "ghl_pushed"), "every row resolved normally");
+  assert.ok(started >= 1);
+  assert.ok(elapsed >= 7_500 && elapsed < 10_000, `returned after the cap, not hung (${elapsed} ms)`);
+});
+
+test("triggers: with the flag off the real helper posts nothing anywhere", async () => {
+  const saved = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const realFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  globalThis.fetch = (async () => {
+    fetchCalls++;
+    throw new Error("unexpected fetch");
+  }) as typeof fetch;
+  try {
+    const { repo } = createFakeRepo([makeAccount()], [makeRow()]);
+    const subscriptionReads: string[] = [];
+    const triggerRepo = {
+      ...withTriggerReads(repo),
+      async listTriggerSubscriptions() {
+        subscriptionReads.push("read");
+        return [{ id: "s1", targetUrl: "https://services.leadconnectorhq.com/hook" }];
+      },
+    } as GhlInboundRepo;
+    const result = await drainGhlInboundReplies(triggerRepo, makeDeps().deps); // no fireTrigger: the real helper
+    assert.equal(result.pushed, 1);
+    assert.equal(fetchCalls, 0);
+    assert.deepEqual(subscriptionReads, []);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+    else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
+  }
+});
+
+test("triggers: a STOP or START keyword row fires nothing", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow({ body: "STOP" }), makeRow({ body: "START" })]);
+  const { fired, fireTrigger } = fireRecorder();
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  assert.equal(result.pushed, 2);
+  assert.equal(result.optedOut, 1);
+  assert.equal(result.optedIn, 1);
+  assert.deepEqual(fired, []);
+});
+
+test("triggers: flag off means no phone read and no fire", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow()]);
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const reads: string[] = [];
+  const fired: unknown[] = [];
+  const spy = { ...withTriggerReads(repo), async getTenantPhone() { reads.push("read"); return "+447700900999"; } } as GhlInboundRepo;
+  const result = await drainGhlInboundReplies(spy, makeDeps({ fireTrigger: async (...a) => { fired.push(a); } }).deps);
+  assert.equal(result.pushed, 1);
+  assert.deepEqual(fired, []);
+  assert.deepEqual(reads, []);
+});
+
+// ---------------------------------------------------------------------------
+// SMS fallback A: a contact who messages us is forgotten as "not on WhatsApp".
+// ---------------------------------------------------------------------------
+
+test("fallback: inbound from the contact clears the not-on-WhatsApp memory", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeRow({ fromPhone: "+447700900123" })]);
+  const result = await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.equal(result.pushed, 1);
+  assert.deepEqual(calls.filter((c) => c.method === "forgetNotOnWhatsapp").map((c) => c.args), [[LOCATION_ID, "+447700900123"]]);
+});
+
+test("fallback: an event row clears the memory too", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeRow({ body: null, messageType: "event", eventKind: "reaction", fromPhone: "+447700900123" })]);
+  await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.equal(calls.filter((c) => c.method === "forgetNotOnWhatsapp").length, 1);
+});
+
+test("fallback: a group row does not clear the memory", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeGroupRow()], undefined, [makeGroup()]);
+  await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.equal(calls.some((c) => c.method === "forgetNotOnWhatsapp"), false);
+});
+
+test("fallback: a failing memory clear never fails the row", async () => {
+  const bundle = createFakeRepo([makeAccount()], [makeRow()]);
+  bundle.setForgetFails(true);
+  const result = await drainGhlInboundReplies(bundle.repo, makeDeps().deps);
+  assert.equal(result.pushed, 1);
+  assert.equal(result.retried, 0);
+});
+
+test("fallback: exhausted, stale missed-call and unknown-event rows clear the memory too", async () => {
+  const rows = [
+    makeRow({ pushAttempts: 99, fromPhone: "+447700900001" }),
+    makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date(Date.now() - MISSED_CALL_STALE_MS - 60_000).toISOString(), fromPhone: "+447700900002" }),
+    makeRow({ body: null, messageType: "event", eventKind: "someFutureKind" as never, fromPhone: "+447700900003" }),
+  ];
+  const { repo, calls } = createFakeRepo([makeAccount()], rows);
+  await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.deepEqual(
+    calls.filter((c) => c.method === "forgetNotOnWhatsapp").map((c) => c.args[1]).sort(),
+    ["+447700900001", "+447700900002", "+447700900003"]
+  );
+});
+
+test("fallback: a row for a tenant with no account never clears anything", async () => {
+  const { repo, calls } = createFakeRepo([], [makeRow()]);
+  await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.equal(calls.some((c) => c.method === "forgetNotOnWhatsapp"), false);
 });

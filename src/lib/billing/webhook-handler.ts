@@ -16,6 +16,8 @@ export type WebhookRepo = Pick<
 
 export interface WebhookDeps {
   applyCheckout: (session: StripeCheckoutSession) => Promise<unknown>;
+  /** "Add a card" (setup-mode Checkout): save the card and resume a subscription paused at trial end. */
+  applyCardSetup: (session: StripeCheckoutSession) => Promise<unknown>;
   retrieveCheckoutSession: typeof retrieveCheckoutSession;
   retrieveSubscription: typeof retrieveSubscription;
   syncQuantity: (account: Account) => Promise<unknown>;
@@ -65,6 +67,11 @@ async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeE
       // Never trust the event body's subscription: fetch the session fresh and expanded.
       const fetched = await deps.retrieveCheckoutSession(id);
       if (!fetched.ok) throw new Error(`checkout session ${id} could not be retrieved: ${fetched.message}`);
+      if (fetched.data.mode === "setup") {
+        // The status change (paused -> active) arrives as its own subscription event.
+        await deps.applyCardSetup(fetched.data);
+        return { kind: "handled", type: event.type };
+      }
       await deps.applyCheckout(fetched.data);
       const accountId = fetched.data.metadata.account_id;
       const account = accountId ? await repo.getAccountById(accountId) : null;
@@ -77,7 +84,10 @@ async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeE
     }
     case "customer.subscription.created":
     case "customer.subscription.updated":
-    case "customer.subscription.deleted": {
+    case "customer.subscription.deleted":
+    // A trial that ends with no card pauses the subscription; adding one resumes it.
+    case "customer.subscription.paused":
+    case "customer.subscription.resumed": {
       const raw = event.data.object;
       const sub = parseSubscription({ ...raw, items: (raw.items as { data?: unknown } | undefined) ?? { data: [] } });
       if (!sub) return { kind: "ignored", type: event.type };
@@ -97,7 +107,8 @@ async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeE
       if (status === null) return { kind: "handled", type: event.type };
       await repo.updateAccountBilling(account.id, {
         billingStatus: status,
-        trialEndsAt: status === "trialing" ? iso(live.trialEnd) : null,
+        // Kept for a trial that ended with no card (Stripe `paused`), so the dashboard can say the trial ended.
+        trialEndsAt: status === "trialing" || live.status === "paused" ? iso(live.trialEnd) : null,
         // ended_at is when the subscription actually ended; canceled_at is only when cancellation was requested.
         cancelledAt: status === "cancelled" ? (iso(live.endedAt) ?? new Date().toISOString()) : null,
         // A purged account that resubscribes must be cleaned up again if it later cancels.

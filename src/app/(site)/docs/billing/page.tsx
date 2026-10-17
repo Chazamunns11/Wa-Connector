@@ -22,7 +22,7 @@ export default function BillingHelpPage() {
   return (
     <>
     <PageTop title="Billing">
-      <p>{tierSentence(pricing.currency)} Billed per active number.</p>
+      <p>{tierSentence(pricing.currency)} Billed per activated sub-account.</p>
     </PageTop>
     <section className="band">
       <Container>
@@ -42,8 +42,9 @@ export default function BillingHelpPage() {
           <h2 className={h2}>Changing your card or cancelling</h2>
           <p className="mt-3 max-w-[62ch] text-ink-dim">{copy.cancel}</p>
           <p className="mt-3 max-w-[62ch] text-ink-dim">
-            Changing your card and cancelling are both done in the billing portal, which is available once your account
-            is live. Until then, the{" "}
+            The trial needs no card. To add one, during the trial or after it has ended, use Add a card on your
+            dashboard&apos;s Billing page. Changing your card and cancelling are both done in the billing portal, which
+            is available once your account is live. Until then, the{" "}
             <Link href={SITE_ROUTES.pricing} className="underline underline-offset-2">
               pricing page
             </Link>{" "}

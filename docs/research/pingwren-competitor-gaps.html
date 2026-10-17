@@ -1,0 +1,244 @@
+<title>PingWren Competitor Gaps</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=Public+Sans:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: a single reading column (~68ch) with full-width breakout tables; brand Ink/Cream/Coral from public/brand. */
+:root {
+  --bg: #F6F1EA;          /* Cream */
+  --surface: #FFFDF9;
+  --fg: #1B1F2A;          /* Ink */
+  --muted: #5E5A55;
+  --rule: #E3D9CC;
+  --accent: #D93E1C;      /* Coral, deepened for text contrast on cream */
+  --accent-fill: #FF5A36; /* Coral */
+  --wren: #7A4E2D;
+  --yes: #1F7A4D;
+  --yes-soft: #E2F1E8;
+  --no: #A3311A;
+  --no-soft: #FBE4DD;
+  --maybe: #6B6253;
+  --maybe-soft: #EEE7DC;
+  --font-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --font-body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171F; --surface: #1B1F2A; --fg: #F2ECE3; --muted: #A9A196; --rule: #2E3341;
+    --accent: #FF7A5C; --accent-fill: #FF5A36; --wren: #D9A47A;
+    --yes: #6BD49A; --yes-soft: #17352A; --no: #FF8C73; --no-soft: #3D211C; --maybe: #C2B8A8; --maybe-soft: #2B2C33;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171F; --surface: #1B1F2A; --fg: #F2ECE3; --muted: #A9A196; --rule: #2E3341;
+  --accent: #FF7A5C; --accent-fill: #FF5A36; --wren: #D9A47A;
+  --yes: #6BD49A; --yes-soft: #17352A; --no: #FF8C73; --no-soft: #3D211C; --maybe: #C2B8A8; --maybe-soft: #2B2C33;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 68ch; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+.wide { width: min(100%, 1040px); margin-inline: auto; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-weight: 800; font-size: clamp(2rem, 6vw, 3rem); letter-spacing: -0.02em; }
+h1 span { font-weight: 500; color: var(--wren); }
+h2 { font-weight: 800; font-size: 1.5rem; }
+h3 { font-weight: 500; font-size: 1.15rem; }
+p, ul, ol { margin: 0; }
+section { display: flex; flex-direction: column; gap: 14px; }
+.eyebrow { font-family: var(--font-data); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 1.125rem; }
+.note { color: var(--muted); font-size: 0.9rem; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; border-radius: 2px; }
+ul, ol { padding-left: 1.25em; display: flex; flex-direction: column; gap: 6px; }
+strong { font-weight: 600; }
+
+.callout { background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--accent-fill); padding: 16px 18px; border-radius: 4px; display: flex; flex-direction: column; gap: 8px; }
+.callout h3 { font-weight: 800; font-size: 1rem; }
+
+.priorities { list-style: none; padding: 0; counter-reset: p; gap: 0; }
+.priorities li { counter-increment: p; display: grid; grid-template-columns: 2.5rem 1fr; gap: 4px 12px; padding: 14px 0; border-top: 1px solid var(--rule); }
+.priorities li::before { content: counter(p); font-family: var(--font-display); font-weight: 800; font-size: 1.5rem; color: var(--accent); line-height: 1.2; grid-row: span 2; }
+.priorities li > * { min-width: 0; }
+.priorities b { font-weight: 600; }
+.priorities span { color: var(--muted); font-size: 0.95rem; }
+
+.scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.875rem; }
+th, td { padding: 9px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--rule); }
+thead th { font-family: var(--font-data); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 500; white-space: nowrap; }
+tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
+tbody th { font-weight: 600; }
+td.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.us { background: color-mix(in srgb, var(--accent-fill) 9%, transparent); }
+.matrix th, .matrix td { text-align: center; white-space: nowrap; }
+.matrix tbody th { text-align: left; white-space: normal; min-width: 11rem; }
+.chip { display: inline-block; font-family: var(--font-data); font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; }
+.y { background: var(--yes-soft); color: var(--yes); }
+.n { background: var(--no-soft); color: var(--no); }
+.m { background: var(--maybe-soft); color: var(--maybe); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.85rem; color: var(--muted); align-items: center; }
+
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.split > div { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+footer { border-top: 1px solid var(--rule); padding-top: 16px; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<main>
+  <header style="display:flex;flex-direction:column;gap:12px">
+    <p class="eyebrow">Research · 16 Oct 2026</p>
+    <h1>ping<span>wren</span> competitor gaps</h1>
+    <p class="lede">What the other WhatsApp-for-GoHighLevel products offer that PingWren doesn't, and which gaps matter most for winning agencies and coaches.</p>
+    <p class="note">Built from a deep-research run (20 sources, 25 claims each checked three times) and six follow-up passes. Updated after the first build work: typing simulation, an optional warm-up and a public status page are now on the branch. Most evidence is the vendors' own pages, so it shows what they advertise. The independent evidence is GHL Marketplace installs and ratings (pulled 16 Oct), GHL's ideas board, and a few Trustpilot and GetApp reviews.</p>
+  </header>
+
+  <section>
+    <h2>The short version</h2>
+    <p>PingWren is behind on how it's sold and how deep it goes into GHL. It's ahead on onboarding and on not losing messages.</p>
+    <div class="split">
+      <div>
+        <h3>Behind</h3>
+        <ul>
+          <li>Priced per number. Rivals charge per sub-account with 3 to 5 numbers included.</li>
+          <li>Card taken for the trial. Every rival we checked runs a no-card trial.</li>
+          <li>No white-label, agency install or affiliate scheme.</li>
+          <li>No WhatsApp triggers or actions in GHL workflows.</li>
+          <li>One number per location, and no groups.</li>
+          <li>Ban protection that isn't marketed. A jittered 45-75s gap and a daily cap already existed. Typing simulation and an optional warm-up are now built.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Ahead</h3>
+        <ul>
+          <li>QR connect inside GHL, plus shareable connect links. GREEN-API makes users copy keys from a separate console.</li>
+          <li>Held messages when a phone drops off. No rival mentions this.</li>
+          <li>STOP opt-outs and disconnect alerts.</li>
+          <li>A DPA and plain unofficial-use wording. No terms or DPA found for WAGHL, GoGHL or Wazzap.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout">
+      <h3>Launch risk: passkey prompt when linking</h3>
+      <p>Since late June 2026 WhatsApp can ask for a passkey when a new device links. Baileys issue #2672 is still open and no release fixes it, including the 7.0.0-rc14 the bridge uses. It hits every QR rival too. Test linking new numbers on several real accounts before the soft launch.</p>
+    </div>
+    <div class="callout">
+      <h3>Name clash</h3>
+      <p>A Marketplace app called "WA Connector – Unlimited WhatsApp" (Whizz Solutions) already has about 28,000 installs. It is WAGHL relisted: waconnector.com redirects to waghl.com. Ship as PingWren only.</p>
+    </div>
+  </section>
+
+  <section class="wide">
+    <h2>Feature by feature</h2>
+    <div class="legend"><span class="chip y">Yes</span> advertised <span class="chip n">No</span> not offered <span class="chip m">?</span> not found on their pages</div>
+    <div class="scroll">
+      <table class="matrix">
+        <thead><tr><th scope="col">Feature</th><th scope="col" class="us">PingWren</th><th scope="col">GoGHL</th><th scope="col">WAGHL</th><th scope="col">Wazzap</th><th scope="col">Stevo</th><th scope="col">GHL native</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Priced per sub-account</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip n">Per number</span></td><td><span class="chip y">$10</span></td></tr>
+          <tr><th scope="row">Trial without a card</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">7 days</span></td><td><span class="chip y">14 days</span></td><td><span class="chip m">7 days, card ?</span></td><td><span class="chip y">5 days</span></td><td><span class="chip m">n/a</span></td></tr>
+          <tr><th scope="row">Several numbers per location</th><td class="us"><span class="chip n">1</span></td><td><span class="chip y">5</span></td><td><span class="chip y">3+</span></td><td><span class="chip y">5</span></td><td><span class="chip y">Yes</span></td><td><span class="chip n">1</span></td></tr>
+          <tr><th scope="row">White-label</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip m">n/a</span></td></tr>
+          <tr><th scope="row">Affiliate commission</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">15%</span></td><td><span class="chip y">20%</span></td><td><span class="chip y">30%</span></td><td><span class="chip y">Yes</span></td><td><span class="chip m">n/a</span></td></tr>
+          <tr><th scope="row">WhatsApp triggers and actions in workflows</th><td class="us"><span class="chip n">SMS step</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Events</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip y">Yes</span></td></tr>
+          <tr><th scope="row">Groups in GHL Conversations</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Yes</span></td><td><span class="chip m">?</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip n">No</span></td></tr>
+          <tr><th scope="row">Buttons and lists</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td></tr>
+          <tr><th scope="row">AI replies or voice notes</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Transcription</span></td><td><span class="chip m">?</span></td></tr>
+          <tr><th scope="row">Ban protection (proxies, pacing, spintax)</th><td class="us"><span class="chip y">Pacing, typing, warm-up</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Pacing</span></td><td><span class="chip y">Yes</span></td><td><span class="chip y">Proxies</span></td><td><span class="chip m">n/a</span></td></tr>
+          <tr><th scope="row">Missed calls in GHL</th><td class="us"><span class="chip n">No</span></td><td><span class="chip y">Trigger</span></td><td><span class="chip y">Yes</span></td><td><span class="chip m">?</span></td><td><span class="chip y">Add-on</span></td><td><span class="chip m">?</span></td></tr>
+          <tr><th scope="row">Held messages on disconnect</th><td class="us"><span class="chip y">Yes</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">n/a</span></td></tr>
+          <tr><th scope="row">STOP opt-outs</th><td class="us"><span class="chip y">Yes</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip y">Yes</span></td></tr>
+          <tr><th scope="row">Public status page</th><td class="us"><span class="chip y">Built</span></td><td><span class="chip m">99.9% claim</span></td><td><span class="chip m">99.9% claim</span></td><td><span class="chip m">?</span></td><td><span class="chip m">?</span></td><td><span class="chip m">n/a</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">No QR vendor claims to sync reactions, quoted replies, edits or deletes into GHL. Nobody publishes a support response time.</p>
+  </section>
+
+  <section class="wide">
+    <h2>Price and traction</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th scope="col">Product</th><th scope="col">Price per month</th><th scope="col">Numbers incl.</th><th scope="col">Trial</th><th scope="col">Marketplace installs</th><th scope="col">Rating (reviews)</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">GoGHL / MessageSync</th><td class="num">$29 · $22 at 3+ · $19 at 10+</td><td class="num">5, then $9</td><td>7 days, no card</td><td class="num">64,086</td><td class="num">4.7 (126)</td></tr>
+          <tr><th scope="row">myCRMSIM</th><td class="num">$29 per line</td><td class="num">1</td><td>none</td><td class="num">89,987</td><td class="num">4.4 (13)</td></tr>
+          <tr><th scope="row">"WA Connector" (WAGHL relisted)</th><td class="num">as WAGHL</td><td class="num">3, then $10</td><td>14 days, no card</td><td class="num">27,991</td><td class="num">4.5 (8)</td></tr>
+          <tr><th scope="row">waautoreply</th><td>not checked</td><td>–</td><td>–</td><td class="num">13,146</td><td class="num">3.1 (37)</td></tr>
+          <tr><th scope="row">WAGHL</th><td class="num">$29 · $19 at 11+</td><td class="num">3, then $10</td><td>14 days, no card</td><td class="num">5,232</td><td class="num">5.0 (1)</td></tr>
+          <tr><th scope="row">AppLevel</th><td class="num">$49 · $39 · $34</td><td class="num">5</td><td>no card</td><td class="num">1,796</td><td class="num">4.3 (3)</td></tr>
+          <tr><th scope="row">WhatGHL</th><td class="num">$14.99</td><td class="num">5, then $3</td><td>5 days, no card</td><td>not found</td><td>–</td></tr>
+          <tr><th scope="row">Wazzap</th><td class="num">$19 – $199</td><td class="num">5, then $3</td><td>7 days</td><td>no listing</td><td>–</td></tr>
+          <tr><th scope="row">Stevo</th><td class="num">$11 · $25 · $37</td><td class="num">1 · 3 · 5</td><td>5 days, no card</td><td>no listing</td><td>–</td></tr>
+          <tr><th scope="row">TimelinesAI</th><td class="num">$35 – $49 per seat</td><td>workspace</td><td>10 days, no card</td><td class="num">47</td><td class="num">5.0 (8)</td></tr>
+          <tr><th scope="row">GHL native</th><td class="num">$10 + Meta fees</td><td class="num">1</td><td>–</td><td>built in</td><td>–</td></tr>
+          <tr class="us"><th scope="row">PingWren (planned)</th><td>per number</td><td class="num">1</td><td>7 days, card taken</td><td>not listed yet</td><td>–</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Agencies resell GHL's $10 native add-on at $30 to $100. Reselling with markup needs GHL Agency Pro ($497).</p>
+  </section>
+
+  <section>
+    <h2>What users actually say</h2>
+    <ul>
+      <li><strong>Disconnects and downtime</strong> are the top complaint. waautoreply's Marketplace reviews cite "frequent disconnections" and "extended downtimes". WAsendr's cite trouble "connecting or reconnecting".</li>
+      <li><strong>Bans after small sends.</strong> A TimelinesAI reviewer: "Tried sending to 40 contacts and it suspended my number."</li>
+      <li><strong>Poor support.</strong> Rated low for waautoreply and TimelinesAI. GoGHL's reviews praise its support and say it "resolves issues experienced with other tools".</li>
+      <li><strong>Multiple numbers per sub-account</strong> is GHL's top WhatsApp request at 607 votes, still "in progress". One agency: "This is a blocker for us."</li>
+      <li><strong>Groups</strong> (325 votes, "upcoming") and <strong>voice notes</strong>: "The only way to send audios is with external providers such as GOGHL."</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Official API and risk</h2>
+    <ul>
+      <li>Meta's Coexistence (phone app and Cloud API on one number) is in GHL native, capped at one number, and Meta's changelog lists the UK and EU as supported. Groups don't sync, broadcast lists switch off, calls aren't supported.</li>
+      <li>From 1 Oct 2026 Meta charges for service messages after 1,000 free per number a month. QR has no per-message fees at all.</li>
+      <li>QR keeps groups, broadcast lists, calls on the phone, several numbers, no templates, no 24-hour window and no per-message fees. That's the pitch.</li>
+      <li>WhatsApp's EEA terms ban automated access and look-alike software. A Baileys client almost certainly breaches them. No Meta lawsuit against QR vendors was found for 2025 to 2026.</li>
+      <li>The Baileys CVE-2026-48063 doesn't affect PingWren, which is locked to 7.0.0-rc14. The passkey linking problem above does.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What to do, in order</h2>
+    <p class="note">This ranking is judgement built on the findings, not a verified claim.</p>
+    <ol class="priorities">
+      <li><b>Reprice before launch</b><span>Per sub-account, 3 to 5 numbers included, about $19 to $29 with volume tiers and an annual discount. Drop the card from the trial, or keep it and stretch the trial to 14 days.</span></li>
+      <li><b>Several numbers per sub-account</b><span>The biggest user wish, and native GHL can't do it yet. Today PingWren holds one number per location.</span></li>
+      <li><b>White-label, agency install and affiliates</b><span>Auto-add new sub-accounts. 20% recurring is the middle of the market.</span></li>
+      <li><b>WhatsApp triggers and actions in GHL</b><span>Inbound WhatsApp, Disconnected and Send WhatsApp first. These also solve the "Telephony Provider not set" support problem.</span></li>
+      <li><b>Groups in Conversations</b><span>High demand, native can't do it, and coaches run accountability groups.</span></li>
+      <li><b>Ban protection you can see</b><span>Built: jittered pacing, typing simulation, optional warm-up. Left: market it, and decide when to switch warm-up on.</span></li>
+      <li><b>Voice notes, then reactions, replies, edits and deletes</b><span>Voice notes are expected. Syncing reactions, quoted replies, edits and deletes into GHL is something nobody else claims.</span></li>
+      <li><b>A public status page and a stated response time</b><span>Status page built at /status. The response time is Charlie's to set.</span></li>
+      <li><b>Later</b><span>AI replies through GHL's own AI agents, SMS fallback, missed-call text-back, an official-API upgrade path.</span></li>
+    </ol>
+  </section>
+
+  <footer class="note">
+    Full write-up with every source: <code>docs/research/2026-10-16-competitor-gap-analysis.md</code> in the repo. Key sources:
+    <a href="https://goghl.ai/en">GoGHL</a> ·
+    <a href="https://waghl.com/">WAGHL</a> ·
+    <a href="https://www.wazzap.mx/en">Wazzap</a> ·
+    <a href="https://whatghl.com/">WhatGHL</a> ·
+    <a href="https://applevel.ilumosdigital.com/">AppLevel</a> ·
+    <a href="https://timelines.ai/gohighlevel-whatsapp-integration">TimelinesAI</a> ·
+    <a href="https://help.gohighlevel.com/support/solutions/articles/155000001428-whatsapp-pricing-billing-and-rebilling-guide">GHL WhatsApp billing</a> ·
+    <a href="https://ideas.gohighlevel.com/whatsapp/p/multiple-wa-phone-numbers-per-account">GHL ideas: multiple numbers</a> ·
+    <a href="https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users">Meta Coexistence</a> ·
+    <a href="https://www.whatsapp.com/legal/terms-of-service-eea">WhatsApp EEA terms</a> ·
+    <a href="https://www.trustpilot.com/review/timelines.ai">TimelinesAI on Trustpilot</a>
+  </footer>
+</main>

@@ -171,6 +171,27 @@ export interface GhlAccount {
   accountId: string | null;
   /** Non-null = billed, active number (migration 0002). */
   activatedAt: string | null;
+  /** Message events (0011) — post contact reactions to GHL. Off by default; `false` on a pre-0011 database. */
+  showReactions: boolean;
+  /** Message events (0011) — post contact message deletes to GHL as a notice. Off by default; `false` on a pre-0011 database. */
+  showDeletes: boolean;
+  /** SMS fallback B (0014) — the sub-account's own switch for sending the text as an SMS when a contact isn't on WhatsApp. On by default. */
+  smsFallbackEnabled: boolean;
+  /** SMS fallback B (0014) — set by the loop guard when GHL handed our fallback SMS back to PingWren; while set, this sub-account never falls back. Cleared by switching the setting on again. */
+  smsFallbackBlockedAt: string | null;
+}
+
+/**
+ * One WhatsApp number of a GHL location (`ghl_location_numbers`, 0006).
+ * SERVER-ONLY: it carries the number's `tenantId`, which never leaves the
+ * server. NEVER serialise this to a browser; browser-facing surfaces address a
+ * number by `slot` (and show `label`) only.
+ */
+export interface LocationNumber {
+  tenantId: string;
+  slot: 1 | 2 | 3;
+  isDefault: boolean;
+  label: string | null;
 }
 
 /** The redacted projection every UI surface gets — structurally unable to carry a token, same argument as `CalendarConnectionSummary`. Backs the owner setup-links "GHL WhatsApp numbers" panel. Carries the two branding fields (unlike the token/tenant internals) because `GhlAccountsPanel.tsx`'s branding editor renders directly off this summary — see `GhlAccount.brandLogoPath`/`brandAccentColor`'s own JSDoc. */
@@ -245,15 +266,13 @@ export interface GhlOutboundMessage {
   sendState: GhlOutboundSendState;
   sendAttempts: number;
   /**
-   * Phase 2 addition (0070_ghl_outbound_pending_text.sql) — the exact text
-   * `src/lib/ghl.ts`'s `buildOutboundText` built for this row, present ONLY
-   * while `sendState === 'pending_send'`. See that migration's header for
-   * why: `drainGhlOutboundStatuses` (src/lib/ghl-provider.ts) retries a
-   * bridge-unreachable send under the SAME idempotency key, and that retry
-   * is only correct if it resends this EXACT text — 0069's own "no message
-   * body stored" posture made that retry impossible, so this column exists
-   * purely to close that gap, cleared to `null` the instant the row leaves
-   * `pending_send`.
+   * The exact text `src/lib/ghl.ts`'s `buildOutboundText` built for this row
+   * (0070, extended by 0013). Kept while `sendState` is `pending_send`, `held`
+   * or (only with workflow triggers on) `accepted`: a retry or a held release must resend this EXACT text under
+   * the SAME idempotency key, and a "not on WhatsApp" trigger carries it so a
+   * workflow can fall back to SMS. Cleared to `null` when the row is refused,
+   * when its status is reported to GHL (delivered or failed), and by the cron
+   * for an accepted row never reported within 7 days. Never logged.
    */
   pendingText: string | null;
   /**
@@ -274,7 +293,33 @@ export interface GhlOutboundMessage {
   reportedStatus: GhlOutboundReportedStatus | null;
   reportedAt: string | null;
   reportError: string | null;
+  /** 0010 — when the `read` status was PUT to GHL (or finally given up on); `null` until then. Independent of `reportedStatus`. */
+  readReportedAt: string | null;
+  /** 0010 — fixed diagnostic string from a refused `read` report; `null` when none. */
+  readReportError: string | null;
+  /**
+   * SMS fallback B (0014) — `claimed` by the one pass that may send this row's
+   * fallback SMS, then `sent` or `failed`; `null` when no fallback was tried
+   * (and on a pre-0014 database). Optional so fixtures may leave it out.
+   */
+  smsFallback?: GhlOutboundSmsFallback | null;
+  /** SMS fallback B (0014) — when `smsFallback` was claimed; a claim younger than 2 minutes means another pass is still on it. */
+  smsFallbackClaimedAt?: string | null;
   createdAt: string;
+}
+
+export type GhlOutboundSmsFallback = "claimed" | "sent" | "failed";
+
+/** SMS fallback B (0014) — the pending echo of the last fallback SMS to a contact (`ghl_sms_fallback_echoes`). Never carries the text. */
+export interface SmsFallbackEcho {
+  textSha256: string;
+  /** The original `ghl_outbound_messages` row the SMS stood in for. */
+  outboundMessageId: string;
+  /** GHL's message id from the send's response; null until (or unless) GHL returned one. */
+  ghlMessageId: string | null;
+  /** When GHL accepted the send; null while it is in flight, or after a network error. */
+  sentAt: string | null;
+  expiresAt: string;
 }
 
 /** Input for `Repository.recordGhlOutboundMessage` — the webhook route's own fields, already normalised/derived by `src/lib/ghl.ts` before this is called. */
@@ -395,8 +440,10 @@ export interface WhatsappInboundMessage {
    * `'matched' | 'no_matching_call'` (coach-tenant rows) or — GHL provider
    * Phase 3, `supabase/migrations/0072_ghl_inbound_push.sql` —
    * `'ghl_pushed' | 'ghl_rejected' | 'ghl_push_failed' | 'ghl_push_uncertain'`
-   * (GHL-tenant rows; `src/lib/ghl-inbound.ts`'s `drainGhlInboundReplies` is
-   * the only writer of these four). Free text (no CHECK), mirrors
+   * or (opt-in groups, 0007) `'group_not_enabled'` — a group row whose group
+   * is unknown or switched off, never posted to GHL (GHL-tenant rows;
+   * `src/lib/ghl-inbound.ts`'s `drainGhlInboundReplies` is the only writer of
+   * these five). Free text (no CHECK), mirrors
    * `automation_sequences.trigger_event`'s convention — a new resolution kind
    * never needs a migration. `null` until processed.
    */
@@ -435,6 +482,51 @@ export interface WhatsappInboundMessage {
   mediaMime?: string | null;
   /** Actual downloaded byte size — set only once `mediaStatus === 'stored'`. */
   mediaSizeBytes?: number | null;
+  /**
+   * Opt-in groups (0007) — the group's jid for a message from an enabled
+   * WhatsApp group (`fromPhone` is then the member who wrote it, not a
+   * contact); `null`/absent for a one-to-one reply. Optional for the same
+   * fixture reason as `mediaStatus`.
+   */
+  groupJid?: string | null;
+  /** Opt-in groups (0007) — the group member's WhatsApp display name (≤60 chars), or `null` when WhatsApp gave none. Always `null` for a one-to-one reply. */
+  senderName?: string | null;
+  /**
+   * Missed calls (0010) — `'missed_call'` for a row recording a missed
+   * WhatsApp call (`body` is `null`, `messageType` is `'missedVoiceCall'` or
+   * `'missedVideoCall'`); `null` for an ordinary message, and for any row
+   * read before 0010 is applied. Optional for the same fixture reason as
+   * `mediaStatus`.
+   *
+   * Message events (0011) widen this to `'edit' | 'reaction' | 'delete'`:
+   * rows recording a WhatsApp edit, reaction or delete (see
+   * `targetWaMessageId`).
+   */
+  eventKind?: "missed_call" | "edit" | "reaction" | "delete" | null;
+  /** Message events (0011) — for an `edit`/`reaction`/`delete` row, the WhatsApp id of the message it applies to; `null` otherwise and on a row read before 0011. */
+  targetWaMessageId?: string | null;
+  /** Message events (0011) — whether that target message was sent by us (`true`) or the contact (`false`); `null` when unknown or not applicable. */
+  targetFromMe?: boolean | null;
+}
+
+/**
+ * Opt-in groups — one `whatsapp_groups` row (0007): a group one of a tenant's
+ * numbers has been seen in. Service-role only; carries a tenant id, so never
+ * hand it to a browser as-is.
+ */
+export interface WhatsappGroup {
+  tenantId: string;
+  /** `^[0-9]+(-[0-9]+)?@g\.us$` (0007's CHECK). */
+  groupJid: string;
+  name: string;
+  /** Opt-in switch — nothing is forwarded to GHL while false. */
+  enabled: boolean;
+  /** The GHL contact standing for this group; null until the first forwarded message creates it. */
+  ghlContactId: string | null;
+  /** Set when the number left or was removed from the group; null while a member. */
+  leftAt: string | null;
+  /** True when this app created the group through the bridge (0009's `created_by_us`). */
+  createdByUs: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -616,4 +708,21 @@ export interface LocationStats {
   pendingSend: number;
   failedLast7Days: { count: number; reasons: string[] };
   everReceived: boolean;
+}
+
+/** One number's session joined with its slot and label, for the workflow-trigger connection watcher. */
+export interface TriggerSessionRow {
+  tenantId: string;
+  locationId: string;
+  slot: number;
+  label: string | null;
+  phone: string | null;
+  status: WhatsappSessionStatus;
+  /** When the number was first seen down; null while up. */
+  downSince: string | null;
+  /** The last connection trigger fired for this number. */
+  lastFired: "down" | "up" | null;
+  lastConnectedAt: string | null;
+  /** The number's E.164 kept by the portal; survives the bridge's credential wipe (which nulls `phone`). */
+  triggerPhone: string | null;
 }

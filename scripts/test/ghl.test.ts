@@ -7,7 +7,7 @@
  * here can send a real WhatsApp message, scan a QR, or call a real GHL/
  * WhatsApp endpoint.
  */
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign as cryptoSign, createHash } from "node:crypto";
 
@@ -22,18 +22,41 @@ import {
   ghlAppId,
   ghlTenantKeyQueryFilters,
   listGhlInstalledLocations,
+  ghlGroupContactKey,
+  getGhlContact,
+  searchGhlContacts,
   parseGhlInstalledLocations,
+  upsertGhlGroupContact,
   verifyGhlSignature,
+  sendGhlSms,
+  isSmsFallbackEnabled,
 } from "@/lib/ghl";
+import { sendingGate } from "@/lib/billing/gate";
+import { brandConfig } from "@/lib/brand-config";
+import { listWhatsappGroups, refreshWhatsappGroups, sendWhatsappAttachment, sendWhatsappMessage } from "@/lib/whatsapp-bridge";
 import {
   drainGhlOutboundStatuses,
   handleProviderOutboundMessage,
+  APP_MESSAGE_ID_PREFIX,
   GHL_PROVIDER_REASONS,
+  GROUP_SEND_CAP_UNITS,
+  isAppOriginatedMessageId,
+  reportGhlOutcome,
+  sendAppOriginatedText,
   type GhlProviderDeps,
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
 import type { BridgeSendResult, BridgeSessionResult, SendWhatsappAttachmentInput, SendWhatsappInput } from "@/lib/whatsapp-bridge";
-import type { Account, WhatsappSessionSummary, GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, GhlOutboundMessageDraft } from "@/lib/types";
+import type {
+  GhlAccount,
+  GhlOutboundAttachment,
+  GhlOutboundAttachmentDraft,
+  GhlOutboundMessage,
+  GhlOutboundMessageDraft,
+  LocationNumber,
+  Account,
+  WhatsappSessionSummary,
+} from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // 1. Ed25519 synthetic fixture — src/lib/ghl.ts's verifyGhlSignature
@@ -360,8 +383,39 @@ interface FakeCall {
  * (locationId, ghlMessageId), pending_text cleared on any non-pending_send
  * transition, markGhlOutboundReported's nullable-reportedStatus contract,
  * an atomic-ish claimGhlTokenRefresh).
+ *
+ * Multiple numbers (Task 3): `opts.numbers` seeds a location's
+ * `ghl_location_numbers` rows and `opts.sticky` its `ghl_contact_numbers`
+ * (keyed `${locationId}:${ghlContactId}`). With no `numbers` entry, a
+ * location gets the one slot-1 default row install creates for the account's
+ * own tenant (Task 2), so every pre-Task-3 test sees exactly one number.
  */
-function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account["billingStatus"] } | null | "default" = "default") {
+function createFakeRepo(
+  accounts: GhlAccount[] = [],
+  rawOpts: {
+    numbers?: Record<string, LocationNumber[]>;
+    sticky?: Record<string, string>;
+    /** Opt-in groups (Task 9) — group contacts, keyed `${locationId}:${ghlContactId}`. */
+    groups?: Record<string, { tenantId: string; groupJid: string; enabled: boolean; left?: boolean; numberRemoved?: boolean }>;
+    billing?: { status: Account["billingStatus"] } | null | "default";
+  } | { status: Account["billingStatus"] } | null | "default" = {}
+) {
+  /** Every `markWhatsappGroupLeft` call, in order (Task 9). */
+  const groupsLeft: { tenantId: string; groupJid: string }[] = [];
+  // Accounts and billing (merge): the default branch's second argument is
+  // the owner's billing (`{ status }`, `null` for no owner account, or
+  // "default" = active); ours is the numbers/sticky/groups options bag.
+  // Both shapes are accepted here.
+  type FakeBilling = { status: Account["billingStatus"] } | null | "default";
+  type FakeOpts = {
+    numbers?: Record<string, LocationNumber[]>;
+    sticky?: Record<string, string>;
+    groups?: Record<string, { tenantId: string; groupJid: string; enabled: boolean; left?: boolean; numberRemoved?: boolean }>;
+    billing?: FakeBilling;
+  };
+  const isBillingArg = rawOpts === null || rawOpts === "default" || "status" in rawOpts;
+  const opts: FakeOpts = isBillingArg ? {} : (rawOpts as FakeOpts);
+  const billing: FakeBilling = isBillingArg ? (rawOpts as FakeBilling) : (opts.billing ?? "default");
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const rows = new Map<string, GhlOutboundMessage>();
   const bridgeLedger = new Map<string, { status: string; error: string | null }>();
@@ -372,6 +426,9 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
   // Reliability (T7): session summaries by tenant and opt-outs keyed `${tenantId}:${phone}`.
   const sessionsByTenant = new Map<string, WhatsappSessionSummary>();
   const optOuts = new Set<string>();
+  /** SMS fallback memory: `${locationId}:${phone}` -> remembered-until ISO. `memoryReadFails` makes the read throw. */
+  const notOnWhatsapp = new Map<string, string>();
+  const memory = { readFails: false };
   let nextId = 1;
   let nextAttachmentId = 1;
   let claimedAt: number | null = null;
@@ -387,6 +444,56 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
       calls.push({ method: "getWhatsappSessionSummary", args: [coachId] });
       return sessionsByTenant.get(coachId) ?? null;
     },
+    async getTenantPhone(tenantId: string) {
+      calls.push({ method: "getTenantPhone", args: [tenantId] });
+      return sessionsByTenant.get(tenantId)?.phoneNumber ?? null;
+    },
+    async rememberNotOnWhatsapp(locationId: string, phone: string, untilIso: string) {
+      calls.push({ method: "rememberNotOnWhatsapp", args: [locationId, phone, untilIso] });
+      notOnWhatsapp.set(`${locationId}:${phone}`, untilIso);
+    },
+    async isRememberedNotOnWhatsapp(locationId: string, phone: string, nowIso: string) {
+      calls.push({ method: "isRememberedNotOnWhatsapp", args: [locationId, phone, nowIso] });
+      if (memory.readFails) throw new Error("db down");
+      const until = notOnWhatsapp.get(`${locationId}:${phone}`);
+      return until !== undefined && until > nowIso;
+    },
+    // SMS fallback B (0014): no echo is ever pending here, and with
+    // GHL_SMS_FALLBACK_ENABLED unset (every test in this file) nothing is
+    // claimed or sent; scripts/test/sms-fallback.test.ts covers these.
+    async findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string) {
+      calls.push({ method: "findSmsFallbackEcho", args: [locationId, contactId, nowIso] });
+      return null;
+    },
+    async recordSmsFallbackEcho(echo: unknown, nowIso: string) {
+      calls.push({ method: "recordSmsFallbackEcho", args: [echo, nowIso] });
+      return true;
+    },
+    async markSmsFallbackEchoSent(...args: unknown[]) {
+      calls.push({ method: "markSmsFallbackEchoSent", args });
+    },
+    async deleteSmsFallbackEcho(...args: unknown[]) {
+      calls.push({ method: "deleteSmsFallbackEcho", args });
+      return false;
+    },
+    async blockSmsFallback(locationId: string) {
+      calls.push({ method: "blockSmsFallback", args: [locationId] });
+    },
+    async claimSmsFallback(id: string) {
+      calls.push({ method: "claimSmsFallback", args: [id] });
+      return false;
+    },
+    async setSmsFallbackResult(id: string, result: "sent" | "failed") {
+      calls.push({ method: "setSmsFallbackResult", args: [id, result] });
+    },
+    async failSmsFallback(id: string) {
+      calls.push({ method: "failSmsFallback", args: [id] });
+      return false;
+    },
+    async getGhlOutboundMessage(id: string) {
+      calls.push({ method: "getGhlOutboundMessage", args: [id] });
+      return rows.get(id) ?? null;
+    },
     async isOptedOut(tenantId: string, phone: string) {
       calls.push({ method: "isOptedOut", args: [tenantId, phone] });
       return optOuts.has(`${tenantId}:${phone}`);
@@ -394,6 +501,26 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
     async getGhlAccountByLocationId(locationId: string) {
       calls.push({ method: "getGhlAccountByLocationId", args: [locationId] });
       return accountsByLocation.get(locationId) ?? null;
+    },
+    async listLocationNumbers(locationId: string) {
+      calls.push({ method: "listLocationNumbers", args: [locationId] });
+      const seeded = opts.numbers?.[locationId];
+      if (seeded) return seeded;
+      const account = accountsByLocation.get(locationId);
+      return account ? [{ tenantId: account.tenantId, slot: 1, isDefault: true, label: null }] : [];
+    },
+    async getStickyTenant(locationId: string, ghlContactId: string) {
+      calls.push({ method: "getStickyTenant", args: [locationId, ghlContactId] });
+      return opts.sticky?.[`${locationId}:${ghlContactId}`] ?? null;
+    },
+    async getWhatsappGroupByContact(locationId: string, ghlContactId: string) {
+      calls.push({ method: "getWhatsappGroupByContact", args: [locationId, ghlContactId] });
+      const group = opts.groups?.[`${locationId}:${ghlContactId}`];
+      return group ? { ...group, left: group.left ?? false } : null;
+    },
+    async markWhatsappGroupLeft(tenantId: string, groupJid: string) {
+      calls.push({ method: "markWhatsappGroupLeft", args: [tenantId, groupJid] });
+      groupsLeft.push({ tenantId, groupJid });
     },
     async recordGhlOutboundMessage(draft: GhlOutboundMessageDraft) {
       calls.push({ method: "recordGhlOutboundMessage", args: [draft] });
@@ -414,7 +541,7 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
         refusalReason: null,
         reportedStatus: null,
         reportedAt: null,
-        reportError: null,
+        reportError: null, readReportedAt: null, readReportError: null,
         createdAt: new Date(Date.now() + nextId).toISOString(),
       };
       rows.set(row.id, row);
@@ -431,7 +558,14 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
       row.sendState = patch.sendState;
       if (patch.sendAttempts !== undefined) row.sendAttempts = patch.sendAttempts;
       // Mirrors src/lib/data/supabase.ts's own clearing rule (0070).
-      if (patch.sendState !== "pending_send" && patch.sendState !== "held") row.pendingText = null;
+      // 0013: an accepted row keeps its text until its status is reported, but
+      // only while workflow triggers are on; with them off the accept clears it.
+      // 0014: the SMS fallback keeps it too.
+      if (
+        patch.sendState === "refused" ||
+        (patch.sendState === "accepted" && process.env.GHL_WORKFLOW_TRIGGERS_ENABLED !== "true" && process.env.GHL_SMS_FALLBACK_ENABLED !== "true")
+      )
+        row.pendingText = null;
       // Mirrors src/lib/data/supabase.ts's own stamp-once rule (0071).
       if (patch.sendState === "refused" && patch.refusalReason !== undefined) row.refusalReason = patch.refusalReason;
       return 1;
@@ -468,11 +602,15 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
       calls.push({ method: "markGhlOutboundReported", args: [id, patch] });
       const row = rows.get(id);
       if (!row) throw new Error(`no such row ${id}`);
+      // Mirrors the real write: conditional on reported_status IS NULL.
+      if (row.reportedStatus !== null) return false;
       if (patch.reportedStatus !== null) {
         row.reportedStatus = patch.reportedStatus;
         row.reportedAt = new Date().toISOString();
+        row.pendingText = null; // 0013: cleared when the status is reported
       }
       row.reportError = patch.reportError;
+      return true;
     },
     async claimGhlTokenRefresh(locationId: string) {
       calls.push({ method: "claimGhlTokenRefresh", args: [locationId] });
@@ -543,7 +681,7 @@ function createFakeRepo(accounts: GhlAccount[] = [], billing: { status: Account[
     },
   };
 
-  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls, sessionsByTenant, optOuts };
+  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls, groupsLeft, sessionsByTenant, optOuts, notOnWhatsapp, memory };
 }
 
 function makeSendResult(overrides: Partial<Extract<BridgeSendResult, { ok: true }>["message"]> = {}): BridgeSendResult {
@@ -566,6 +704,7 @@ function makeSendResult(overrides: Partial<Extract<BridgeSendResult, { ok: true 
 
 function makeDeps(overrides: Partial<GhlProviderDeps> = {}): {
   deps: GhlProviderDeps;
+  deferred: (() => Promise<void>)[];
   sendCalls: SendWhatsappInput[];
   sendAttachmentCalls: SendWhatsappAttachmentInput[];
   statusCalls: { accessToken: string; messageId: string; status: string; errorMessage?: string }[];
@@ -573,7 +712,11 @@ function makeDeps(overrides: Partial<GhlProviderDeps> = {}): {
   const sendCalls: SendWhatsappInput[] = [];
   const sendAttachmentCalls: SendWhatsappAttachmentInput[] = [];
   const statusCalls: { accessToken: string; messageId: string; status: string; errorMessage?: string }[] = [];
+  const deferred: (() => Promise<void>)[] = [];
   const deps: GhlProviderDeps = {
+    defer: (fn) => {
+      deferred.push(fn);
+    },
     sendWhatsapp: async (input) => {
       sendCalls.push(input);
       return makeSendResult({ idempotencyKey: input.idempotencyKey, toPhone: input.to });
@@ -606,7 +749,7 @@ function makeDeps(overrides: Partial<GhlProviderDeps> = {}): {
     notify: () => {},
     ...overrides,
   };
-  return { deps, sendCalls, sendAttachmentCalls, statusCalls };
+  return { deps, deferred, sendCalls, sendAttachmentCalls, statusCalls };
 }
 
 function samplePayloadFor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -697,7 +840,22 @@ test("handleProviderOutboundMessage: bridge 202 accept -> row accepted, zero sta
   assert.equal(statusCalls.length, 0);
   const row = [...rows.values()][0];
   assert.equal(row.sendState, "accepted");
-  assert.equal(row.pendingText, null, "pending_text must be cleared once the row leaves pending_send");
+  assert.equal(row.pendingText, null, "triggers off: the accept clears the text, as before 0013");
+});
+
+test("handleProviderOutboundMessage: with workflow triggers on, an accepted row keeps its text until reported", async () => {
+  const saved = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
+  try {
+    const { repo, rows } = createFakeRepo([makeAccount()]);
+    const { deps } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-accept-keep" }), deps);
+    assert.deepEqual(outcome, { kind: "accepted" });
+    assert.equal([...rows.values()][0].pendingText, "hi there", "0013: kept for the not-on-WhatsApp trigger");
+  } finally {
+    if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+    else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
+  }
 });
 
 test("handleProviderOutboundMessage: bridge 429 daily_cap_reached -> inline failed PUT with the fixed cap message", async () => {
@@ -964,6 +1122,194 @@ test("drainGhlOutboundStatuses: the 'refused' defensive branch reports the row's
 });
 
 // ---------------------------------------------------------------------------
+// 5b. Multiple numbers per location (Task 3) — which number an outbound goes
+// out from: the contact's sticky number, else the location's default. A
+// disconnected sticky number is NEVER silently swapped for another number (a
+// reply from an unfamiliar number is worse than a visible failure). Merge
+// ruling: one linked before is HELD on that number (the default branch's
+// reliability promise); one never linked is refused with the sticky string.
+// ---------------------------------------------------------------------------
+
+const SECOND_TENANT_ID = "22222222-2222-4222-8222-222222222222";
+const STICKY_DISCONNECTED_REASON = "The WhatsApp number this contact uses is disconnected — reconnect it to reply";
+
+/** Slot 1 is the default (the account's own tenant), slot 2 a second number labelled "Sales". */
+const TWO_NUMBERS: Record<string, LocationNumber[]> = {
+  [LOCATION_ID]: [
+    { tenantId: TENANT_ID, slot: 1, isDefault: true, label: null },
+    { tenantId: SECOND_TENANT_ID, slot: 2, isDefault: false, label: "Sales" },
+  ],
+};
+const STICKY_TO_SECOND = { [`${LOCATION_ID}:ghl-contact-1`]: SECOND_TENANT_ID };
+
+function sessionWithStatus(statusByTenant: Record<string, "connected" | "disconnected" | "logged_out">): GhlProviderDeps["getSession"] {
+  return async (coachId) => ({
+    ok: true,
+    session: { coachId, status: statusByTenant[coachId] ?? "connected", phoneNumber: "+447700900000", qr: null, sentToday: 0, dailyCap: 150, queueLength: 0 },
+  });
+}
+
+test("handleProviderOutboundMessage: a contact sticky to a second number sends from THAT number, and the intake row carries its tenant", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+  assert.equal([...rows.values()][0].tenantId, SECOND_TENANT_ID);
+});
+
+test("handleProviderOutboundMessage: no sticky row -> the location's default number", async () => {
+  const numbers = { [LOCATION_ID]: TWO_NUMBERS[LOCATION_ID].map((n) => ({ ...n, isDefault: n.slot === 2 })) };
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers });
+  const { deps, sendCalls } = makeDeps();
+  await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-default" }), deps);
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID, "slot 2 is the default here, not the account's tenant");
+  assert.equal([...rows.values()][0].tenantId, SECOND_TENANT_ID);
+});
+
+test("handleProviderOutboundMessage (merge ruling): a sticky number that was linked before and is offline -> HELD on THAT number, one attempt from it only, no fallback, nothing reported", async () => {
+  const { repo, rows, sessionsByTenant } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  sessionsByTenant.set(SECOND_TENANT_ID, sessionSummary({ coachId: SECOND_TENANT_ID }));
+  const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps({
+    sendWhatsapp: async (input) => {
+      sendCalls.push(input);
+      return { ok: false, code: "session_not_connected", message: "session status is 'disconnected'" };
+    },
+  });
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky-down" }), deps);
+  assert.deepEqual(outcome, { kind: "held" });
+  assert.equal(sendCalls.length, 1, "one attempt, from the sticky number — never from another number");
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+  assert.equal(sendAttachmentCalls.length, 0);
+  const row = [...rows.values()][0];
+  assert.equal(row.tenantId, SECOND_TENANT_ID, "the hold is per number: the row stays on the sticky number");
+  assert.equal(row.sendState, "held");
+  assert.equal(row.pendingText, "hi there");
+  assert.equal(statusCalls.length, 0);
+});
+
+test("handleProviderOutboundMessage (merge ruling): a sticky number never linked (no session summary) -> refused with the sticky-number string, never the default's", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, statusCalls } = makeDeps(notConnectedSend);
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky-never" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: STICKY_DISCONNECTED_REASON });
+  assert.equal(GHL_PROVIDER_REASONS.stickyNumberDisconnected, STICKY_DISCONNECTED_REASON);
+  assert.equal([...rows.values()][0].refusalReason, STICKY_DISCONNECTED_REASON);
+  assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+});
+
+test("handleProviderOutboundMessage (merge ruling): held rows on the DEFAULT number never hold a send from the sticky number (hold-behind is per number)", async () => {
+  const bundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const heldFor: string[] = [];
+  bundle.repo.listHeldGhlOutboundMessages = async (tenantId: string) => {
+    heldFor.push(tenantId);
+    return tenantId === TENANT_ID ? [{ id: "older-on-default" } as GhlOutboundMessage] : [];
+  };
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, samplePayloadFor({ messageId: "msg-sticky-not-behind" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.deepEqual(heldFor, [SECOND_TENANT_ID]);
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+});
+
+test("handleProviderOutboundMessage: the bridge itself says session_not_connected for a non-default number -> the same fixed sticky string (the bridge stays authoritative)", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, sendCalls, statusCalls } = makeDeps({
+    sendWhatsapp: async (input) => {
+      sendCalls.push(input);
+      return { ok: false, code: "session_not_connected", message: "session status is 'disconnected'" };
+    },
+  });
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky-race" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: STICKY_DISCONNECTED_REASON });
+  assert.equal(sendCalls.length, 1, "exactly one attempt, from the sticky number — never retried from another");
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+  assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+});
+
+test("handleProviderOutboundMessage: the DEFAULT number disconnected keeps today's behaviour — no pre-check, the bridge's own refusal, the existing string", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS });
+  const sessionCalls: string[] = [];
+  const { deps, sendCalls, statusCalls } = makeDeps({
+    getSession: async (coachId) => {
+      sessionCalls.push(coachId);
+      return sessionWithStatus({ [TENANT_ID]: "disconnected" })(coachId);
+    },
+    sendWhatsapp: async (input) => {
+      sendCalls.push(input);
+      return { ok: false, code: "session_not_connected", message: "session status is 'disconnected'" };
+    },
+  });
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-default-down" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.notConnected });
+  assert.equal(sessionCalls.length, 0, "the default number's path never gains a session pre-check");
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].coachId, TENANT_ID);
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notConnected);
+});
+
+test("handleProviderOutboundMessage: a sticky number whose session snapshot is unreadable still attempts the send (the diagnostic call never refuses on its own)", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, sendCalls } = makeDeps({
+    getSession: async () => ({ ok: false, code: "unreachable", message: "WhatsApp bridge unreachable or timed out." }),
+  });
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-sticky-unknown" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+});
+
+test("handleProviderOutboundMessage (media split, merge ruling): a sticky number that was linked before and is offline -> the whole message is HELD on that number", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo, rows, attachments, sessionsByTenant } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+    sessionsByTenant.set(SECOND_TENANT_ID, sessionSummary({ coachId: SECOND_TENANT_ID, status: "logged_out" }));
+    const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps({
+      sendWhatsapp: async (input) => {
+        sendCalls.push(input);
+        return { ok: false, code: "session_not_connected", message: "not connected" };
+      },
+    });
+    const outcome = await handleProviderOutboundMessage(
+      repo,
+      samplePayloadFor({ messageId: "msg-sticky-media-down", message: "docs", attachments: ["https://x/a.pdf"] }),
+      deps
+    );
+    assert.deepEqual(outcome, { kind: "held" });
+    assert.deepEqual(sendCalls.map((c) => c.coachId), [SECOND_TENANT_ID]);
+    assert.equal(sendAttachmentCalls.length, 0);
+    const row = [...rows.values()][0];
+    assert.equal(row.tenantId, SECOND_TENANT_ID);
+    assert.equal(row.sendState, "held");
+    assert.deepEqual([...attachments.values()].map((p) => p.sendState), ["pending_send"]);
+    assert.equal(statusCalls.length, 0);
+  });
+});
+
+test("handleProviderOutboundMessage (media split): a sticky number sends every part from that number", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const { repo } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(
+      repo,
+      samplePayloadFor({ messageId: "msg-sticky-media", message: "docs", attachments: ["https://x/a.pdf"] }),
+      deps
+    );
+    assert.deepEqual(outcome, { kind: "accepted" });
+    assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+    assert.equal(sendAttachmentCalls[0].coachId, SECOND_TENANT_ID);
+  });
+});
+
+test("handleProviderOutboundMessage: no number rows at all (defensive) -> the account's own tenant, exactly as before multiple numbers", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers: { [LOCATION_ID]: [] } });
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-no-numbers" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls[0].coachId, TENANT_ID);
+  assert.equal([...rows.values()][0].tenantId, TENANT_ID);
+});
+
+// ---------------------------------------------------------------------------
 // 6. drainGhlOutboundStatuses
 // ---------------------------------------------------------------------------
 
@@ -986,7 +1332,7 @@ function seedAcceptedRow(
     refusalReason: null,
     reportedStatus: null,
     reportedAt: null,
-    reportError: null,
+    reportError: null, readReportedAt: null, readReportError: null,
     createdAt: new Date(Date.now() + repoBundle.rows.size).toISOString(),
     ...overrides,
   };
@@ -1118,7 +1464,7 @@ test("drainGhlOutboundStatuses: a pending_send retry that succeeds transitions t
 
   await drainGhlOutboundStatuses(repoBundle.repo, deps);
   assert.equal(row.sendState, "accepted");
-  assert.equal(row.pendingText, null);
+  assert.equal(row.pendingText, null, "triggers off: cleared on accept");
 });
 
 test("drainGhlOutboundStatuses: the 6th attempt (sendAttempts already at 5) gives up without calling the bridge again — reports the fixed exhaustion reason", async () => {
@@ -1344,12 +1690,18 @@ test("handleProviderOutboundMessage: a repo failure BEFORE the intake row exists
     async getWhatsappMessagesByTenantKeys() {
       return [];
     },
-    async markGhlOutboundReported() {},
+    async markGhlOutboundReported() { return true; },
     async claimGhlTokenRefresh() {
       return false;
     },
     async saveGhlTokens() {},
     async markGhlNeedsReauth() {},
+    async listLocationNumbers() {
+      return [];
+    },
+    async getStickyTenant() {
+      return null;
+    },
   };
   const { deps } = makeDeps();
   // If this rejects, the `await` throws and the test fails with that error —
@@ -2437,6 +2789,660 @@ test("listGhlInstalledLocations: an unreachable endpoint returns null, never thr
   });
 });
 
+// ---------------------------------------------------------------------------
+// Multiple numbers (Task 3, review fix 1) — the drain's retry sites pick the
+// same refusal string as the webhook: a row sent from a NON-default number
+// (row.tenantId !== account.tenantId) that the bridge refuses with
+// session_not_connected reports the sticky string; a default-number row
+// keeps today's string.
+// ---------------------------------------------------------------------------
+
+const notConnectedSendFn: GhlProviderDeps["sendWhatsapp"] = async () => ({ ok: false, code: "session_not_connected", message: "session status is 'disconnected'" });
+
+test("drainGhlOutboundStatuses: a pending_send row from a NON-default number, retried into session_not_connected -> the sticky string", async () => {
+  const repoBundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS });
+  const row = seedAcceptedRow(repoBundle, { tenantId: SECOND_TENANT_ID, sendState: "pending_send", pendingText: "retry me", sendAttempts: 1 });
+  const { deps, statusCalls } = makeDeps({ sendWhatsapp: notConnectedSendFn });
+
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, deps);
+
+  assert.equal(result.failed, 1);
+  assert.equal(repoBundle.rows.get(row.id)!.refusalReason, STICKY_DISCONNECTED_REASON);
+  assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+});
+
+test("drainGhlOutboundStatuses: a pending_send row from the DEFAULT number, retried into session_not_connected -> today's string, unchanged", async () => {
+  const repoBundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS });
+  const row = seedAcceptedRow(repoBundle, { tenantId: TENANT_ID, sendState: "pending_send", pendingText: "retry me", sendAttempts: 1 });
+  const { deps, statusCalls } = makeDeps({ sendWhatsapp: notConnectedSendFn });
+
+  await drainGhlOutboundStatuses(repoBundle.repo, deps);
+
+  assert.equal(repoBundle.rows.get(row.id)!.refusalReason, GHL_PROVIDER_REASONS.notConnected);
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notConnected);
+});
+
+/** A multipart row whose text AND attachment parts all went transient at webhook time, so both are pending_send for the drain. */
+async function seedPendingMultipartRow(sticky: Record<string, string>) {
+  const repoBundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky });
+  const unreachable = async () => ({ ok: false as const, code: "unreachable", message: "WhatsApp bridge unreachable or timed out." });
+  const { deps } = makeDeps({ sendWhatsapp: unreachable, sendAttachment: unreachable });
+  const outcome = await withMediaOutboundEnabled(() =>
+    handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor({ messageId: "msg-mp-pending", message: "docs", attachments: ["https://x/a.pdf"] }), deps)
+  );
+  assert.deepEqual(outcome, { kind: "pending_retry" }, "fixture bug — expected every part to be left pending_send");
+  const row = [...repoBundle.rows.values()][0];
+  const part = [...repoBundle.attachments.values()][0];
+  return { repoBundle, row, part };
+}
+
+test("drainMultipartRow: text and attachment retries from a NON-default number into session_not_connected -> the sticky string on both parts and in the report", async () => {
+  const { repoBundle, row, part } = await seedPendingMultipartRow(STICKY_TO_SECOND);
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  const { deps, statusCalls } = makeDeps({
+    sendWhatsapp: notConnectedSendFn,
+    sendAttachment: notConnectedSendFn as GhlProviderDeps["sendAttachment"],
+  });
+
+  await withMediaOutboundEnabled(() => drainGhlOutboundStatuses(repoBundle.repo, deps));
+
+  assert.equal(repoBundle.rows.get(row.id)!.refusalReason, STICKY_DISCONNECTED_REASON);
+  assert.equal(repoBundle.attachments.get(part.id)!.refusalReason, STICKY_DISCONNECTED_REASON);
+  assert.equal(statusCalls.length, 1);
+  assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+});
+
+test("drainMultipartRow: the same retries from the DEFAULT number -> today's string, unchanged", async () => {
+  const { repoBundle, row, part } = await seedPendingMultipartRow({});
+  assert.equal(row.tenantId, TENANT_ID);
+  const { deps, statusCalls } = makeDeps({
+    sendWhatsapp: notConnectedSendFn,
+    sendAttachment: notConnectedSendFn as GhlProviderDeps["sendAttachment"],
+  });
+
+  await withMediaOutboundEnabled(() => drainGhlOutboundStatuses(repoBundle.repo, deps));
+
+  assert.equal(repoBundle.rows.get(row.id)!.refusalReason, GHL_PROVIDER_REASONS.notConnected);
+  assert.equal(repoBundle.attachments.get(part.id)!.refusalReason, GHL_PROVIDER_REASONS.notConnected);
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notConnected);
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in WhatsApp groups (Task 8) — `upsertGhlGroupContact` (src/lib/ghl.ts)
+// and the bridge client's group calls (src/lib/whatsapp-bridge.ts), against a
+// stubbed `fetch` that records each request.
+// ---------------------------------------------------------------------------
+
+interface CapturedRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+async function withCapturedFetch<T>(
+  respond: (req: CapturedRequest) => Promise<Response>,
+  run: () => Promise<T>
+): Promise<{ result: T; requests: CapturedRequest[] }> {
+  const requests: CapturedRequest[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const req: CapturedRequest = {
+      url: String(input),
+      method: init?.method ?? "GET",
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+    };
+    requests.push(req);
+    return respond(req);
+  }) as typeof fetch;
+  try {
+    return { result: await run(), requests };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+test("upsertGhlGroupContact: posts name '<group> (WhatsApp group)', the whatsapp-group tag and the placeholder email — never a phone", async () => {
+  const { result, requests } = await withCapturedFetch(
+    async () => jsonResponse(200, { new: true, contact: { id: "group-contact-1" } }),
+    () => upsertGhlGroupContact("token", "loc-1", { name: "  Run Club  ", groupKey: "120363012345678901-0a1b2c3d" })
+  );
+  assert.deepEqual(result, { ok: true, contactId: "group-contact-1", isNew: true });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://services.leadconnectorhq.com/contacts/upsert");
+  assert.equal(requests[0].method, "POST");
+  assert.equal(requests[0].headers.authorization, "Bearer token");
+  assert.equal(requests[0].headers.version, "2021-07-28");
+  assert.deepEqual(requests[0].body, {
+    locationId: "loc-1",
+    name: "Run Club (WhatsApp group)",
+    email: "group-120363012345678901-0a1b2c3d@groups.pingwren.invalid",
+    tags: ["whatsapp-group"],
+  });
+  assert.equal("phone" in (requests[0].body as Record<string, unknown>), false);
+});
+
+test("upsertGhlGroupContact: a long group name is trimmed so the whole contact name is at most 100 characters", async () => {
+  const longName = "😀".repeat(150);
+  const { requests } = await withCapturedFetch(
+    async () => jsonResponse(200, { contact: { id: "c" } }),
+    () => upsertGhlGroupContact("token", "loc-1", { name: longName, groupKey: "447700900123-1600000000-0a1b2c3d" })
+  );
+  const name = (requests[0].body as { name: string }).name;
+  assert.equal([...name].length, 100);
+  assert.ok(name.endsWith("😀 (WhatsApp group)"), "trimmed by whole characters, never mid-emoji");
+});
+
+test("upsertGhlGroupContact: same fixed error strings as upsertGhlContact — never the raw body", async () => {
+  const rejected = await withCapturedFetch(
+    async () => jsonResponse(422, { message: "secret upstream detail" }),
+    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1-0a1b2c3d" })
+  );
+  assert.deepEqual(rejected.result, { ok: false, kind: "rejected", error: "GHL contact upsert rejected (HTTP 422)" });
+
+  const limited = await withCapturedFetch(async () => jsonResponse(429, {}), () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1-0a1b2c3d" }));
+  assert.deepEqual(limited.result, { ok: false, kind: "rate_limited", error: "GHL contact upsert rejected (HTTP 429)" });
+
+  const noId = await withCapturedFetch(async () => jsonResponse(200, { contact: {} }), () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1-0a1b2c3d" }));
+  assert.deepEqual(noId.result, { ok: false, kind: "rejected", error: "GHL contact upsert response had no contact id" });
+
+  const thrown = await withCapturedFetch(
+    async () => {
+      throw new Error("ECONNRESET");
+    },
+    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1-0a1b2c3d" })
+  );
+  assert.deepEqual(thrown.result, { ok: false, kind: "unreachable", error: "GHL contact upsert request failed" });
+});
+
+test("upsertGhlGroupContact: a groupKey not shaped like ghlGroupContactKey's output is refused without a request", async () => {
+  for (const groupKey of ["1203@evil.example", "120363012345678901", "1-0A1B2C3D", "1-0a1b2c3", "-0a1b2c3d"]) {
+    const { result, requests } = await withCapturedFetch(
+      async () => jsonResponse(200, { contact: { id: "c" } }),
+      () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey })
+    );
+    assert.equal(requests.length, 0, groupKey);
+    assert.equal(!result.ok && result.kind, "rejected", groupKey);
+  }
+});
+
+test("ghlGroupContactKey: JID digits with '-' kept, plus 8 hex of sha256(tenantId) — per number, never the raw tenant id", () => {
+  const tenantA = "22222222-2222-4222-8222-222222222222";
+  const tenantB = "33333333-3333-4333-8333-333333333333";
+  const jid = "120363012345678901@g.us";
+  const hashA = createHash("sha256").update(tenantA).digest("hex").slice(0, 8);
+
+  const keyA = ghlGroupContactKey(jid, tenantA);
+  const keyB = ghlGroupContactKey(jid, tenantB);
+  assert.equal(keyA, `120363012345678901-${hashA}`);
+  assert.notEqual(keyA, keyB, "the same group on two numbers gets two GHL contacts");
+  assert.notEqual(`group-${keyA}@groups.pingwren.invalid`, `group-${keyB}@groups.pingwren.invalid`);
+  for (const [key, tenant] of [[keyA, tenantA], [keyB, tenantB]]) {
+    assert.ok(!key.includes(tenant), "the raw tenant id never appears in the key");
+    assert.ok(!key.includes(tenant.slice(0, 8)), "nor any recognisable piece of it");
+  }
+
+  // '-' kept: old-style JIDs that differ only in where the '-' falls stay distinct.
+  assert.notEqual(ghlGroupContactKey("12-345@g.us", tenantA), ghlGroupContactKey("123-45@g.us", tenantA));
+  assert.equal(ghlGroupContactKey("447700900123-1600000000@g.us", tenantA), `447700900123-1600000000-${hashA}`);
+});
+
+const BRIDGE_COACH = "33333333-3333-4333-8333-333333333333";
+
+async function withBridgeEnv<T>(run: () => Promise<T>): Promise<T> {
+  const saved = { url: process.env.WHATSAPP_BRIDGE_URL, secret: process.env.WHATSAPP_BRIDGE_SECRET };
+  process.env.WHATSAPP_BRIDGE_URL = "https://bridge.example.test";
+  process.env.WHATSAPP_BRIDGE_SECRET = "bridge-secret";
+  try {
+    return await run();
+  } finally {
+    if (saved.url === undefined) delete process.env.WHATSAPP_BRIDGE_URL;
+    else process.env.WHATSAPP_BRIDGE_URL = saved.url;
+    if (saved.secret === undefined) delete process.env.WHATSAPP_BRIDGE_SECRET;
+    else process.env.WHATSAPP_BRIDGE_SECRET = saved.secret;
+  }
+}
+
+test("listWhatsappGroups: GET /sessions/:id/groups -> the groups; malformed entries make the whole body 'internal'", async () => {
+  const groups = [{ jid: "120363012345678901@g.us", name: "Run Club", size: 12 }];
+  const ok = await withBridgeEnv(() => withCapturedFetch(async () => jsonResponse(200, { ok: true, groups }), () => listWhatsappGroups(BRIDGE_COACH)));
+  assert.deepEqual(ok.result, { ok: true, groups });
+  assert.equal(ok.requests[0].url, `https://bridge.example.test/sessions/${BRIDGE_COACH}/groups`);
+  assert.equal(ok.requests[0].method, "GET");
+  assert.equal(ok.requests[0].headers.authorization, "Bearer bridge-secret");
+
+  const malformed = await withBridgeEnv(() =>
+    withCapturedFetch(async () => jsonResponse(200, { ok: true, groups: [{ jid: 1 }] }), () => listWhatsappGroups(BRIDGE_COACH))
+  );
+  assert.equal(malformed.result.ok, false);
+  assert.equal(!malformed.result.ok && malformed.result.code, "internal");
+
+  const notConnected = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(409, { ok: false, error: { code: "session_not_connected", message: "session status is 'disconnected'" } }),
+      () => listWhatsappGroups(BRIDGE_COACH)
+    )
+  );
+  assert.equal(!notConnected.result.ok && notConnected.result.code, "session_not_connected");
+});
+
+test("listWhatsappGroups / refreshWhatsappGroups: unconfigured -> 'unconfigured' with no request", async () => {
+  const saved = { url: process.env.WHATSAPP_BRIDGE_URL, secret: process.env.WHATSAPP_BRIDGE_SECRET };
+  delete process.env.WHATSAPP_BRIDGE_URL;
+  delete process.env.WHATSAPP_BRIDGE_SECRET;
+  try {
+    const { result, requests } = await withCapturedFetch(async () => jsonResponse(200, {}), async () => [
+      await listWhatsappGroups(BRIDGE_COACH),
+      await refreshWhatsappGroups(BRIDGE_COACH),
+    ]);
+    assert.equal(requests.length, 0);
+    for (const r of result) assert.equal(!r.ok && r.code, "unconfigured");
+  } finally {
+    if (saved.url !== undefined) process.env.WHATSAPP_BRIDGE_URL = saved.url;
+    if (saved.secret !== undefined) process.env.WHATSAPP_BRIDGE_SECRET = saved.secret;
+  }
+});
+
+test("refreshWhatsappGroups: POST /sessions/:id/groups/refresh -> ok; a 502 surfaces the bridge's code", async () => {
+  const ok = await withBridgeEnv(() => withCapturedFetch(async () => jsonResponse(200, { ok: true }), () => refreshWhatsappGroups(BRIDGE_COACH)));
+  assert.deepEqual(ok.result, { ok: true });
+  assert.equal(ok.requests[0].url, `https://bridge.example.test/sessions/${BRIDGE_COACH}/groups/refresh`);
+  assert.equal(ok.requests[0].method, "POST");
+
+  const failed = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(502, { ok: false, error: { code: "groups_refresh_failed", message: "could not reload" } }),
+      () => refreshWhatsappGroups(BRIDGE_COACH)
+    )
+  );
+  assert.equal(!failed.result.ok && failed.result.code, "groups_refresh_failed");
+});
+
+test("sendWhatsappMessage: a groupJid input sends { groupJid } and no 'to'; a phone input is unchanged", async () => {
+  const message = {
+    id: "m1",
+    idempotencyKey: "key-1",
+    toPhone: null,
+    groupJid: "120363012345678901@g.us",
+    status: "accepted",
+    waMessageId: null,
+    error: null,
+    createdAt: "2026-10-17T00:00:00.000Z",
+    sentAt: null,
+  };
+  const group = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(202, { ok: true, replay: false, message }),
+      () => sendWhatsappMessage({ coachId: BRIDGE_COACH, groupJid: "120363012345678901@g.us", text: "hi all", idempotencyKey: "key-1" })
+    )
+  );
+  assert.deepEqual(group.requests[0].body, { groupJid: "120363012345678901@g.us", text: "hi all", idempotencyKey: "key-1" });
+  assert.deepEqual(group.result, { ok: true, replay: false, message });
+
+  const phone = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(202, { ok: true, replay: false, message: { ...message, toPhone: "+447700900123", groupJid: null } }),
+      () => sendWhatsappMessage({ coachId: BRIDGE_COACH, to: "+447700900123", text: "hi", idempotencyKey: "key-2" })
+    )
+  );
+  assert.deepEqual(phone.requests[0].body, { to: "+447700900123", text: "hi", idempotencyKey: "key-2" });
+});
+
+test("sendWhatsappAttachment: a groupJid input sends { groupJid, attachment } and no 'to'; a phone input is unchanged", async () => {
+  const message = {
+    id: "m1",
+    idempotencyKey: "att-1",
+    toPhone: null,
+    groupJid: "120363012345678901@g.us",
+    status: "accepted",
+    waMessageId: null,
+    error: null,
+    createdAt: "2026-10-17T00:00:00.000Z",
+    sentAt: null,
+  };
+  const group = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(202, { ok: true, replay: false, message }),
+      () =>
+        sendWhatsappAttachment({
+          coachId: BRIDGE_COACH,
+          groupJid: "120363012345678901@g.us",
+          attachment: { url: "https://x/a.pdf" },
+          idempotencyKey: "att-1",
+        })
+    )
+  );
+  assert.deepEqual(group.requests[0].body, { groupJid: "120363012345678901@g.us", attachment: { url: "https://x/a.pdf" }, idempotencyKey: "att-1" });
+  assert.deepEqual(group.result, { ok: true, replay: false, message });
+
+  const phone = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(202, { ok: true, replay: false, message: { ...message, toPhone: "+447700900123", groupJid: null } }),
+      () => sendWhatsappAttachment({ coachId: BRIDGE_COACH, to: "+447700900123", attachment: { url: "https://x/a.pdf" }, idempotencyKey: "att-2" })
+    )
+  );
+  assert.deepEqual(phone.requests[0].body, { to: "+447700900123", attachment: { url: "https://x/a.pdf" }, idempotencyKey: "att-2" });
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in groups (Task 9) — outbound to a group contact. The group check runs
+// FIRST: before sticky/default number routing and before phone
+// normalisation. A group contact is sent to its group (`groupJid`) from the
+// group's OWN number; a switched-off group is refused with a fixed string.
+// ---------------------------------------------------------------------------
+
+const GROUP_JID = "120363012345678901@g.us";
+const GROUP_CONTACT = "ghl-group-contact-1";
+const GROUP_OFF_REASON = "WhatsApp group sync is turned off for this group";
+const GROUP_LEFT_REASON = "This WhatsApp number is no longer in that group";
+
+/** The group lives on the SECOND (non-default) number, while the contact's sticky row points at the default — the group's number must win. */
+function groupRepo(enabled = true, left = false) {
+  return createFakeRepo([makeAccount()], {
+    numbers: TWO_NUMBERS,
+    sticky: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: TENANT_ID },
+    groups: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: { tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID, enabled, left } },
+  });
+}
+
+function groupPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  // A group contact has no phone — GHL sends whatever it has (often nothing).
+  return samplePayloadFor({ contactId: GROUP_CONTACT, phone: "", messageId: "msg-group", message: "hello group", ...overrides });
+}
+
+test("groups outbound: an enabled group contact sends to the groupJid from the GROUP's number — not the sticky or default number — and the row carries that tenant", async () => {
+  const bundle = groupRepo();
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.deepEqual(sendCalls[0], { coachId: SECOND_TENANT_ID, groupJid: GROUP_JID, text: "hello group", idempotencyKey: "msg-group" });
+  assert.equal("to" in sendCalls[0], false, "a group send never carries a phone");
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  assert.equal(row.toPhone, null);
+  assert.equal(row.sendState, "accepted");
+});
+
+test("groups outbound: the group lookup runs FIRST — sticky/default routing is never consulted for a group contact", async () => {
+  const bundle = groupRepo();
+  const { deps } = makeDeps();
+  await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  const methods = bundle.calls.map((c) => c.method);
+  assert.ok(methods.includes("getWhatsappGroupByContact"));
+  assert.ok(!methods.includes("getStickyTenant"), methods.join(", "));
+  assert.ok(!methods.includes("listLocationNumbers"), methods.join(", "));
+  assert.ok(methods.indexOf("getWhatsappGroupByContact") < methods.indexOf("recordGhlOutboundMessage"));
+});
+
+test("groups outbound: a switched-off group refuses with the fixed string — no send, failed reported inline", async () => {
+  const bundle = groupRepo(false);
+  const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+  assert.equal(GHL_PROVIDER_REASONS.groupSyncOff, GROUP_OFF_REASON);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(sendAttachmentCalls.length, 0);
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.sendState, "refused");
+  assert.equal(row.refusalReason, GROUP_OFF_REASON);
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  assert.equal(statusCalls.length, 1);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
+});
+
+test("groups outbound: a group contact of a number that was removed from the location refuses as turned off — never the phone path, and the row is on a current number", async () => {
+  const REMOVED_TENANT_ID = "tenant-removed";
+  const bundle = createFakeRepo([makeAccount()], {
+    numbers: TWO_NUMBERS,
+    // Even an enabled row: a removed number's group must never send.
+    groups: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: { tenantId: REMOVED_TENANT_ID, groupJid: GROUP_JID, enabled: true, numberRemoved: true } },
+  });
+  const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ phone: "+447700900123" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+  assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.refusalReason, GROUP_OFF_REASON);
+  assert.equal(row.toPhone, null, "never falls into the phone path");
+  assert.equal(row.tenantId, TENANT_ID, "recorded on the location's default number, not the removed one");
+  assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
+});
+
+test("groups outbound: a switched-off group refuses even with attachments and the media split on — nothing dispatched, no part rows", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo(false);
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+    assert.equal(bundle.attachments.size, 0);
+  });
+});
+
+test("groups outbound: the bridge refusing with group_not_enabled (switched off mid-flight) is terminal, reported with the group-off string", async () => {
+  const bundle = groupRepo();
+  const { deps, statusCalls } = makeDeps({
+    sendWhatsapp: async () => ({ ok: false, code: "group_not_enabled", message: "'groupJid' is not an enabled WhatsApp group for this session" }),
+  });
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+  assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
+});
+
+test("groups outbound: not a group contact -> today's path unchanged (phone normalised, sticky routing)", async () => {
+  const bundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, samplePayloadFor({ messageId: "msg-not-group", phone: "07700 900123" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.deepEqual(sendCalls[0], { coachId: SECOND_TENANT_ID, to: "+447700900123", text: "hi there", idempotencyKey: "msg-not-group" });
+  assert.ok(bundle.calls.some((c) => c.method === "getStickyTenant"));
+});
+
+test("groups outbound (media split): text and every attachment go to the groupJid from the group's number", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf", "https://x/b.png"] }), deps);
+    assert.deepEqual(outcome, { kind: "accepted" });
+    assert.equal(sendCalls.length, 1);
+    assert.equal(sendCalls[0].groupJid, GROUP_JID);
+    assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+    assert.equal(sendAttachmentCalls.length, 2);
+    for (const call of sendAttachmentCalls) {
+      assert.equal(call.groupJid, GROUP_JID);
+      assert.equal(call.coachId, SECOND_TENANT_ID);
+      assert.equal("to" in call, false);
+    }
+  });
+});
+
+test("groups drain: a pending_send group row is retried to the groupJid on the row's own tenant", async () => {
+  const bundle = groupRepo();
+  const row = seedAcceptedRow(bundle, {
+    tenantId: SECOND_TENANT_ID,
+    ghlContactId: GROUP_CONTACT,
+    toPhone: null,
+    sendState: "pending_send",
+    pendingText: "hello group",
+    idempotencyKey: "idem-group-retry",
+  });
+  const { deps, sendCalls } = makeDeps();
+  const result = await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(result.retried, 1);
+  assert.deepEqual(sendCalls, [{ coachId: SECOND_TENANT_ID, groupJid: GROUP_JID, text: "hello group", idempotencyKey: "idem-group-retry" }]);
+  assert.equal(row.sendState, "accepted");
+});
+
+test("groups drain: a pending_send group row whose group was switched off meanwhile is retried (the bridge's replay check may still own it) and its group_not_enabled refusal reports the group-off string", async () => {
+  const bundle = groupRepo(false);
+  const row = seedAcceptedRow(bundle, {
+    tenantId: SECOND_TENANT_ID,
+    ghlContactId: GROUP_CONTACT,
+    toPhone: null,
+    sendState: "pending_send",
+    pendingText: "hello group",
+  });
+  const { deps, sendCalls, statusCalls } = makeDeps({
+    sendWhatsapp: async (input) => {
+      sendCalls.push(input);
+      return { ok: false, code: "group_not_enabled", message: "'groupJid' is not an enabled WhatsApp group for this session" };
+    },
+  });
+  await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].groupJid, GROUP_JID);
+  assert.equal(row.refusalReason, GROUP_OFF_REASON);
+  assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
+});
+
+test("groups drain: a pending_send row with no phone and no group contact keeps today's defensive give-up (no send)", async () => {
+  const bundle = createFakeRepo([makeAccount()]);
+  const row = seedAcceptedRow(bundle, { toPhone: null, sendState: "pending_send", pendingText: "hi" });
+  const { deps, sendCalls } = makeDeps();
+  await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(row.refusalReason, GHL_PROVIDER_REASONS.bridgeUnreachableExhausted);
+});
+
+test("groups outbound (media split): the up-front budget check counts a group part as 5 units, like the bridge", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps({
+      // 9 units left: enough for 2 one-to-one parts, not for 2 group parts (10).
+      getSession: async (coachId) => ({
+        ok: true,
+        session: { coachId, status: "connected", phoneNumber: "+447700900000", qr: null, sentToday: 141, dailyCap: 150, queueLength: 0 },
+      }),
+    });
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.capReached });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  });
+});
+
+test("groups outbound (media split): the up-front budget check counts the bridge's queued and in-flight UNITS, not queued items", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps({
+      // One queued group (5 units) plus one group in flight (5): 150 - 135 - 5 - 5 = 5 left,
+      // too few for 2 group parts (10). Counting queueLength (1 item) would leave 14.
+      getSession: async (coachId) => ({
+        ok: true,
+        session: { coachId, status: "connected", phoneNumber: "+447700900000", qr: null, sentToday: 135, dailyCap: 150, queueLength: 1, queuedUnits: 5, inFlightUnits: 5 },
+      }),
+    });
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.capReached });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  });
+});
+
+test("groups outbound (media split): a bridge build without unit fields falls back to queueLength", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps({
+      // 150 - 139 - 2 queued items = 9 left, too few for 2 group parts (10).
+      getSession: async (coachId) => ({
+        ok: true,
+        session: { coachId, status: "connected", phoneNumber: "+447700900000", qr: null, sentToday: 139, dailyCap: 150, queueLength: 2 },
+      }),
+    });
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.capReached });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  });
+});
+
+test("groups drain: a group send that failed with 'no longer in that group' marks the group left on its number, and reports the bridge's string", async () => {
+  const bundle = groupRepo();
+  const row = seedAcceptedRow(bundle, { tenantId: SECOND_TENANT_ID, ghlContactId: GROUP_CONTACT, toPhone: null, idempotencyKey: "idem-left" });
+  bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:idem-left`, { status: "failed", error: GROUP_LEFT_REASON });
+  const { deps, statusCalls } = makeDeps();
+  const result = await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(bundle.groupsLeft, [{ tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID }]);
+  assert.equal(statusCalls[0].errorMessage, GROUP_LEFT_REASON);
+  assert.equal(row.reportedStatus, "failed");
+});
+
+test("groups drain: any OTHER failure never marks a group left", async () => {
+  const bundle = groupRepo();
+  seedAcceptedRow(bundle, { tenantId: SECOND_TENANT_ID, ghlContactId: GROUP_CONTACT, toPhone: null, idempotencyKey: "idem-other" });
+  bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:idem-other`, { status: "failed", error: "WhatsApp delivery failed" });
+  const { deps } = makeDeps();
+  await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.deepEqual(bundle.groupsLeft, []);
+});
+
+test("groups drain: marking the group left is best effort — a repo failure there never stops the report", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const bundle = groupRepo();
+  bundle.repo.markWhatsappGroupLeft = async () => {
+    throw new Error("db down");
+  };
+  const row = seedAcceptedRow(bundle, { tenantId: SECOND_TENANT_ID, ghlContactId: GROUP_CONTACT, toPhone: null, idempotencyKey: "idem-left-2" });
+  bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:idem-left-2`, { status: "failed", error: GROUP_LEFT_REASON });
+  const { deps, statusCalls } = makeDeps();
+  const result = await drainGhlOutboundStatuses(bundle.repo, deps);
+  assert.equal(result.failed, 1);
+  assert.equal(statusCalls[0].errorMessage, GROUP_LEFT_REASON);
+  assert.equal(row.reportedStatus, "failed");
+});
+
+test("groups drain (multipart): an attachment part failing with 'no longer in that group' marks the group left too", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps } = makeDeps();
+    await handleProviderOutboundMessage(bundle.repo, groupPayload({ messageId: "msg-group-mp", attachments: ["https://x/a.pdf"] }), deps);
+    const row = [...bundle.rows.values()][0];
+    const part = [...bundle.attachments.values()][0];
+    bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:${row.idempotencyKey}`, { status: "failed", error: GROUP_LEFT_REASON });
+    bundle.bridgeLedger.set(`${SECOND_TENANT_ID}:${part.idempotencyKey}`, { status: "failed", error: GROUP_LEFT_REASON });
+    await drainGhlOutboundStatuses(bundle.repo, deps);
+    assert.deepEqual(bundle.groupsLeft, [{ tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID }]);
+    assert.equal(row.reportedStatus, "failed");
+  });
+});
+
+test("groups outbound: an enabled group the number has LEFT refuses up front with the bridge's 'no longer in that group' string — no send", async () => {
+  const bundle = groupRepo(true, true);
+  const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ messageId: "msg-group-left" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_LEFT_REASON });
+  assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.refusalReason, GROUP_LEFT_REASON);
+  assert.equal(row.pendingText, null);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.equal(statusCalls[0].errorMessage, GROUP_LEFT_REASON);
+});
+
+test("groups outbound: a switched-off group the number has also left still says 'turned off' (the switch wins)", async () => {
+  const bundle = groupRepo(false, true);
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ messageId: "msg-group-off-left" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+  assert.equal(sendCalls.length, 0);
+});
+
+test("groups: the provider's mirrored bridge constants match services/whatsapp-bridge/src/groups.ts byte for byte", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../../services/whatsapp-bridge/src/groups.ts", import.meta.url), "utf8");
+  const units = /export const GROUP_SEND_CAP_UNITS = (\d+);/.exec(source);
+  const reason = /export const NOT_IN_GROUP_REASON = "([^"]*)";/.exec(source);
+  assert.ok(units && reason, "both constants must still be declared in the bridge's groups.ts");
+  assert.equal(GROUP_SEND_CAP_UNITS, Number(units[1]));
+  assert.equal(GHL_PROVIDER_REASONS.groupLeft, reason[1]);
+});
+
+// ---------------------------------------------------------------------------
 // Reliability final review I3: a new message never overtakes rows already held for the tenant.
 test("webhook: tenant already has a held row -> new message is held behind it, bridge not called", async () => {
   const { repo, rows, sessionsByTenant } = createFakeRepo([makeAccount()]);
@@ -2582,4 +3588,630 @@ test("F2 media drain: a pending_send multipart row whose attachment now says ses
     assert.ok([...attachments.values()].every((a) => a.sendState === "pending_send"));
     assert.equal(statusCalls.length, 0);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Merge: STOP opt-outs across a location's numbers, and groups
+// ---------------------------------------------------------------------------
+
+test("merge STOP: a contact opted out on the DEFAULT number is refused from their sticky number too, with the other-number string", async () => {
+  const { repo, optOuts, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  optOuts.add(`${TENANT_ID}:+447700900123`);
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-stop-other" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOutOtherNumber });
+  assert.equal(sendCalls.length, 0);
+  assert.equal([...rows.values()][0].tenantId, SECOND_TENANT_ID);
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.optedOutOtherNumber);
+  assert.equal(GHL_PROVIDER_REASONS.optedOutOtherNumber, "Contact opted out (STOP) on this sub-account — not sent");
+});
+
+test("merge STOP: a contact opted out on the number it is sent from keeps the original W10 string", async () => {
+  const { repo, optOuts } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: STICKY_TO_SECOND });
+  optOuts.add(`${SECOND_TENANT_ID}:+447700900123`);
+  const { deps } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-stop-same" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOut });
+});
+
+test("merge STOP: a group send is never blocked by a member's STOP (the group is opt-in by the owner)", async () => {
+  const bundle = groupRepo();
+  bundle.optOuts.add(`${SECOND_TENANT_ID}:+447700900123`);
+  bundle.optOuts.add(`${TENANT_ID}:+447700900123`);
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ phone: "+447700900123", messageId: "msg-group-stop" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.equal(bundle.calls.some((c) => c.method === "isOptedOut"), false);
+});
+
+test("merge hold: an enabled group whose number was linked before and is offline -> HELD on the group's number", async () => {
+  const bundle = groupRepo();
+  bundle.sessionsByTenant.set(SECOND_TENANT_ID, sessionSummary({ coachId: SECOND_TENANT_ID }));
+  const { deps } = makeDeps(notConnectedSend);
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ messageId: "msg-group-held" }), deps);
+  assert.deepEqual(outcome, { kind: "held" });
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  assert.equal(row.toPhone, null);
+  assert.equal(row.sendState, "held");
+  assert.equal(row.pendingText, "hello group");
+});
+
+// ---------------------------------------------------------------------------
+// App-originated sends (group invites) — the normal outbound path, with STOP,
+// billing gate, hold and no GHL status PUT.
+// ---------------------------------------------------------------------------
+
+const APP_INPUT = { tenantId: TENANT_ID, ghlContactId: "ghl-contact-app", toPhone: "+447700900123", text: "Hi Sam, join us: https://chat.whatsapp.com/x" };
+
+test("app-originated: ids carry the pwapp_ prefix and are recognised", () => {
+  assert.equal(APP_MESSAGE_ID_PREFIX, "pwapp_");
+  assert.equal(isAppOriginatedMessageId("pwapp_0123456789abcdef0123456789abcdef"), true);
+  assert.equal(isAppOriginatedMessageId("ghl-msg-1"), false);
+  assert.equal(isAppOriginatedMessageId("pwapp_" + "a".repeat(32)), true);
+  assert.equal(isAppOriginatedMessageId("pwapp_x"), false);
+  assert.equal(isAppOriginatedMessageId("pwapp_" + "A".repeat(32)), false);
+});
+
+test("app-originated: a STOP on another of the location's numbers refuses the invite", async () => {
+  const { repo, optOuts, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS });
+  optOuts.add(`${SECOND_TENANT_ID}:+447700900123`);
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT });
+  assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOutOtherNumber });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 0);
+  const row = [...rows.values()][0];
+  assert.equal(row.sendState, "refused");
+  assert.equal(row.reportedStatus, "failed");
+});
+
+test("app-originated: sent from the given tenant, not the sticky or default number", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: { [`${LOCATION_ID}:ghl-contact-app`]: TENANT_ID } });
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT, tenantId: SECOND_TENANT_ID });
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+  assert.equal(sendCalls[0].text, APP_INPUT.text);
+  const row = [...rows.values()][0];
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  assert.ok(isAppOriginatedMessageId(row.ghlMessageId));
+  assert.equal(statusCalls.length, 0);
+});
+
+test("app-originated: number offline (linked before) -> held", async () => {
+  const { repo, rows, sessionsByTenant } = createFakeRepo([makeAccount()]);
+  sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const { deps, statusCalls } = makeDeps(notConnectedSend);
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT });
+  assert.deepEqual(outcome, { kind: "held" });
+  assert.equal([...rows.values()][0].sendState, "held");
+  assert.equal(statusCalls.length, 0);
+});
+
+test("app-originated: billing gate applies and nothing is PUT to GHL", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { status: "cancelled" });
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT });
+  assert.deepEqual(outcome, { kind: "refused", reason: sendingGate(makeAccount(), "cancelled", brandConfig().name) });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 0);
+  assert.equal([...rows.values()][0].reportedStatus, "failed");
+});
+
+test("app-originated: the status drain marks an accepted row reported without calling GHL", async () => {
+  const bundle = createFakeRepo([makeAccount()]);
+  const { deps, statusCalls } = makeDeps();
+  await sendAppOriginatedText(bundle.repo, deps, { account: makeAccount(), ...APP_INPUT });
+  const row = [...bundle.rows.values()][0];
+  const outcome = await reportGhlOutcome(bundle.repo, deps, makeAccount(), row, "delivered", null);
+  assert.equal(outcome, "reported");
+  assert.equal(statusCalls.length, 0);
+  assert.equal(bundle.rows.get(row.id)!.reportedStatus, "delivered");
+});
+
+test("app-originated: a tenant that is not one of the location's numbers is refused, nothing recorded or sent", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()]);
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT, tenantId: SECOND_TENANT_ID });
+  assert.deepEqual(outcome, { kind: "refused", reason: "Sending number isn't on this sub-account — not sent" });
+  assert.equal(rows.size, 0);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Group invites (Task 7) — getGhlContact / searchGhlContacts
+// ---------------------------------------------------------------------------
+
+test("searchGhlContacts: sends the tag filter and maps the GHL response", async () => {
+  const { result, requests } = await withCapturedFetch(
+    async () =>
+      jsonResponse(200, {
+        contacts: [
+          { id: "c1", firstName: "Sam", lastName: "Lee", contactName: "Sam Lee", phone: "+447700900123", tags: ["Cohort", "vip"] },
+          { id: "c2", firstName: null, phone: null, tags: ["other"] },
+          { id: "c3", name: "Pat", tags: ["COHORT"] },
+        ],
+        total: 3,
+      }),
+    () => searchGhlContacts("token", "loc-1", { tag: "Cohort" }, 100)
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://services.leadconnectorhq.com/contacts/search");
+  assert.equal(requests[0].method, "POST");
+  assert.equal(requests[0].headers.authorization, "Bearer token");
+  assert.equal(requests[0].headers.version, "2021-07-28");
+  const body = requests[0].body as { locationId: string; filters: { field: string; value: string[] }[] };
+  assert.equal(body.locationId, "loc-1");
+  assert.equal(body.filters[0].field, "tags");
+  assert.deepEqual(body.filters[0].value, ["cohort"]);
+  assert.deepEqual(result, {
+    ok: true,
+    truncated: false,
+    contacts: [
+      { id: "c1", firstName: "Sam", name: "Sam Lee", phone: "+447700900123", tags: ["Cohort", "vip"] },
+      { id: "c3", firstName: null, name: "Pat", phone: null, tags: ["COHORT"] },
+    ],
+  });
+});
+
+test("searchGhlContacts: more matches than the limit sets truncated", async () => {
+  const { result } = await withCapturedFetch(
+    async () => jsonResponse(200, { contacts: [{ id: "a", tags: [] }, { id: "b", tags: [] }, { id: "c", tags: [] }] }),
+    () => searchGhlContacts("token", "loc-1", { text: "x" }, 2)
+  );
+  assert.ok(result.ok);
+  assert.equal(result.contacts.length, 2);
+  assert.equal(result.truncated, true);
+});
+
+test("searchGhlContacts: a non-2xx is { ok: false } without the response body", async () => {
+  const { result } = await withCapturedFetch(
+    async () => jsonResponse(422, { message: "secret upstream detail" }),
+    () => searchGhlContacts("token", "loc-1", { tag: "t" }, 10)
+  );
+  assert.deepEqual(result, { ok: false, error: "GHL contact search rejected (HTTP 422)" });
+});
+
+test("getGhlContact: maps a contact; a non-2xx is { ok: false } without the body", async () => {
+  const ok = await withCapturedFetch(
+    async () => jsonResponse(200, { contact: { id: "c1", firstName: "Sam", phone: "+447700900123", tags: ["a"] } }),
+    () => getGhlContact("token", "c1")
+  );
+  assert.equal(ok.requests[0].url, "https://services.leadconnectorhq.com/contacts/c1");
+  assert.deepEqual(ok.result, { ok: true, contact: { id: "c1", firstName: "Sam", name: "Sam", phone: "+447700900123", tags: ["a"] } });
+  const bad = await withCapturedFetch(async () => jsonResponse(404, { message: "secret" }), () => getGhlContact("token", "c1"));
+  assert.deepEqual(bad.result, { ok: false, error: "GHL contact read rejected (HTTP 404)", notFound: true });
+});
+
+test("searchGhlContacts: stops at 20 pages when GHL ignores `page` and sets truncated", async () => {
+  const full = Array.from({ length: 100 }, (_, n) => ({ id: `c${n}`, tags: [] }));
+  const { result, requests } = await withCapturedFetch(async () => jsonResponse(200, { contacts: full }), () => searchGhlContacts("token", "loc-1", { text: "x" }, 100000));
+  assert.equal(requests.length, 20);
+  assert.ok(result.ok);
+  assert.equal(result.truncated, true);
+});
+
+test("getGhlContact: a 404 is flagged notFound", async () => {
+  const { result } = await withCapturedFetch(async () => jsonResponse(404, {}), () => getGhlContact("token", "c1"));
+  assert.deepEqual(result, { ok: false, error: "GHL contact read rejected (HTTP 404)", notFound: true });
+});
+
+// ---------------------------------------------------------------------------
+// Workflow triggers: whatsapp_not_on_whatsapp from the status drain.
+// ---------------------------------------------------------------------------
+
+const triggerFlagBefore = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+afterEach(() => {
+  if (triggerFlagBefore === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = triggerFlagBefore;
+});
+
+function triggerFake(behaviour: "ok" | "throw" = "ok") {
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
+  const fired: { locationId: string; key: string; payload: unknown }[] = [];
+  const fireTrigger: GhlProviderDeps["fireTrigger"] = async (_repo, locationId, key, payload) => {
+    fired.push({ locationId, key, payload });
+    if (behaviour === "throw") throw new Error("boom");
+    return { fired: 1, failed: 0 };
+  };
+  return { fired, fireTrigger };
+}
+
+test("triggers: an accepted row keeps its text until reported, then it is cleared", async () => {
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
+  const repoBundle = createFakeRepo([makeAccount()]);
+  const row = seedAcceptedRow(repoBundle, { pendingText: "hello there" });
+  await repoBundle.repo.updateGhlOutboundSendState(row.id, { sendState: "accepted" });
+  assert.equal(row.pendingText, "hello there");
+  await repoBundle.repo.markGhlOutboundReported(row.id, { reportedStatus: null, reportError: "down" });
+  assert.equal(row.pendingText, "hello there", "a failed PUT leaves it for the retry");
+  await repoBundle.repo.markGhlOutboundReported(row.id, { reportedStatus: "delivered", reportError: null });
+  assert.equal(row.pendingText, null);
+});
+
+test("triggers: not_on_whatsapp reported to GHL fires whatsapp_not_on_whatsapp carrying the unsent text", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  const row = seedAcceptedRow(repoBundle, { pendingText: "Hi, your booking is tomorrow" });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake();
+  const { deps } = makeDeps({ fireTrigger });
+
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, deps);
+  assert.equal(result.failed, 1);
+  assert.equal(row.pendingText, null, "cleared once reported");
+  assert.deepEqual(fired, [
+    { locationId: LOCATION_ID, key: "whatsapp_not_on_whatsapp", payload: { number: "+447700900999", numberLabel: null, contactId: "ghl-contact-1", message: "Hi, your booking is tomorrow" } },
+  ]);
+});
+
+test("triggers: a stored pending_text is sent capped at 500 code points", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  const row = seedAcceptedRow(repoBundle, { pendingText: "😀".repeat(600) });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake();
+  await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
+  assert.equal(Array.from((fired[0].payload as { message: string }).message).length, 500);
+});
+
+test("triggers: delivered, other failures and an unreported not_on_whatsapp fire nothing", async () => {
+  const delivered = createFakeRepo([makeAccount()]);
+  delivered.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const d = seedAcceptedRow(delivered);
+  delivered.bridgeLedger.set(`${TENANT_ID}:${d.idempotencyKey}`, { status: "sent", error: null });
+  const failed = createFakeRepo([makeAccount()]);
+  failed.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const f = seedAcceptedRow(failed);
+  failed.bridgeLedger.set(`${TENANT_ID}:${f.idempotencyKey}`, { status: "failed", error: "send failed" });
+  const unreported = createFakeRepo([makeAccount()]);
+  unreported.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const u = seedAcceptedRow(unreported);
+  unreported.bridgeLedger.set(`${TENANT_ID}:${u.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+
+  const fakeOne = triggerFake();
+  await drainGhlOutboundStatuses(delivered.repo, makeDeps({ fireTrigger: fakeOne.fireTrigger }).deps);
+  await drainGhlOutboundStatuses(failed.repo, makeDeps({ fireTrigger: fakeOne.fireTrigger }).deps);
+  const putFails = makeDeps({ fireTrigger: fakeOne.fireTrigger, updateStatus: async () => ({ ok: false, error: "down", status: 503 }) });
+  const r = await drainGhlOutboundStatuses(unreported.repo, putFails.deps);
+  assert.equal(r.reportFailed, 1);
+  assert.deepEqual(fakeOne.fired, []);
+});
+
+test("triggers: a multipart message that fails as not on WhatsApp fires once", async () => {
+  const { repoBundle, row, parts } = await seedMultipartRow({ messageId: "msg-mp-trigger", attachments: ["https://x/a.pdf"] });
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${parts[0].idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake();
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(fired.map((f) => f.key), ["whatsapp_not_on_whatsapp"]);
+});
+
+test("triggers: two overlapping status drains remember and fire not_on_whatsapp once", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  const row = seedAcceptedRow(repoBundle, { pendingText: "hello" });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake();
+  // A slow PUT, so both passes list the row before either stores its status.
+  const slowPut: GhlProviderDeps["updateStatus"] = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { ok: true };
+  };
+  const { deps } = makeDeps({ fireTrigger, updateStatus: slowPut });
+  const [a, b] = await Promise.all([drainGhlOutboundStatuses(repoBundle.repo, deps), drainGhlOutboundStatuses(repoBundle.repo, deps)]);
+  assert.equal(a.failed + b.failed, 2, "both passes count it");
+  assert.equal(a.reportFailed + b.reportFailed, 0);
+  assert.equal(repoBundle.calls.filter((c) => c.method === "rememberNotOnWhatsapp").length, 1);
+  assert.equal(fired.length, 1);
+});
+
+test("triggers: two overlapping multipart drains fire not_on_whatsapp once", async () => {
+  const { repoBundle, row, parts } = await seedMultipartRow({ messageId: "msg-mp-overlap", attachments: ["https://x/a.pdf"] });
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${parts[0].idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake();
+  const slowPut: GhlProviderDeps["updateStatus"] = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { ok: true };
+  };
+  const { deps } = makeDeps({ fireTrigger, updateStatus: slowPut });
+  const [a, b] = await Promise.all([drainGhlOutboundStatuses(repoBundle.repo, deps), drainGhlOutboundStatuses(repoBundle.repo, deps)]);
+  assert.equal(a.failed + b.failed, 2);
+  assert.equal(repoBundle.calls.filter((c) => c.method === "rememberNotOnWhatsapp").length, 1);
+  assert.deepEqual(fired.map((f) => f.key), ["whatsapp_not_on_whatsapp"]);
+});
+
+test("reportGhlOutcome: a row an overlapping pass already reported comes back already_reported", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  const row = seedAcceptedRow(repoBundle);
+  const { deps, statusCalls } = makeDeps();
+  assert.equal(await reportGhlOutcome(repoBundle.repo, deps, makeAccount(), row, "delivered", null), "reported");
+  assert.equal(await reportGhlOutcome(repoBundle.repo, deps, makeAccount(), row, "failed", "late"), "already_reported");
+  assert.equal(statusCalls.length, 2, "the PUT itself is idempotent and still sent");
+  assert.equal(repoBundle.rows.get(row.id)!.reportedStatus, "delivered", "the first stored status stands");
+});
+
+test("triggers: a throwing fire never changes the status drain result", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const row = seedAcceptedRow(repoBundle);
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake("throw");
+  const { deps, statusCalls } = makeDeps({ fireTrigger });
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, deps);
+  assert.equal(result.failed, 1);
+  assert.equal(result.reportFailed, 0);
+  assert.equal(fired.length, 1);
+  assert.equal(statusCalls.length, 1);
+});
+
+test("triggers: with the flag off the real helper posts nothing anywhere", async () => {
+  const saved = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const realFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  globalThis.fetch = (async () => { fetchCalls++; throw new Error("unexpected fetch"); }) as typeof fetch;
+  try {
+    const repoBundle = createFakeRepo([makeAccount()]);
+    repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+    const row = seedAcceptedRow(repoBundle);
+    repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+    const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps().deps); // no fireTrigger: the real helper
+    assert.equal(result.failed, 1);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+    else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
+  }
+});
+
+test("triggers: flag off means no phone read and no fire for the status drain", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const row = seedAcceptedRow(repoBundle, { pendingText: "x" });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const fired: unknown[] = [];
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger: async (...a) => { fired.push(a); } }).deps);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(fired, []);
+  assert.equal(repoBundle.calls.filter((c) => c.method === "getTenantPhone").length, 0);
+});
+
+test("triggers: a failed fire in the status drain is contained and later fires are skipped", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  for (let i = 0; i < 3; i++) {
+    const row = seedAcceptedRow(repoBundle, { pendingText: `t${i}` });
+    repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  }
+  const { fired, fireTrigger } = triggerFake("throw");
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
+  assert.equal(result.failed, 3);
+  assert.equal(fired.length + result.triggersSkipped, 3);
+  assert.ok(result.triggersSkipped >= 1);
+});
+
+test("triggers: number lookups are memoised per pass in the status drain", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  for (let i = 0; i < 3; i++) {
+    const row = seedAcceptedRow(repoBundle);
+    repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  }
+  const { fired, fireTrigger } = triggerFake();
+  await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
+  assert.equal(fired.length, 3);
+  assert.equal(repoBundle.calls.filter((c) => c.method === "getTenantPhone").length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// SMS fallback A: remember contacts who aren't on WhatsApp.
+// ---------------------------------------------------------------------------
+
+const MEMORY_KEY = `${LOCATION_ID}:+447700900123`;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+test("fallback: not_on_whatsapp is remembered for 30 days", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const row = seedAcceptedRow(repoBundle, { pendingText: "hi" });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const before = Date.now();
+  await drainGhlOutboundStatuses(repoBundle.repo, makeDeps().deps);
+  const until = Date.parse(repoBundle.notOnWhatsapp.get(MEMORY_KEY) ?? "");
+  assert.ok(until >= before + 30 * DAY_MS && until <= Date.now() + 30 * DAY_MS);
+});
+
+test("fallback: a group row's not_on_whatsapp is not remembered", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const row = seedAcceptedRow(repoBundle, { toPhone: null });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  await drainGhlOutboundStatuses(repoBundle.repo, makeDeps().deps);
+  assert.equal(repoBundle.notOnWhatsapp.size, 0);
+});
+
+test("fallback: remembered contact is refused fast without a bridge call and fires the trigger", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  const { fired, fireTrigger } = triggerFake();
+  const { deps, deferred, sendCalls, statusCalls } = makeDeps({ fireTrigger });
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor({ message: "see you at 3" }), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.notOnWhatsapp });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notOnWhatsapp);
+  assert.equal([...repoBundle.rows.values()][0].sendState, "refused");
+  assert.equal(deferred.length, 1, "the fire is handed to defer, not dropped");
+  await Promise.all(deferred.map((fn) => fn()));
+  assert.deepEqual(fired, [
+    { locationId: LOCATION_ID, key: "whatsapp_not_on_whatsapp", payload: { number: "+447700900999", numberLabel: null, contactId: "ghl-contact-1", message: "see you at 3" } },
+  ]);
+});
+
+test("fallback: a remembered contact is refused fast even with attachments", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  const { fired, fireTrigger } = triggerFake();
+  const { deps, deferred, sendCalls, sendAttachmentCalls } = makeDeps({ fireTrigger });
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor({ message: "pic", attachments: ["https://x/a.pdf"] }), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.notOnWhatsapp });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(sendAttachmentCalls.length, 0);
+  await Promise.all(deferred.map((fn) => fn()));
+  assert.equal(fired.length, 1);
+});
+
+test("fallback: an expired memory sends normally", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() - 1000).toISOString());
+  const { deps, sendCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+});
+
+test("fallback: opted-out contact: STOP refusal wins, no fallback trigger", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  repoBundle.optOuts.add(`${TENANT_ID}:+447700900123`);
+  const { fired, fireTrigger } = triggerFake();
+  const { deps, deferred, sendCalls } = makeDeps({ fireTrigger });
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOut });
+  assert.equal(sendCalls.length, 0);
+  await Promise.all(deferred.map((fn) => fn()));
+  assert.deepEqual(fired, []);
+});
+
+test("fallback: memory read error fails open", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.memory.readFails = true;
+  const { deps, sendCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+});
+
+test("fallback: group sends ignore the memory", async () => {
+  const bundle = groupRepo();
+  bundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  const { deps, sendCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  assert.deepEqual(out, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.equal(bundle.calls.some((c) => c.method === "isRememberedNotOnWhatsapp"), false);
+});
+
+test("fallback: an app-originated send to a remembered contact is refused too", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repoBundle.repo, deps, { account: makeAccount(), ...APP_INPUT });
+  assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.notOnWhatsapp });
+  assert.equal(sendCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// SMS fallback B: sendGhlSms (POST /conversations/messages, type SMS).
+// ---------------------------------------------------------------------------
+
+test("sendGhlSms: posts type SMS, the contact and the text with the location token and the conversations Version", async () => {
+  const { result, requests } = await withCapturedFetch(
+    async () => jsonResponse(201, { conversationId: "conv-1", messageId: "m-1" }),
+    () => sendGhlSms("loc-token", { contactId: "contact-9", message: "Your class is at 6pm" })
+  );
+  assert.deepEqual(result, { ok: true, messageId: "m-1" });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://services.leadconnectorhq.com/conversations/messages");
+  assert.equal(requests[0].method, "POST");
+  assert.equal(requests[0].headers.authorization, "Bearer loc-token");
+  assert.equal(requests[0].headers["content-type"], "application/json");
+  assert.equal(requests[0].headers.version, "2021-04-15");
+  assert.deepEqual(requests[0].body, { type: "SMS", contactId: "contact-9", message: "Your class is at 6pm" });
+});
+
+test("sendGhlSms: a rejection comes back with its status and logs no text", async () => {
+  const logged: string[] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
+  try {
+    const { result } = await withCapturedFetch(
+      async () => jsonResponse(422, { message: "echo of Secret text 123" }),
+      () => sendGhlSms("loc-token", { contactId: "contact-9", message: "Secret text 123" })
+    );
+    assert.deepEqual(result, { ok: false, status: 422 });
+  } finally {
+    console.error = realError;
+  }
+  assert.ok(logged.length > 0);
+  assert.ok(logged.every((l) => !l.includes("Secret text") && !l.includes("contact-9") && !l.includes("loc-token")));
+});
+
+test("sendGhlSms: a network error or timeout never throws and has no status", async () => {
+  for (const make of [
+    () => Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } }),
+    () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }),
+  ]) {
+    const result = await withStubbedFetch(
+      async () => {
+        throw make();
+      },
+      () => sendGhlSms("loc-token", { contactId: "contact-9", message: "hi" })
+    );
+    assert.deepEqual(result, { ok: false, status: null });
+  }
+});
+
+test("sendGhlSms: the request is bounded by a 5 s timeout signal", async () => {
+  let signal: AbortSignal | null | undefined;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    signal = init?.signal;
+    return jsonResponse(200, {});
+  }) as typeof fetch;
+  try {
+    await sendGhlSms("loc-token", { contactId: "contact-9", message: "hi" });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(signal instanceof AbortSignal);
+});
+
+test("isSmsFallbackEnabled: only exactly \"true\" switches it on", () => {
+  const saved = process.env.GHL_SMS_FALLBACK_ENABLED;
+  try {
+    for (const [value, expected] of [[undefined, false], ["", false], ["TRUE", false], ["1", false], ["true", true]] as const) {
+      if (value === undefined) delete process.env.GHL_SMS_FALLBACK_ENABLED;
+      else process.env.GHL_SMS_FALLBACK_ENABLED = value;
+      assert.equal(isSmsFallbackEnabled(), expected, String(value));
+    }
+  } finally {
+    if (saved === undefined) delete process.env.GHL_SMS_FALLBACK_ENABLED;
+    else process.env.GHL_SMS_FALLBACK_ENABLED = saved;
+  }
+});
+
+test("sendGhlSms: a success without a messageId (or without JSON) still succeeds, with messageId null", async () => {
+  for (const respond of [
+    async () => jsonResponse(200, { conversationId: "conv-1" }),
+    async () => jsonResponse(200, { messageId: "" }),
+    async () => jsonResponse(200, { messageId: 42 }),
+    async () => new Response("ok", { status: 200 }),
+  ]) {
+    const { result } = await withCapturedFetch(respond, () => sendGhlSms("loc-token", { contactId: "contact-9", message: "hi" }));
+    assert.deepEqual(result, { ok: true, messageId: null });
+  }
 });

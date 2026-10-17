@@ -70,6 +70,39 @@ two are filled in a second pass once both domains exist. That is expected.
    table, the updated_at triggers, RLS (no policies; everything is
    service-role only) and the two storage buckets (`wa-media`, private, and
    `client-logos`).
+   Then run each later file in `supabase/migrations/` in number order
+   (`0002_accounts.sql`, `0003_activation_cap.sql`, `0004_reliability.sql`,
+   `0005_whatsapp_sessions_phone_linked_at.sql`, `0006_ghl_location_numbers.sql`,
+   `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`,
+   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, `0011_message_events.sql`, `0012_workflow_triggers.sql`, `0013_keep_pending_text_until_reported.sql`, `0014_sms_fallback.sql`, `0015_function_search_path.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
+   every logout, so 0005 must be applied before the bridge is deployed.
+   **Status, 17 Oct 2026:** 0001 to 0015 are applied to the live Supabase project `Wa-Connector` (cvqaghghuyxolpcfuzrw) and its schema was checked against these files. 0002 went in as three parts (`0002a`–`0002c`) and skipped its `update profiles` line, which was a no-op on the empty table.
+   Likewise apply 0001 to 0015 in order before deploying the bridge and the
+   app: 0002 to 0004 add accounts, activation and held messages / STOP
+   opt-outs (see `docs/GO-LIVE-ACCOUNTS.md`), 0006 the several-numbers
+   tables, 0007 the group tables, 0008 the `whatsapp_messages.group_jid`
+   column the bridge and app now use, and 0009 the group action log and the
+   per-account invite message used by group create and manage, and 0010 the
+   missed-call and read-receipt columns plus the SQL function
+   `ghl_outbound_awaiting_read` (service_role only). The bridge and app flags
+   that use 0010 are off by default; see "Missed calls and read receipts" in
+   Part 5. 0011 adds the event columns on `whatsapp_inbound_messages` and the two
+   per-sub-account switches on `ghl_accounts` (see "Edits, reactions, deletes
+   and quoted replies" in Part 5). 0012 adds the workflow-trigger
+   subscriptions, the "not on WhatsApp" memory and the trigger columns on
+   `whatsapp_sessions`; 0013 is a comment-only change. See "Workflow triggers"
+   in Part 5. 0014 adds the SMS fallback: the per-sub-account switch and
+   loop-guard block on `ghl_accounts`, the once-per-message column on
+   `ghl_outbound_messages` and the `ghl_sms_fallback_echoes` table. See "SMS
+   fallback (GHL)" in Part 5.
+   The app build must not go live before 0006 to 0014 are applied. Without
+   them every GHL outbound message fails before it is recorded, the GHL
+   inbound drain fails on every pass (no replies reach GHL), and a GHL
+   install (OAuth) errors after it has already written the account. The
+   bridge tolerates running before them: one-to-one sending and receiving
+   are unaffected, and groups fail closed (no group traffic in or out until
+   the migrations are in and the enabled-group set loads). Group create and add
+   refuse until 0009 is in.
 3. **Project Settings → API**. Note three values for Vercel and Railway:
    - Project URL → `NEXT_PUBLIC_SUPABASE_URL` (Vercel), `SUPABASE_URL` (Railway)
    - `anon` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY` (Vercel)
@@ -440,7 +473,56 @@ and Railway.
 First light passes when all six steps work. Then, and only then, onboard real
 locations.
 
+### Group creation and management: checks before go-live
+
+These need a real phone and a real GHL sub-account, so they cannot run in CI.
+Do them after migration 0009 is applied and before a coach uses the feature.
+
+- [ ] **Sandbox script.** Run `services/whatsapp-bridge/scripts/group-sandbox.ts`
+  on a spare number, never a client's. It prints a pass or fail line per step.
+  Record in the spec's Decisions log whether creating an empty group works.
+- [ ] **Invites in GHL.** Only invites that WhatsApp accepted are posted into the
+  contact's GHL conversation, with `POST /conversations/messages/outbound`.
+  Held or queued invites are not. The request body
+  (`type: "SMS"`, `contactId`, `conversationProviderId`, `message`) is
+  unverified. Send one real invite and check that the message shows once in the
+  conversation, that GHL does not try to deliver it again through our provider,
+  and whether `conversationId` or `altId` is needed.
+- [ ] **Tag filter.** Check the `POST /contacts/search` tag filter shape
+  (`filters`, field `tags`, operator `contains`) returns the right contacts for
+  a tag. The app rechecks tags itself, but a wrong filter returns nothing.
+- [ ] **Inside GHL.** Open **Create group** and **Manage** in a real GHL
+  sub-account, not only in a plain browser. Create a group, invite a contact,
+  rename it, copy and reset the link, and leave.
+- [ ] **Limits.** A create or add that reached WhatsApp is never refunded. A
+  repeated create with the same `requestId` within 10 minutes returns the same
+  group and sends no invites again. Check one repeat by hand.
+
 ---
+
+### Missed calls and read receipts: checks before go-live
+
+Apply migration 0010 first. Three flags, all off by default:
+
+- `WA_MISSED_CALLS_ENABLED` (Railway, bridge)
+- `WA_READ_RECEIPTS_ENABLED` (Railway, bridge)
+- `GHL_READ_RECEIPTS_ENABLED` (Vercel, app)
+
+Leave them off until the checks in
+`docs/superpowers/specs/2026-10-17-calls-receipts-real-device-check.md` pass.
+Turn on the bridge flags first, then the app flag, and only if GHL accepted
+`read` in the sandbox.
+
+Rules to know once missed calls are on:
+
+- A missed call more than 6 hours old when the app's drain reaches it is not
+  posted to GHL (it is closed as `missed_call_stale`), so a reconnect after a
+  long outage never sends a very late text-back.
+- A missed call does not count as the caller having messaged the number, so it
+  never makes them eligible for a direct group add.
+- A GHL text-back workflow should match a body that *contains* `📞 Missed`, not
+  one that starts with it: on a multi-number location the body starts with the
+  number's label.
 
 ## Part 6 — Moving a sub-account from the FitClosers app to this one
 
@@ -454,6 +536,137 @@ live sessions fight over one WhatsApp account.
    WhatsApp → Linked devices → remove the FitClosers entry (or log out from
    the old app's panel). Do not leave both linked "until later".
 4. Re-run the send/reply checks from Part 5 on that location.
+
+
+---
+
+### Edits, reactions, deletes and quoted replies: checks before go-live
+
+Apply migration 0011 first. Without it the app's inbound drain fails on every
+pass, because it selects 0011's new columns. With the flag on and 0011
+missing, the bridge only fails to insert event rows. One flag, off by default:
+
+- `WA_INBOUND_EVENTS_ENABLED` (Railway, bridge)
+
+Deploy order:
+
+1. Apply migration 0011.
+2. Deploy the app.
+3. Only then set `WA_INBOUND_EVENTS_ENABLED=true` on the bridge.
+
+Never roll the app back to a build without message events while the flag is
+on: an older app posts reactions as plain messages. Turn the flag off first.
+
+Leave it off until the event checks in
+`docs/superpowers/specs/2026-10-17-voice-notes-real-device-check.md` pass.
+
+Rules to know once it is on:
+
+- Edits are posted to GHL. Reactions and deletes are not, unless the
+  sub-account switches them on. The two switches are in the GHL embed
+  ("Show reactions in GHL", "Show deleted-message notices in GHL"), apply to
+  that sub-account only, and are
+  off by default. Anything posted as a message fires GHL's "Customer
+  replied" workflows.
+- An edit goes through the same STOP and START keyword check as a new
+  message, so an edit to STOP opts the contact out and an edit to START opts
+  them back in. A quoted reply is checked on its reply text, so a quoted
+  reply of STOP opts out too.
+- Event rows never count as the contact having messaged the number, so they
+  never make them eligible for a direct group add.
+- A quoted text reply starts with the quote on its own line. A quoted media
+  reply is unchanged.
+
+### Workflow triggers (GHL): checks before go-live
+
+Apply migrations 0012 and 0013 first (0001 to 0013 apply on Postgres 16).
+Two app settings (Vercel):
+
+- `GHL_WORKFLOW_WEBHOOK_SECRET`: required for the subscription route. Unset
+  means the route answers 503. The same value goes in the portal as the static
+  header `X-PingWren-Secret`.
+- `GHL_REQUEST_WORKFLOWS_SCOPE`: off by default. Only `true` makes the install
+  ask for `workflows.readonly`. It does not turn firing on.
+- `GHL_WORKFLOW_TRIGGERS_ENABLED`: off by default. Only `true` turns firing on.
+  With it off, subscriptions are still stored and nothing is sent to GHL. With
+  it off (and `GHL_SMS_FALLBACK_ENABLED` off too), an accepted message's text
+  is cleared at once (it is only kept for the "not on WhatsApp" trigger and the
+  SMS fallback).
+
+Turn it on in this order: enable the `workflows.readonly` scope in the
+developer portal, set `GHL_REQUEST_WORKFLOWS_SCOPE=true`, re-authorise existing
+installs, run the sandbox check's section A (subscriptions), then set
+`GHL_WORKFLOW_TRIGGERS_ENABLED=true`. Asking for a scope the portal hasn't
+enabled breaks the install, so never set the scope setting first.
+
+`whatsapp_message_read` also needs `GHL_READ_RECEIPTS_ENABLED=true` and the
+bridge's `WA_READ_RECEIPTS_ENABLED=true`, and fires from the hourly cron.
+`whatsapp_disconnected` means PingWren's connection to the number has been down
+5 minutes; a phone being offline does not drop a linked device.
+
+The 30-day "not on WhatsApp" memory applies even with the firing flag off: a
+contact who joins WhatsApp later stays refused until they message the number or
+30 days pass.
+Portal entries, the Subscription URL and the sample JSON are in
+`docs/GHL-WORKFLOW-TRIGGERS-SETUP.md`. Each trigger execution costs the
+customer $0.01 and needs LC Premium Triggers & Actions.
+
+Leave the flag off until the sandbox check in
+`docs/superpowers/specs/2026-10-17-workflow-triggers-sandbox-check.md` passes.
+Firing `targetUrl` is undocumented by GHL, so the method is unverified.
+
+### SMS fallback (GHL): checks before go-live
+
+When a contact isn't on WhatsApp, PingWren can ask GHL to send the same text
+as an SMS on that contact (`POST /conversations/messages`, `type: "SMS"`),
+through the sub-account's own SMS provider, so the SMS cost is the
+sub-account's. Apply migration 0014 first (0001 to 0014 apply on Postgres 16).
+
+- `GHL_SMS_FALLBACK_ENABLED`: off by default. Only `true` turns it on, for
+  every sub-account that has not switched it off. Leave it off until the
+  sandbox check's section D
+  (`docs/superpowers/specs/2026-10-17-workflow-triggers-sandbox-check.md`)
+  shows which provider sends the SMS.
+- Per sub-account: the embed's "Send as SMS when a contact isn't on WhatsApp"
+  switch (`ghl_accounts.sms_fallback_enabled`), on unless the sub-account
+  turns it off.
+- It falls back where PingWren learns the contact isn't on WhatsApp: the
+  status drain, and a send refused at once by the 30-day memory. Once per
+  message, and at most one fallback SMS per contact per 10 minutes (a second
+  message in that window fires the trigger instead). Text only: attachments
+  and their links are not sent; a message with no text gets no SMS. Group
+  sends never fall back. A contact who sent STOP gets nothing, and no trigger,
+  whether or not the fallback is on. If the opt-out read fails, nothing is
+  sent or fired (the drain retries the message next pass).
+- When the SMS was sent, GHL shows the original as failed with `Not on
+  WhatsApp — sent as SMS instead`, and the `whatsapp_not_on_whatsapp` trigger
+  is not fired (so a workflow doesn't send a second SMS). When it wasn't sent,
+  the reason stays `recipient has no WhatsApp account` and the trigger fires
+  as before.
+- **Loop guard.** PingWren may be the sub-account's own SMS provider, so GHL
+  may hand our SMS straight back to PingWren. Before each SMS, PingWren
+  records a pending echo for 10 minutes: sub-account, contact, the original
+  message, the sha256 of the normalised text (never the text) and, once GHL's
+  send answers, GHL's message id. The webhook matches on that id when it is
+  known, else on the hash: once the send succeeded, or within 30 seconds while
+  it may still be in flight. A send GHL rejected (or never attempted for want
+  of a token) drops its echo, so a coach's retry isn't taken for it; one that
+  hit a network error keeps it. The hourly cron purges expired echoes. If our SMS
+  comes back through the provider webhook, it is refused with `This sub-account sends SMS through PingWren, so
+  the SMS fallback can't be used — not sent`, never sent over WhatsApp, and
+  the fallback is turned off for that sub-account
+  (`ghl_accounts.sms_fallback_blocked_at`). The embed then says "Turned off:
+  this sub-account's SMS goes through PingWren. Connect another SMS provider
+  (LC Phone or Twilio) in GHL, then switch it back on." Switching it back on
+  clears the block. The original message is corrected: GHL is told
+  `recipient has no WhatsApp account` (if it wasn't reported yet) and the
+  `whatsapp_not_on_whatsapp` trigger fires for it. An echo the guard misses
+  costs one hop, never a loop (the 10-minute cooldown stops a second SMS).
+- **Known limit.** Until GHL's send has answered with a message id, the guard
+  matches on the text. If a coach sends the same text to the same contact by
+  hand in that window (within 10 minutes of a fallback SMS whose send gave no
+  id), it is treated as the echo: refused, and the fallback switches off for
+  that sub-account. Accepted risk; switch it back on in the embed.
 
 ---
 
@@ -488,12 +701,17 @@ live sessions fight over one WhatsApp account.
 | `GHL_SSO_SHARED_SECRET` | Yes for the Custom Page | unset (embed off) | Decrypts GHL's SSO payload |
 | `GHL_EMBED_FRAME_ANCESTORS` | No | unset (GHL's own hosts only) | Extra `frame-ancestors` origins for whitelabel domains |
 | `GHL_SYNC_DND` | No | `false` | Exactly `true` mirrors STOP/START onto the GHL contact's WhatsApp and SMS DND (`PUT /contacts/{id}` `dndSettings`; verify at first go-live). Failures are logged and never block the opt-out |
+| `GHL_READ_RECEIPTS_ENABLED` | No | `false` | Exactly `true` lets the cron report `read` to GHL for messages the bridge saw read. Turn on only after the real-device check |
+| `GHL_WORKFLOW_WEBHOOK_SECRET` | For triggers | none | Shared secret for `POST /api/webhooks/ghl-trigger-subscription`, sent by GHL as `X-PingWren-Secret`. Unset means the route answers 503 |
+| `GHL_REQUEST_WORKFLOWS_SCOPE` | No | `false` | Exactly `true` adds `workflows.readonly` to the OAuth install. Set only after the scope is enabled in the developer portal, then re-authorise |
+| `GHL_WORKFLOW_TRIGGERS_ENABLED` | No | `false` | Exactly `true` fires WhatsApp events to GHL workflow triggers. Turn on only after the sandbox check, and after `GHL_REQUEST_WORKFLOWS_SCOPE` |
+| `GHL_SMS_FALLBACK_ENABLED` | No | `false` | Exactly `true` sends a message's text as an SMS through GHL when the contact isn't on WhatsApp (each sub-account can switch it off). Turn on only after the sandbox check's section D. Needs migration 0014 |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Supabase Storage bucket for inbound media; must match the bridge |
 | `WA_MEDIA_OUTBOUND_ENABLED` | No | `false` | Web-app side media switch; see the flip order below |
 | `WA_MEDIA_SIGNED_URL_TTL_DAYS` | No | `90` | Lifetime of signed media URLs |
 | `NODE_ENV` | Set by Vercel | n/a | Not an operator setting |
 
-That is 22 foundation names (the `BRAND_*` website variables above are extra): 21 from `src/` (including `NODE_ENV`) plus
+That is 26 foundation names (the `BRAND_*` website variables above are extra): 25 from `src/` (including `NODE_ENV`) plus
 `GHL_EMBED_FRAME_ANCESTORS` from `next.config.ts`.
 
 **Media switches, flip order.** Both media features default off and stay off
@@ -519,6 +737,11 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_SEND_MIN_GAP_MS` | No | `45000` | Minimum gap between sends on one number |
 | `WA_SEND_JITTER_MS` | No | `30000` | Random jitter added to the gap |
 | `WA_DAILY_CAP` | No | `150` | Max sends per number per UTC day |
+| `WA_WARMUP_ENABLED` | No | `false` | Ramp a newly linked number's daily cap: 20/day for days 0-2, 50 for 3-6, 100 for 7-13, then `WA_DAILY_CAP`. Leave off while moving established numbers across |
+| `WA_GROUP_CREATE_DAILY` | No | `3` | Groups one number may create per UTC day. Attempts count; failed creates are not refunded |
+| `WA_GROUP_ADD_DAILY` | No | `50` | People one number may add directly per UTC day. Attempts count; not refunded |
+| `WA_TYPING_INDICATOR_ENABLED` | No | `true` | Show "typing…" before each outbound text |
+| `WA_TYPING_MAX_MS` | No | `4000` | Longest typing window per message (ms) |
 | `WA_LOCK_HEARTBEAT_MS` | No | `10000` | Session lease heartbeat |
 | `WA_LOCK_TTL_MS` | No | `30000` | Lease staleness TTL; must exceed the heartbeat |
 | `WA_SHUTDOWN_FLUSH_TIMEOUT_MS` | No | `5000` | Shutdown write-flush ceiling; 500 to 5999 |
@@ -537,9 +760,12 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_INBOUND_MEDIA_MAX_BYTES` | No | `26214400` | Inbound per-file cap |
 | `WA_INBOUND_MEDIA_PER_SENDER_DAILY` | No | `20` | Inbound media per sender per tenant per day |
 | `WA_INBOUND_MEDIA_PER_TENANT_DAILY` | No | `300` | Inbound media per tenant per day |
+| `WA_VOICE_TRANSCODE_ENABLED` | No | `false` | Send non-opus GHL audio as voice notes via ffmpeg. Turn on only after `ffmpeg -version` works in a Railway shell; see the bridge README, "Voice notes" |
+| `WA_MISSED_CALLS_ENABLED` | No | `false` | Log calls that ring out unanswered as missed-call messages. Off until the real-device check passes |
+| `WA_READ_RECEIPTS_ENABLED` | No | `false` | Record delivered and read times for one-to-one messages. Off until the real-device check passes |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Storage bucket for inbound media |
 
-That is 28 variables, all read in `config.ts`.
+That is 34 variables, all read in `config.ts`.
 
 ---
 
@@ -556,7 +782,12 @@ launch publicly until each of these is built or the copy is changed to match:
   behind them, so order is kept. Picture and file messages are held the same
   way: the whole message waits and is released text first, then attachments in
   order; a drop part-way keeps the remaining parts held and no part sends twice.
-- **(b) STOP opt-outs.** Built — `src/lib/opt-out.ts` + `src/lib/ghl-inbound.ts`. Whole-message, case-insensitive keywords. Opt-out: STOP, STOPALL, STOP ALL, UNSUBSCRIBE, END, QUIT, OPT OUT, OPTOUT (CANCEL is deliberately excluded: it cancels appointments). Opt-in: START, UNSTOP, SUBSCRIBE, OPT IN, OPTIN. The reply is still delivered to GoHighLevel.
+  With several numbers per sub-account, a message is held on the number it was
+  routed to (the contact's sticky number, the default, or the group's number)
+  and is never sent from another number instead. A number that was never
+  linked is refused at once (a non-default one with "The WhatsApp number this
+  contact uses is disconnected — reconnect it to reply").
+- **(b) STOP opt-outs.** Built — `src/lib/opt-out.ts` + `src/lib/ghl-inbound.ts`. Whole-message, case-insensitive keywords. Opt-out: STOP, STOPALL, STOP ALL, UNSUBSCRIBE, END, QUIT, OPT OUT, OPTOUT (CANCEL is deliberately excluded: it cancels appointments). Opt-in: START, UNSTOP, SUBSCRIBE, OPT IN, OPTIN. The reply is still delivered to GoHighLevel. A STOP is stored on the number it arrived on but blocks sends from every number of that sub-account; a START on any of them clears it on all of them; removing a number carries its opt-outs onto the remaining default. A member typing STOP inside an enabled WhatsApp group records nothing, and group sends are never blocked by an opt-out (the owner opted the group in).
 - **Known limits of (a) and (b).**
   - A message already inside the bridge's paced queue when a STOP lands still
     sends. The opt-out applies from the next send on every path.
@@ -569,7 +800,7 @@ launch publicly until each of these is built or the copy is changed to match:
 
 Also before launch:
 
-- Confirm the launch prices in `src/lib/pricing.ts` (volume pricing in GBP: £14.99 a month per number below 10 numbers, £7.99 a month for every number at 10 or more). There is no price env var any more. See GO-LIVE-ACCOUNTS.md Part 2.
+- Confirm the launch prices in `src/lib/pricing.ts` (per activated sub-account, up to 3 WhatsApp numbers included on every tier, decided 17 Oct 2026; volume pricing in GBP: £9.99 a month per sub-account for 1 to 10 sub-accounts, £7.99 each for 11 to 24, £5.99 each for 25 or more, the tier reached applying to every sub-account). There is no price env var any more. The Stripe price must be a recurring, monthly, **volume-tiered** price with exactly these three tiers (1 to 10 at 999p, 11 to 24 at 799p, 25 and above at 599p), and must be changed whenever `src/lib/pricing.ts` changes. See GO-LIVE-ACCOUNTS.md Part 2.
 - Run a trademark search for "PingWren".
 
 ---

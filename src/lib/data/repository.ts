@@ -2,7 +2,7 @@
  * The data-access contract for the standalone GHL WhatsApp provider.
  *
  * Copied from PortalHub's `Repository`/`WebhookRepository` (src/lib/data/index.ts),
- * reduced to the 27 methods (plus the 16 accounts/billing methods of migration 0002) the provider slice uses. There is exactly one
+ * reduced to the 27 original methods (plus the 16 accounts/billing methods of migration 0002, and the location-number methods) the provider slice uses. There is exactly one
  * implementation (service-role Supabase, `SupabaseGhlRepository`) and no
  * user-session repo: every method here is service-role by design.
  */
@@ -23,12 +23,17 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  SmsFallbackEcho,
+  LocationNumber,
   LocationStats,
   Role,
   Scope,
+  WhatsappGroup,
   WhatsappInboundMessage,
   WhatsappSessionSummary,
+  TriggerSessionRow,
 } from "@/lib/types";
+import type { TriggerKey } from "@/lib/ghl-trigger-keys";
 
 export interface GhlRepository {
   /**
@@ -58,13 +63,143 @@ export interface GhlRepository {
   // -------------------------------------------------------------------------
 
   /**
-   * ONE location, TOKENS INCLUDED, keyed by `whatsapp_tenants.id` rather than
-   * `location_id` — `ghl_accounts.tenant_id` is `unique`, so this is exactly
-   * as safe a lookup as `getGhlAccountByLocationId`, just keyed the other
-   * direction. Never call this from a page, a server action's caller, or any
-   * client component — same rule as `getGhlAccountByLocationId`.
+   * ONE location, TOKENS INCLUDED, keyed by ANY of the location's numbers'
+   * `whatsapp_tenants.id` (resolved through `ghl_location_numbers`, any slot),
+   * so an inbound row from any number finds its location. The returned
+   * `GhlAccount.tenantId` is still `ghl_accounts.tenant_id` (the DEFAULT
+   * number); callers that need the specific number use the inbound row's own
+   * tenant id. `ghl_location_numbers.tenant_id` is its primary key, so this is
+   * exactly as safe a lookup as `getGhlAccountByLocationId`. Never call this
+   * from a page, a server action's caller, or any client component — same rule
+   * as `getGhlAccountByLocationId`.
    */
   getGhlAccountByTenantId(tenantId: string): Promise<GhlAccount | null>;
+
+  // -------------------------------------------------------------------------
+  // Several WhatsApp numbers per location (migration 0006): up to 3
+  // `ghl_location_numbers` rows per location, one `whatsapp_tenants` row each,
+  // plus sticky per-contact routing (`ghl_contact_numbers`). All service-role;
+  // `LocationNumber` carries a tenant id and must never reach a browser.
+  // -------------------------------------------------------------------------
+
+  /** The location's numbers, ordered by slot. */
+  listLocationNumbers(locationId: string): Promise<LocationNumber[]>;
+
+  /** One number by its slot, or null. */
+  getLocationNumberBySlot(locationId: string, slot: number): Promise<LocationNumber | null>;
+
+  /**
+   * Mint a `whatsapp_tenants` row (kind `ghl_location`) and attach it at the
+   * lowest free slot. `limit` when all three slots are taken (a unique-violation
+   * race is retried once). The first number of a location becomes the default.
+   */
+  addLocationNumber(
+    locationId: string,
+    label: string | null
+  ): Promise<{ ok: true; number: LocationNumber } | { ok: false; reason: "limit" }>;
+
+  /**
+   * Delete a number's `ghl_contact_numbers` and `ghl_location_numbers` rows
+   * (FIRST: the number row has no ON DELETE on its tenant) and switch its
+   * `whatsapp_groups` off (`enabled = false`), promoting the
+   * lowest remaining slot to default when the default is removed. Does NOT
+   * delete the `whatsapp_tenants` row: the caller logs the bridge session out
+   * of `removedTenantId` first.
+   */
+  removeLocationNumber(
+    locationId: string,
+    slot: number
+  ): Promise<{ ok: true; removedTenantId: string } | { ok: false; reason: "last_number" | "not_found" }>;
+
+  /** Make `slot` the location's default (and mirror it to `ghl_accounts.tenant_id`). False when the slot does not exist. */
+  setDefaultLocationNumber(locationId: string, slot: number): Promise<boolean>;
+
+  /** Set (or clear, with `null`) one number's label — already trimmed and at most 40 characters (0006's CHECK). False when the slot does not exist. */
+  setLocationNumberLabel(locationId: string, slot: number, label: string | null): Promise<boolean>;
+
+  /** The tenant a contact most recently messaged on, or null (fall back to the default number). */
+  getStickyTenant(locationId: string, ghlContactId: string): Promise<string | null>;
+
+  /** Upsert the contact's sticky number, overwriting only when `receivedAtIso` is strictly newer. */
+  recordInboundForStickiness(
+    locationId: string,
+    ghlContactId: string,
+    tenantId: string,
+    receivedAtIso: string
+  ): Promise<void>;
+
+  // -------------------------------------------------------------------------
+  // Opt-in WhatsApp groups (migration 0007): `whatsapp_groups`, one row per
+  // (number, group). Nothing is forwarded to GHL for a group until its row is
+  // `enabled`; `ghl_contact_id` is the one GHL contact standing for the group.
+  // All service-role; a `WhatsappGroup` carries a tenant id.
+  // -------------------------------------------------------------------------
+
+  /** Every group row stored for one number (tenant), enabled or not, ordered by name. */
+  listWhatsappGroups(tenantId: string): Promise<WhatsappGroup[]>;
+
+  /**
+   * Switch a group on or off for one number — upsert on `(tenant_id,
+   * group_jid)`, so the first switch-on creates the row. `groupJid` must match
+   * 0007's CHECK (`^[0-9]+(-[0-9]+)?@g\.us$`) or this throws before any
+   * write; `name` is trimmed to 100 characters. Switching on also clears
+   * `left_at`. Never touches `ghl_contact_id`, so a re-enabled group posts
+   * into its existing GHL contact. The caller asks the bridge to reload its
+   * enabled set afterwards (`refreshWhatsappGroups`).
+   */
+  setWhatsappGroupEnabled(tenantId: string, groupJid: string, name: string, enabled: boolean): Promise<void>;
+
+  /**
+   * Record a group this app just created: upsert on `(tenant_id, group_jid)`
+   * with `enabled = true, created_by_us = true, left_at = null`. `groupJid`
+   * must be a well-formed WhatsApp group id or this throws before any write;
+   * `name` is trimmed to 100 characters. The caller asks the bridge to reload
+   * its enabled set afterwards (`refreshWhatsappGroups`).
+   */
+  recordCreatedWhatsappGroup(tenantId: string, groupJid: string, name: string): Promise<void>;
+
+  /** Update the stored name of an existing group row (trimmed to 100 characters). No row, no write. */
+  renameWhatsappGroup(tenantId: string, groupJid: string, name: string): Promise<void>;
+
+  /** The sub-account's own group invite message (`ghl_accounts.group_invite_template`), or null when none is set (callers then use the default wording). */
+  getGroupInviteTemplate(locationId: string): Promise<string | null>;
+
+  /** Set (or with null, clear) the sub-account's group invite message. The caller validates it ({link} present, at most 500 characters); the column's CHECK is the backstop. */
+  setGroupInviteTemplate(locationId: string, template: string | null): Promise<void>;
+
+  /** Set the sub-account's reaction / deleted-message switches; an omitted key is left unchanged. The caller confirms the row exists first (a bare update). */
+  setMessageEventSettings(locationId: string, settings: { showReactions?: boolean; showDeletes?: boolean }): Promise<void>;
+
+  /**
+   * True when this phone has sent the number at least one 1:1 message (a
+   * non-group `whatsapp_inbound_messages` row) in the last 90 days — the same
+   * query as the bridge's `hasInboundFromPhone`. Marks a contact "can be added
+   * directly" in the UI; the bridge still decides at add time.
+   */
+  hasInboundFromPhone(tenantId: string, phoneE164: string): Promise<boolean>;
+
+  /** Stamp `left_at = now()` — the number is no longer in the group (the bridge's "no longer in that group" send failure). Cleared by the next `setWhatsappGroupEnabled(..., true)`. */
+  markWhatsappGroupLeft(tenantId: string, groupJid: string): Promise<void>;
+
+  /**
+   * The group a GHL contact stands for, searched across all of the
+   * location's numbers, or null when the contact is not a group contact.
+   * Returned whether or not the group is enabled, so the caller can refuse a
+   * send to a switched-off group with its fixed string. `left` is
+   * `left_at IS NOT NULL` (the number is no longer in the group), so a send
+   * to a left group can be refused with the bridge's "no longer in that
+   * group" string rather than "turned off". A group of a number since removed
+   * from the location (its tenant is no longer any location's number) comes
+   * back with `enabled: false` and `numberRemoved: true`: the caller refuses
+   * it rather than treating the contact as a phone contact.
+   */
+  getWhatsappGroupByContact(
+    locationId: string,
+    ghlContactId: string
+  ): Promise<{ tenantId: string; groupJid: string; enabled: boolean; left: boolean; numberRemoved?: boolean } | null>;
+
+  /** Store the GHL contact created for a group (the inbound drain, before it posts the group's first message). */
+  setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string): Promise<void>;
 
   // -------------------------------------------------------------------------
   // GHL custom conversation provider, Phase 1 (WAGHL replacement —
@@ -195,11 +330,15 @@ export interface GhlRepository {
 
   /**
    * Advance a ledger row's `send_state`/`send_attempts` — Phase 2's
-   * handler/drain only. IMPLEMENTATIONS MUST CLEAR `pending_text` to `null`
-   * whenever `patch.sendState` is neither `'pending_send'` nor `'held'` (a held
-   * row keeps its text so the release pass can still send it) (0070_ghl_outbound_pending_text.sql's
-   * whole contract: that column exists only for the duration a row is
-   * eligible for a bridge-send retry).
+   * handler/drain only. `pending_text` lifecycle (0070, extended by 0013):
+   * IMPLEMENTATIONS MUST CLEAR it to `null` when `patch.sendState` is
+   * `'refused'`, and MUST KEEP it for `'pending_send'`, `'held'` (the release
+   * pass still has to send it) and, only while `GHL_WORKFLOW_TRIGGERS_ENABLED`
+   * is "true", `'accepted'` (kept until the row's status is reported:
+   * `markGhlOutboundReported` clears it when it stores a status, and
+   * `clearStaleOutboundPendingText` clears one never reported within 7 days).
+   * The kept text lets a "not on WhatsApp" trigger carry the unsent text. With
+   * the flag off, the accept clears it, as before 0013.
    *
    * `refusalReason` (0071_ghl_outbound_refusal_reason.sql, adversarial-review
    * finding 3): pass this whenever `sendState: 'refused'` — the fixed reason
@@ -213,14 +352,11 @@ export interface GhlRepository {
    * cross-phase review finding 2) — this is the ONLY case that needs it: a
    * caller retrying a `pending_send` row transiently is writing back the
    * SAME state it read the row in, and a faster concurrent pass can have
-   * already moved the row past `pending_send` (to `accepted`, clearing
-   * `pending_text`) in between. An unconditional write would silently demote
-   * that row back to `pending_send` with `pending_text` left `null`
-   * (`pending_text` is only ever CLEARED by this method, never restored),
-   * producing an unrecoverable-looking row the drain would otherwise report
-   * a false `failed` for. Every OTHER `sendState` transition this method
-   * writes stays unconditional — see `src/lib/data/supabase.ts`'s
-   * implementation for the exact guard.
+   * already moved the row past `pending_send` (to `accepted`) in between. An
+   * unconditional write would silently demote that row back to `pending_send`,
+   * and the next pass would retry a send the bridge already accepted. Every
+   * OTHER `sendState` transition this method writes stays unconditional — see
+   * `src/lib/data/supabase.ts`'s implementation for the exact guard.
    *
    * `onlyIfSendState` (Review Focus 4): when set, the write also requires the
    * row's CURRENT `send_state` to equal it (0 rows affected, no error, if it
@@ -302,8 +438,30 @@ export interface GhlRepository {
    * `listUnreportedGhlOutboundMessages`'s `IS NULL` filter) untouched, so the
    * row is picked up and retried on the next drain pass instead of being
    * silently marked done despite GHL never actually hearing the outcome.
+   * When a status IS stored, the row's kept `pending_text` is cleared (0013).
+   *
+   * The write only applies while `reported_status IS NULL`, and resolves
+   * `true` only when this call changed the row. Two overlapping drains can
+   * both PUT the same status (idempotent), but only the winner gets `true`,
+   * so the "not on WhatsApp" memory and trigger happen once.
    */
-  markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundReportedStatus | null; reportError: string | null }): Promise<void>;
+  markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundReportedStatus | null; reportError: string | null }): Promise<boolean>;
+
+  /**
+   * Rows GHL already knows as `delivered`, not yet read-reported
+   * (`read_reported_at IS NULL`), created at or after `sinceIso`, whose bridge
+   * ledger row has a `read_at`; oldest first. The join is in SQL so never-read
+   * rows cannot starve the batch. Never looks at or changes `reported_status`.
+   */
+  listGhlOutboundAwaitingRead(limit: number, sinceIso: string): Promise<{ message: GhlOutboundMessage; readAt: string }[]>;
+
+  /**
+   * Stamps `read_reported_at = now()` and `read_report_error`, only while
+   * `read_reported_at IS NULL`. Resolves `true` only when this call stamped
+   * the row (an overlapping pass gets `false` and fires nothing). The row is
+   * never listed by `listGhlOutboundAwaitingRead` again.
+   */
+  markGhlOutboundReadReported(id: string, result: { readReportError: string | null }): Promise<boolean>;
 
   // -------------------------------------------------------------------------
   // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — outbound
@@ -404,6 +562,14 @@ export interface GhlRepository {
   getUnprocessedGhlInboundMessages(limit?: number): Promise<WhatsappInboundMessage[]>;
 
   /**
+   * Message events — the stored body of one inbound message, by
+   * `(tenantId, waMessageId)` (the unique pair, 0001), so a reaction can
+   * quote what it reacted to. `null` when the row is gone (inbound rows keep
+   * 90 days) or has no text body.
+   */
+  getInboundBodyByWaMessageId(tenantId: string, waMessageId: string): Promise<string | null>;
+
+  /**
    * Atomic claim — flips ONE row's `processed_at` from `null` to `now()`
    * (`update ... where id = ? and processed_at is null`) and reports whether
    * THIS call actually won that flip. Mirrors `claimAutomationSequenceRun`'s
@@ -420,7 +586,8 @@ export interface GhlRepository {
 
   /**
    * Stamp a CLAIMED GHL-tenant row's terminal outcome — `resolution` is one
-   * of `'ghl_pushed' | 'ghl_rejected' | 'ghl_push_failed' | 'ghl_push_uncertain'`
+   * of `'ghl_pushed' | 'ghl_rejected' | 'ghl_push_failed' | 'ghl_push_uncertain'
+   * | 'group_not_enabled'`
    * (free text, no CHECK — same convention as `resolveWhatsappInboundMessage`).
    * Deliberately a SEPARATE method from `resolveWhatsappInboundMessage`
    * (rather than widening that one's `resolution` union) so the coach
@@ -470,6 +637,17 @@ export interface GhlRepository {
    * to delete the second time round).
    */
   purgeOldWhatsappInboundMessages(olderThanIso: string): Promise<number>;
+
+  /**
+   * Data minimisation (0013): clears `pending_text` on `accepted` outbound rows
+   * created before `olderThanIso` that were never reported (`reported_status IS
+   * NULL`), so a kept text cannot outlive 7 days. Returns how many rows were
+   * cleared. Run once per cron pass.
+   */
+  clearStaleOutboundPendingText(olderThanIso: string): Promise<number>;
+
+  /** A tenant's linked WhatsApp number (strict E.164), or `null` if none. A phone-only read for trigger payloads. */
+  getTenantPhone(tenantId: string): Promise<string | null>;
 
   /**
    * Media plan (docs/MEDIA-PLAN.md §6.2 decision I3) — mints a signed URL
@@ -651,6 +829,71 @@ export interface GhlRepository {
   isOptedOut(tenantId: string, phone: string): Promise<boolean>;
   /** Opt-out counts per tenant; every requested id appears (0 when none). */
   countOptOutsByTenant(tenantIds: string[]): Promise<Map<string, number>>;
+  /** Stores (or replaces, by GHL triggerData.id) a workflow trigger subscription. Refuses with `"location_mismatch"` (writing nothing) when that id already belongs to a different location. */
+  upsertTriggerSubscription(sub: {
+    id: string;
+    locationId: string;
+    workflowId: string | null;
+    triggerKey: TriggerKey;
+    targetUrl: string;
+    filters: unknown;
+  }): Promise<"ok" | "location_mismatch">;
+  /** Removes a workflow trigger subscription of this location; a no-op when absent or when it belongs to another location. */
+  deleteTriggerSubscription(id: string, locationId: string): Promise<void>;
+  /** The subscriptions of this location for this trigger key. */
+  listTriggerSubscriptions(locationId: string, key: TriggerKey): Promise<{ id: string; targetUrl: string }[]>;
+  /** Locations that have at least one subscription for any of these keys. */
+  listLocationsWithTriggerKeys(keys: TriggerKey[]): Promise<string[]>;
+  /** Remembers that this phone is not on WhatsApp for this location until `untilIso`. */
+  rememberNotOnWhatsapp(locationId: string, phoneE164: string, untilIso: string): Promise<void>;
+  /** True while a not-on-WhatsApp memory for (location, phone) has not expired at `nowIso`. */
+  isRememberedNotOnWhatsapp(locationId: string, phoneE164: string, nowIso: string): Promise<boolean>;
+  /** Clears the not-on-WhatsApp memory for (location, phone); a no-op when absent. */
+  forgetNotOnWhatsapp(locationId: string, phoneE164: string): Promise<void>;
+  /**
+   * SMS fallback B (0014) — the pending echo, and the cooldown: at most one
+   * fallback SMS per (location, contact) per 10 minutes. Clears this contact's
+   * expired echo, then inserts unless an unexpired one exists. True when
+   * inserted (the SMS may go); false means skip it. Stores only the hash.
+   */
+  recordSmsFallbackEcho(
+    echo: { locationId: string; contactId: string; textSha256: string; outboundMessageId: string; expiresIso: string },
+    nowIso: string
+  ): Promise<boolean>;
+  /** After GHL accepted the send: stamps `sent_at` and GHL's message id (null when the response had none) on the echo of that outbound row. */
+  markSmsFallbackEchoSent(locationId: string, contactId: string, outboundMessageId: string, ghlMessageId: string | null): Promise<void>;
+  /** The contact's echo unexpired at `nowIso`, or null. */
+  findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string): Promise<SmsFallbackEcho | null>;
+  /** Deletes the contact's echo if it is still the one for `outboundMessageId`; true when it did. */
+  deleteSmsFallbackEcho(locationId: string, contactId: string, outboundMessageId: string): Promise<boolean>;
+  /** Deletes every echo expired at `nowIso` (the hourly cron); returns how many. */
+  purgeExpiredSmsFallbackEchoes(nowIso: string): Promise<number>;
+  /** Stamps `ghl_accounts.sms_fallback_blocked_at` (first time only) for this sub-account; it then never falls back. */
+  blockSmsFallback(locationId: string): Promise<void>;
+  /** The sub-account's SMS fallback switch. Switching it on also clears `sms_fallback_blocked_at`. The caller confirms the row exists first. */
+  setSmsFallbackEnabled(locationId: string, enabled: boolean): Promise<void>;
+  /** Once per message: claims the row's fallback SMS (stamping `sms_fallback_claimed_at`) while it is unclaimed and unreported; true when this call won. */
+  claimSmsFallback(id: string): Promise<boolean>;
+  /** Stores the outcome of a claimed row's fallback SMS (only while it is still `claimed`). */
+  setSmsFallbackResult(id: string, result: "sent" | "failed"): Promise<void>;
+  /** The loop guard's correction: a `claimed` or `sent` row becomes `failed` (its SMS came back through PingWren). True when the row changed. */
+  failSmsFallback(id: string): Promise<boolean>;
+  /** One outbound row by id, or null. */
+  getGhlOutboundMessage(id: string): Promise<GhlOutboundMessage | null>;
+  /**
+   * Compare-and-set of a number's connection-trigger state: applies only while the
+   * stored `lastFired` still equals `expectedLastFired` (null-safe). Returns whether
+   * this call won, so overlapping passes fire at most once.
+   */
+  setSessionTriggerState(
+    tenantId: string,
+    state: { downSince: string | null; lastFired: "down" | "up" | null },
+    expectedLastFired: "down" | "up" | null
+  ): Promise<boolean>;
+  /** Remembers the number's E.164 for the connection triggers (survives the credential wipe). */
+  stampSessionTriggerPhone(tenantId: string, phoneE164: string): Promise<void>;
+  /** Sessions (with slot and label) of the given locations' numbers, for the connection watcher. */
+  listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]>;
   /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */
   recordStripeEvent(eventId: string, type: string): Promise<boolean>;
   /** Releases a recorded Stripe event id after a processing failure so Stripe's retry is handled, not dropped as a duplicate. */

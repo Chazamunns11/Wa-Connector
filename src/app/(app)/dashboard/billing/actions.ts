@@ -3,10 +3,10 @@
 import { redirect } from "next/navigation";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
-import { endTrialFlow, openPortalFlow, startCheckoutFlow } from "@/lib/billing/self-serve";
+import { addCardFlow, endTrialFlow, openPortalFlow, startCheckoutFlow } from "@/lib/billing/self-serve";
 import { repo } from "@/lib/data";
 import { billingHref, dashboardHref } from "@/lib/site/dashboard-url";
-import { createCheckoutSession, createPortalSession, endTrialNow } from "@/lib/stripe/billing";
+import { createCardSetupSession, createCheckoutSession, createPortalSession, endTrialNow, retrieveSubscription } from "@/lib/stripe/billing";
 import { isStripeConfigured } from "@/lib/stripe/client";
 
 // Every action loads the account from the session's account id. Nothing here
@@ -26,9 +26,26 @@ export async function endTrialNowAction(): Promise<void> {
   const account = await repo.getAccountById(session.accountId);
   if (!account) redirect(billingHref());
   if (!isStripeConfigured()) redirect(billingHref({ error: "stripe_failed" }));
-  const out = await endTrialFlow(account, { endTrial: endTrialNow });
+  const out = await endTrialFlow(account, { endTrial: endTrialNow, retrieve: retrieveSubscription });
   if (out.kind === "ended") redirect(billingHref({ result: "trial_ended" }));
+  if (out.kind === "needs_card") {
+    // No card yet: collect one first; the webhook then ends the trial.
+    const card = await addCardFlow(account, { appUrl: brandConfig().appUrl, setup: createCardSetupSession, then: "end_trial" });
+    if (card.kind === "redirect") redirect(card.url);
+    redirect(billingHref({ error: "stripe_failed" }));
+  }
   redirect(out.kind === "not_trialing" ? billingHref() : billingHref({ error: "stripe_failed" }));
+}
+
+/** "Add a card": during the trial, or once a trial has ended with no card and sending is paused. */
+export async function addCardAction(): Promise<void> {
+  const session = await requireAccountSession();
+  const account = await repo.getAccountById(session.accountId);
+  if (!account) redirect(billingHref());
+  if (!isStripeConfigured()) redirect(billingHref({ error: "stripe_failed" }));
+  const out = await addCardFlow(account, { appUrl: brandConfig().appUrl, setup: createCardSetupSession });
+  if (out.kind === "redirect") redirect(out.url);
+  redirect(out.kind === "not_needed" ? billingHref() : billingHref({ error: "stripe_failed" }));
 }
 
 /** A pending account (Checkout abandoned) opens a fresh Checkout for the same account id. */

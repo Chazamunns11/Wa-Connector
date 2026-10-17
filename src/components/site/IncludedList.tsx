@@ -1,4 +1,4 @@
-import { TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
+import { NUMBERS_INCLUDED, TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
 import type { BrandConfig } from "@/lib/brand-config";
 import { FEATURES, featureEntries } from "@/lib/site/features";
 
@@ -9,7 +9,7 @@ export function IncludedList({ brand }: { brand: BrandConfig }) {
     "the dashboard and connect links",
     "paced sending with a daily cap",
     "a 24-hour hold while a phone is offline",
-    "STOP opt-outs per number",
+    "STOP opt-outs per sub-account",
     ...(FEATURES.dndSyncLive ? ["Do Not Disturb sync"] : []),
     ...(FEATURES.mediaLive ? ["pictures and files"] : []),
   ];
@@ -20,13 +20,13 @@ export function IncludedList({ brand }: { brand: BrandConfig }) {
       title: "Every feature on every plan",
       body: `${list[0].toUpperCase()}${list.slice(1)}.${soon ? " WhatsApp groups are coming soon, at no extra charge." : " WhatsApp groups too, at no extra charge."}`,
     },
-    { title: "No setup fee and no charge per message", body: `${brand.name} bills per number, and nothing else.` },
+    { title: "No setup fee and no charge per message", body: `${brand.name} bills per activated sub-account, with up to ${NUMBERS_INCLUDED} WhatsApp numbers included, and nothing else.` },
     {
       title: `A ${TRIAL_DAYS}-day free trial`,
-      body: `It covers up to ${TRIAL_MAX_NUMBERS} numbers. We take a card when you sign up and charge nothing until the trial ends.`,
+      body: `No card needed. It covers up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. If the trial ends before you add a card, sending pauses until you do.`,
     },
     {
-      title: "Billed monthly per active number",
+      title: "Billed monthly per active sub-account",
       body: "Cancel any time from the billing portal. It takes effect at the end of the period you've paid for.",
     },
   ];

@@ -1,0 +1,4 @@
+# ffmpeg for voice-note transcoding (WA_VOICE_TRANSCODE_ENABLED). "..." keeps
+# Nixpacks' default apt packages. Railpack ignores this file; see railpack.json.
+[phases.setup]
+aptPkgs = ["...", "ffmpeg"]

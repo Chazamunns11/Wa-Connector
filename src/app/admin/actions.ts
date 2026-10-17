@@ -18,6 +18,7 @@ import {
   isConnectLinkConfigured,
   mintConnectLinkToken,
 } from "@/lib/ghl-connect-link";
+import { parseSlotParam } from "@/lib/location-numbers";
 
 /**
  * GHL custom conversation provider, Phase 1 (WAGHL replacement —
@@ -154,7 +155,9 @@ export async function createGhlConnectLinkAction(
    * Defaults to the shorter one so a caller that says nothing gets the safer
    * of the two.
    */
-  lifetime: "send" | "menu" = "send"
+  lifetime: "send" | "menu" = "send",
+  /** Which of the location's numbers the link connects — a slot (1 to 3), never a tenant id. Defaults to slot 1. */
+  slot: number = 1
 ): Promise<CreateConnectLinkResult> {
   await assertOwner();
 
@@ -176,7 +179,19 @@ export async function createGhlConnectLinkAction(
     );
   }
 
-  const token = mintConnectLinkToken(locationId, account.connectLinkVersion, lifetime);
+  // The slot comes from the browser: strict parse, then it must be a number
+  // this location actually has (a link for a missing number would only open
+  // on "unknown number").
+  const parsedSlot = parseSlotParam(slot);
+  if (!parsedSlot.ok) {
+    throw new Error("That isn't a valid WhatsApp number slot — refresh the page and try again.");
+  }
+  const numbers = await repo.listLocationNumbers(locationId);
+  if (!numbers.some((n) => n.slot === parsedSlot.slot)) {
+    throw new Error("That WhatsApp number no longer exists on this sub-account — refresh the page and try again.");
+  }
+
+  const token = mintConnectLinkToken(locationId, account.connectLinkVersion, lifetime, parsedSlot.slot);
 
   // Same origin derivation as SetupLinksPage's booking/cancel links — see
   // that page's own comment (src/app/owner/setup-links/page.tsx) for why

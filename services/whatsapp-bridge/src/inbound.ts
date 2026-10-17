@@ -46,7 +46,11 @@
  *      texting their own prospect by hand, AND our own bridge's
  *      `sock.sendMessage` calls echoing back through this same event.
  *      Neither is a reply.
- *   3. `remoteJid` must be a 1:1 chat: `isPnUser(jid) || isLidUser(jid)`.
+ *   3. `remoteJid` must be a 1:1 chat: `isPnUser(jid) || isLidUser(jid)` —
+ *      OR an opted-in WhatsApp group (see "GROUPS" below): an `@g.us` JID
+ *      passes only when it is well-formed (`isGroupJid`, src/groups.ts) AND
+ *      in the session's in-memory enabled set; any other group drops here
+ *      as `group_not_enabled`, before its content is even looked at.
  *      (`isPnUser` is Baileys 7.x's rename of what 6.7.x called `isJidUser`
  *      — byte-identical predicate, `jid?.endsWith('@s.whatsapp.net')`; do
  *      NOT reach for `isLidUser` alone here, tsc's "did you mean" suggestion
@@ -73,6 +77,22 @@
  *      masquerade as a brand-new reply if only the top level were checked,
  *      or if the check ran after normalisation had already stripped the
  *      `editedMessage` layer away.
+ *
+ *      MESSAGE EVENTS (`WA_INBOUND_EVENTS_ENABLED`, `ClassifyOptions.events`,
+ *      default off). Off, step 5 is exactly the drop described above. On,
+ *      the same walk (`findEventAtAnyDepth`, same wrappers, same depth cap)
+ *      finds the event and `classifyEventMessage` turns a contact's
+ *      reaction, delete (REVOKE) or edit (MESSAGE_EDIT) into an event row
+ *      (`messageType "event"`, `eventKind`, `targetWaMessageId`,
+ *      `targetFromMe`, no media) instead. The ordering argument above still
+ *      holds: an event at any depth is classified as that event and NEVER
+ *      reaches normalisation, so it can never surface as fresh content. A
+ *      removed reaction drops as `reaction_removed`; polls, other protocol
+ *      types and a bare `editedMessage` wrapper (no target) still drop as
+ *      `edit_reaction_or_system`. Our own (`fromMe`) events already dropped
+ *      at step 2. Also on: a quoted text reply's body gets
+ *      `renderQuotePrefix` + a newline in front (step 6), the reply text cut
+ *      first so the prefix survives the 500-code-point cap.
  *   6. `normalizeMessageContent` (unwraps `ephemeralMessage` / `viewOnceMessage`
  *      wrappers — a disappearing-mode reply is still a reply) then
  *      `getContentType`. A message whose only field is something Baileys
@@ -137,6 +157,20 @@
  *      the 0045 contract. Guessing wrong here would message (or worse,
  *      attribute a reply to) a stranger.
  *
+ * GROUPS (opt-in; docs/superpowers/specs/2026-10-17-whatsapp-groups-
+ * design.md, src/groups.ts): a group message passes step 3 only if its group
+ * is in `enabledGroups` — empty until the session's first load lands, and
+ * emptied by any failed load, so unknown means DROPPED. It then runs steps
+ * 4-6 exactly like a 1:1 message. At step 7 the SENDER is the member who
+ * wrote it, `key.participant` (+ its bidirectional alt `key.participantAlt`),
+ * resolved through the very same `resolveSenderE164` rules — a PN JID
+ * directly, a LID only via a server-checked PN alt or the LID-mapping store
+ * — never `remoteJid`/`remoteJidAlt`, which name the group. A member we
+ * cannot attribute to an E.164 is dropped `unmappable_sender`, same as a
+ * 1:1 sender: no row is ever stored without a real phone number. The reply
+ * carries `groupJid` and `senderName` (the member's push name, trimmed and
+ * cut to 60 code points — 0007's CHECK); both are null on a 1:1 reply.
+ *
  * NO LEDGER GATE: every session is a GHL-location tenant (PortalHub's
  * `kind = 'ghl_location'` branch, docs/GHL-PROVIDER-PLAN.md decision D4).
  * PortalHub also served Hub coach sessions, whose linked number was the
@@ -162,10 +196,12 @@ import {
   isPnUser,
   jidDecode,
   normalizeMessageContent,
+  proto,
 } from "@whiskeysockets/baileys";
 import type { MessageUpsertType, WAMessage } from "@whiskeysockets/baileys";
 import type { Logger } from "pino";
 import { isE164 } from "./phone.js";
+import { isGroupJid } from "./groups.js";
 
 /** Fixed-string drop reasons — logged, never the JID or body (see file header). */
 export type InboundDropReason =
@@ -173,9 +209,28 @@ export type InboundDropReason =
   | "stale_history_backfill"
   | "from_me"
   | "not_one_to_one"
+  | "group_not_enabled"
   | "no_content"
   | "edit_reaction_or_system"
+  | "reaction_removed"
   | "unmappable_sender";
+
+/** Message events (WA_INBOUND_EVENTS_ENABLED) — 0010's `event_kind` values this classifier produces. */
+export type InboundEventKind = "edit" | "reaction" | "delete";
+
+/** `classifyInboundMessage`'s optional behaviour switches. */
+export interface ClassifyOptions {
+  /**
+   * WA_INBOUND_EVENTS_ENABLED. `false` (the default) is today's behaviour
+   * exactly: every edit, reaction and delete is dropped at step 5 and a
+   * quoted reply's quote is ignored. `true`: step 5 classifies those events
+   * instead (see `classifyEventMessage`) and a quoted text reply gets
+   * `renderQuotePrefix` in front of its body.
+   */
+  events: boolean;
+}
+
+const EVENTS_OFF: ClassifyOptions = { events: false };
 
 /** Baileys' own download-type vocabulary (`downloadContentFromMessage`'s second argument) for the four content types the media plan ever captures. */
 export type InboundMediaKind = "image" | "video" | "audio" | "document";
@@ -212,6 +267,22 @@ export interface InboundReply {
   messageType: string;
   /** Media plan (docs/MEDIA-PLAN.md §6) — see `InboundMediaRef`'s own JSDoc. `null` for text, stickers, and view-once media. */
   mediaRef: InboundMediaRef | null;
+  /** The opted-in group this came from (already `isGroupJid`-checked and in the enabled set), or null for a 1:1 reply. */
+  groupJid: string | null;
+  /** The group member's WhatsApp push name, trimmed and cut to 60 code points; null for a 1:1 reply or a blank name. */
+  senderName: string | null;
+  /**
+   * Message events only (events on): set on an edit, reaction or delete row,
+   * whose `messageType` is then `"event"`, `mediaRef` null, and `body` the
+   * new text (edit), the emoji (reaction) or null (delete). ABSENT (not
+   * null) on an ordinary reply, so a non-event row is byte-identical to
+   * today's.
+   */
+  eventKind?: InboundEventKind;
+  /** The wa_message_id of the message the event acts on. Event rows only. */
+  targetWaMessageId?: string;
+  /** Whether that target is one of OUR messages (true), the contact's (false), or unknown (null). Event rows only. */
+  targetFromMe?: boolean | null;
 }
 
 /**
@@ -231,6 +302,10 @@ export type ClassifyResult =
   | { kind: "needs_lid_resolution"; lidJid: string; pending: Omit<InboundReply, "fromPhone"> };
 
 const MAX_BODY_CHARS = 500;
+/** 0007's CHECK on whatsapp_inbound_messages.sender_name. */
+const MAX_SENDER_NAME_CHARS = 60;
+/** The default for `classifyInboundMessage`'s `enabledGroups`: no groups — fail closed. */
+const NO_GROUPS: ReadonlySet<string> = new Set();
 
 /**
  * How recent an `'append'`-type message's own `messageTimestamp` must be to
@@ -323,6 +398,183 @@ function containsRejectedContentAtAnyDepth(message: object, depth = 0): boolean 
 }
 
 /**
+ * Message events (WA_INBOUND_EVENTS_ENABLED) — what `findEventAtAnyDepth`
+ * found. One variant per `PRE_NORMALISE_REJECT_KEYS` entry.
+ */
+type FoundEvent =
+  | { kind: "protocol"; protocol: proto.Message.IProtocolMessage }
+  | { kind: "reaction"; reaction: proto.Message.IReactionMessage }
+  | { kind: "poll" }
+  | { kind: "edited_wrapper"; inner: unknown; depth: number };
+
+/**
+ * The events-on twin of `containsRejectedContentAtAnyDepth`: the SAME walk
+ * (same reject keys, same `TRANSPARENT_WRAPPER_KEYS`, same depth cap of 5),
+ * but it returns WHAT it found instead of a boolean, so step 5 can classify
+ * the event rather than drop it. By construction it finds something exactly
+ * when `containsRejectedContentAtAnyDepth` returns true. It never hands
+ * anything to `normalizeMessageContent`: an event, at whatever depth, is
+ * classified as that event and never surfaces as fresh content.
+ */
+function findEventAtAnyDepth(message: object, depth = 0): FoundEvent | null {
+  if (depth > 5) return null;
+  const asRecord = message as Record<string, unknown>;
+  const keys = new Set(Object.keys(asRecord));
+  if (keys.has("protocolMessage")) return { kind: "protocol", protocol: (asRecord.protocolMessage ?? {}) as proto.Message.IProtocolMessage };
+  if (keys.has("reactionMessage")) return { kind: "reaction", reaction: (asRecord.reactionMessage ?? {}) as proto.Message.IReactionMessage };
+  if (keys.has("pollUpdateMessage")) return { kind: "poll" };
+  if (keys.has("editedMessage")) return { kind: "edited_wrapper", inner: (asRecord.editedMessage as { message?: unknown } | null)?.message, depth };
+  for (const wrapperKey of TRANSPARENT_WRAPPER_KEYS) {
+    const wrapped = asRecord[wrapperKey] as { message?: unknown } | undefined;
+    const inner = wrapped?.message;
+    if (inner && typeof inner === "object") {
+      const found = findEventAtAnyDepth(inner as Record<string, unknown>, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/** The event fields an event row adds to `InboundReply` (plus its body). */
+type EventFields = { body: string | null; eventKind: InboundEventKind; targetWaMessageId: string; targetFromMe: boolean | null };
+
+/**
+ * The target's "from me" for an edit or a revoke. Their `protocolMessage.key`
+ * is in the SENDER'S perspective (Baileys' `cleanMessage` re-maps only
+ * reaction and poll keys to ours), so `fromMe: true` there means "the
+ * sender's own message", which from our side is the contact's: `false`.
+ * Anything else (e.g. a group admin deleting someone else's message) cannot
+ * be placed without our own JID, which this pure classifier does not have:
+ * `null`.
+ */
+function senderPerspectiveTargetFromMe(key: proto.IMessageKey | null | undefined): boolean | null {
+  return key?.fromMe === true ? false : null;
+}
+
+/** The new text of an edit: text, or the caption of an edited image/video/document. Null when there is none. */
+function editedText(edited: proto.IMessage | null | undefined): string | null {
+  const content = normalizeMessageContent(edited ?? undefined);
+  if (!content) return null;
+  const text =
+    content.conversation ??
+    content.extendedTextMessage?.text ??
+    content.imageMessage?.caption ??
+    content.videoMessage?.caption ??
+    content.documentMessage?.caption ??
+    null;
+  return text ? text : null;
+}
+
+/**
+ * Step 5 with events on (file header step 5; the message-events plan): turn
+ * what `findEventAtAnyDepth` found into an event row, or a drop reason.
+ *
+ *   - reaction -> "reaction", body = the emoji, target = `reactionMessage.key`.
+ *     Baileys has already re-mapped that key's `fromMe` to OUR perspective,
+ *     so `fromMe === true` means a reaction to one of our messages. An empty
+ *     emoji is a removed reaction: `reaction_removed`.
+ *   - protocolMessage REVOKE -> "delete", body null.
+ *   - protocolMessage MESSAGE_EDIT -> "edit", body = the new text (or
+ *     caption). No text at all -> `no_content`.
+ *   - an `editedMessage` wrapper -> an edit only when it wraps a
+ *     MESSAGE_EDIT protocolMessage, which names the target. Baileys' own edit
+ *     builder (`generateWAMessageContent`, lib/Utils/messages.js ~L514) makes
+ *     a bare protocolMessage MESSAGE_EDIT; the `editedMessage` wrapper around
+ *     one is the phone client's wire shape. Both are handled. A wrapper with
+ *     anything else inside (a bare wrapper, a REVOKE, a reaction) names no
+ *     edit target and stays dropped. Its content is never unwrapped into a
+ *     fresh reply.
+ *   - any other protocolMessage type, a poll, or an event with no target id
+ *     -> `edit_reaction_or_system`, exactly as with events off.
+ */
+function classifyEventMessage(found: FoundEvent): EventFields | InboundDropReason {
+  switch (found.kind) {
+    case "reaction": {
+      const emoji = found.reaction.text;
+      if (!emoji) return "reaction_removed";
+      const targetId = found.reaction.key?.id;
+      if (!targetId) return "edit_reaction_or_system";
+      return { body: sanitizeBody(emoji), eventKind: "reaction", targetWaMessageId: targetId, targetFromMe: found.reaction.key?.fromMe === true };
+    }
+    case "protocol": {
+      const { protocol } = found;
+      const targetId = protocol.key?.id;
+      if (protocol.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+        if (!targetId) return "edit_reaction_or_system";
+        return { body: null, eventKind: "delete", targetWaMessageId: targetId, targetFromMe: senderPerspectiveTargetFromMe(protocol.key) };
+      }
+      if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
+        if (!targetId) return "edit_reaction_or_system";
+        const text = editedText(protocol.editedMessage);
+        if (!text) return "no_content";
+        return { body: sanitizeBody(text), eventKind: "edit", targetWaMessageId: targetId, targetFromMe: senderPerspectiveTargetFromMe(protocol.key) };
+      }
+      return "edit_reaction_or_system";
+    }
+    case "edited_wrapper": {
+      const inner = found.inner && typeof found.inner === "object" ? findEventAtAnyDepth(found.inner, found.depth + 1) : null;
+      if (inner?.kind === "protocol" && inner.protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
+        return classifyEventMessage(inner);
+      }
+      return "edit_reaction_or_system";
+    }
+    case "poll":
+      return "edit_reaction_or_system";
+  }
+}
+
+/** Max code points of quoted text in a quote prefix (Global Constraints). */
+const MAX_QUOTE_CHARS = 80;
+
+/**
+ * The first line of a quoted reply's body (events on): `↩ "<first 80 code
+ * points of the quoted text>"`, or a placeholder for quoted media:
+ * `↩ (photo)`, `↩ (video)`, `↩ (voice note)` (ptt audio), `↩ (audio)`,
+ * `↩ (document)`, `↩ (sticker)`, otherwise `↩ (message)`. NULs are removed
+ * and line breaks become one space, so the prefix is always a single line.
+ */
+export function renderQuotePrefix(quoted: proto.IMessage): string {
+  const content = normalizeMessageContent(quoted);
+  const text = content?.conversation ?? content?.extendedTextMessage?.text ?? null;
+  if (text) {
+    const oneLine = stripNul(text).replace(/\s*[\r\n\u0085\u2028\u2029]+\s*/g, " ");
+    return `↩ "${Array.from(oneLine).slice(0, MAX_QUOTE_CHARS).join("")}"`;
+  }
+  const type = content ? getContentType(content) : undefined;
+  switch (type) {
+    case "imageMessage":
+      return "↩ (photo)";
+    case "videoMessage":
+      return "↩ (video)";
+    case "audioMessage":
+      return content?.audioMessage?.ptt === true ? "↩ (voice note)" : "↩ (audio)";
+    case "documentMessage":
+      return "↩ (document)";
+    case "stickerMessage":
+      return "↩ (sticker)";
+    default:
+      return "↩ (message)";
+  }
+}
+
+/** The quoted message of a reply (`<content>.contextInfo.quotedMessage`), if any. */
+function quotedMessageOf(normalised: proto.IMessage, contentType: string): proto.IMessage | null {
+  const content = normalised[contentType as keyof proto.IMessage];
+  if (!content || typeof content !== "object") return null;
+  return (content as { contextInfo?: proto.IContextInfo | null }).contextInfo?.quotedMessage ?? null;
+}
+
+/**
+ * A quoted reply's body: prefix, newline, reply text, within 500 code
+ * points. The REPLY TEXT is what gets cut, never the prefix (at most 84
+ * code points, so there is always room).
+ */
+function quotedBody(prefix: string, text: string): string {
+  const room = MAX_BODY_CHARS - Array.from(prefix).length - 1;
+  return `${prefix}\n${sanitizeBody(text, Math.max(room, 0))}`;
+}
+
+/**
  * Media plan (docs/MEDIA-PLAN.md §6.3) — content-type keys eligible for
  * capture, mapped to Baileys' download-type vocabulary. `stickerMessage` is
  * deliberately absent (decision: stickers are noise, never captured) — every
@@ -401,8 +653,17 @@ function coerceFileLength(value: number | { toNumber?: () => number } | null | u
   return null;
 }
 
-/** Pure classifier — see the file header for the full, ordered filter chain. */
-export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertType): ClassifyResult {
+/**
+ * Pure classifier — see the file header for the full, ordered filter chain.
+ * @param enabledGroups the session's opted-in group JIDs (file header,
+ *   "GROUPS"). Omitted means none: every group message is dropped.
+ */
+export function classifyInboundMessage(
+  msg: WAMessage,
+  batchType: MessageUpsertType,
+  enabledGroups: ReadonlySet<string> = NO_GROUPS,
+  options: ClassifyOptions = EVENTS_OFF
+): ClassifyResult {
   if (batchType !== "notify") {
     // Anything that isn't 'notify' and isn't 'append' either (there is no
     // third value today, but never assume the union can't grow) is dropped
@@ -423,7 +684,13 @@ export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertT
 
   const remoteJid = msg.key.remoteJid ?? undefined;
   if (!remoteJid) return { kind: "dropped", reason: "not_one_to_one" };
-  if (!isPnUser(remoteJid) && !isLidUser(remoteJid)) {
+  // Step 3, groups (file header "GROUPS"): any group-server JID is decided
+  // HERE — well-formed and enabled, or dropped before its content is read.
+  const isGroup = jidDecode(remoteJid)?.server === "g.us";
+  if (isGroup && !(isGroupJid(remoteJid) && enabledGroups.has(remoteJid))) {
+    return { kind: "dropped", reason: "group_not_enabled" };
+  }
+  if (!isGroup && !isPnUser(remoteJid) && !isLidUser(remoteJid)) {
     // Excludes groups, status/general broadcast, newsletters, and bots by
     // construction — see file header step 3. `isPnUser` (NOT `isLidUser`
     // alone — see that step's own comment) is Baileys 7.x's rename of what
@@ -440,7 +707,26 @@ export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertT
   // wrapping is caught here, BEFORE normalisation ever runs — not just at
   // the top level.
   if (containsRejectedContentAtAnyDepth(msg.message)) {
-    return { kind: "dropped", reason: "edit_reaction_or_system" };
+    if (!options.events) return { kind: "dropped", reason: "edit_reaction_or_system" };
+    // Events on: classify the event found at whatever depth — never fall
+    // through to normalisation, which would unwrap it into fresh content.
+    const found = findEventAtAnyDepth(msg.message);
+    const event = found ? classifyEventMessage(found) : "edit_reaction_or_system";
+    if (typeof event === "string") return { kind: "dropped", reason: event };
+    const eventMessageId = msg.key.id;
+    if (!eventMessageId) return { kind: "dropped", reason: "no_content" }; // never persist without a dedupe key.
+    return attributeSender(msg, remoteJid, isGroup, {
+      waMessageId: eventMessageId,
+      receivedAt: timestampToIso(msg.messageTimestamp),
+      body: event.body,
+      messageType: "event",
+      mediaRef: null,
+      groupJid: isGroup ? remoteJid : null,
+      senderName: isGroup ? sanitizeSenderName(msg.pushName) : null,
+      eventKind: event.eventKind,
+      targetWaMessageId: event.targetWaMessageId,
+      targetFromMe: event.targetFromMe,
+    });
   }
 
   const normalised = normalizeMessageContent(msg.message);
@@ -458,7 +744,10 @@ export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertT
   if (!waMessageId) return { kind: "dropped", reason: "no_content" }; // should be impossible in practice; never persist without a dedupe key.
 
   const text = normalised.conversation ?? normalised.extendedTextMessage?.text ?? null;
-  const body = text ? sanitizeBody(text) : null;
+  // Events on: a quoted text reply gets the quote prefix in front. Events
+  // off, the quote is ignored exactly as before.
+  const quoted = options.events && text ? quotedMessageOf(normalised, contentType) : null;
+  const body = text ? (quoted ? quotedBody(renderQuotePrefix(quoted), text) : sanitizeBody(text)) : null;
 
   // Media plan (docs/MEDIA-PLAN.md §6.3) — view-once media is never
   // captured regardless of content type (checked on the RAW pre-normalised
@@ -473,15 +762,28 @@ export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertT
     body,
     messageType: contentType,
     mediaRef,
+    groupJid: isGroup ? remoteJid : null,
+    senderName: isGroup ? sanitizeSenderName(msg.pushName) : null,
   };
 
-  const resolution = resolveSenderE164(remoteJid, msg.key.remoteJidAlt ?? undefined);
+  return attributeSender(msg, remoteJid, isGroup, pending);
+}
+
+/** Step 7 (file header), shared by ordinary replies and event rows. */
+function attributeSender(msg: WAMessage, remoteJid: string, isGroup: boolean, pending: Omit<InboundReply, "fromPhone">): ClassifyResult {
+  // Step 7. In a group the sender is the MEMBER (`participant` + its alt),
+  // never `remoteJid`, which names the group itself — file header "GROUPS".
+  // A group message with no participant has no sender to attribute.
+  const senderJid = isGroup ? (msg.key.participant ?? undefined) : remoteJid;
+  if (!senderJid) return { kind: "dropped", reason: "unmappable_sender" };
+  const senderJidAlt = isGroup ? msg.key.participantAlt : msg.key.remoteJidAlt;
+  const resolution = resolveSenderE164(senderJid, senderJidAlt ?? undefined);
   if (resolution.kind === "unmappable") return { kind: "dropped", reason: "unmappable_sender" };
   if (resolution.kind === "unresolved_lid") {
     // See file header step 7 / `ClassifyResult`'s own JSDoc — this classifier
     // stays pure/synchronous, so the LAST resort (`InboundDeps.resolvePnForLid`)
     // is `processInboundBatch`'s job, not this function's.
-    return { kind: "needs_lid_resolution", lidJid: remoteJid, pending };
+    return { kind: "needs_lid_resolution", lidJid: senderJid, pending };
   }
 
   return { kind: "reply", reply: { ...pending, fromPhone: resolution.phone } };
@@ -495,7 +797,7 @@ export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertT
  * dead end, `processInboundBatch` gets one more resolution attempt for it
  * (`InboundDeps.resolvePnForLid`) before the message is finally dropped.
  */
-type SenderResolution = { kind: "resolved"; phone: string } | { kind: "unresolved_lid" } | { kind: "unmappable" };
+export type SenderResolution = { kind: "resolved"; phone: string } | { kind: "unresolved_lid" } | { kind: "unmappable" };
 
 /**
  * THE ONE PLACE a `s.whatsapp.net`-suffixed JID is ever turned into the
@@ -509,7 +811,7 @@ type SenderResolution = { kind: "resolved"; phone: string } | { kind: "unresolve
  * it) or whose resulting `+${user}` still fails this bridge's own strict
  * `isE164` gate (src/phone.ts) — this bridge REFUSES, it never repairs.
  */
-function pnJidToE164(jid: string): string | null {
+export function pnJidToE164(jid: string): string | null {
   const decoded = jidDecode(jid);
   if (decoded?.server !== "s.whatsapp.net") return null;
   const candidate = `+${decoded.user}`;
@@ -542,7 +844,7 @@ function pnJidToE164(jid: string): string | null {
  * structural guarantee) as a substitute for actually decoding the JID being
  * consulted.
  */
-function resolveSenderE164(remoteJid: string, remoteJidAlt: string | undefined): SenderResolution {
+export function resolveSenderE164(remoteJid: string, remoteJidAlt: string | undefined): SenderResolution {
   const decoded = jidDecode(remoteJid);
   if (!decoded) return { kind: "unmappable" };
 
@@ -607,12 +909,30 @@ function timestampToIso(ts: unknown): string {
  * 500`, itself code-point-based, not UTF-16-code-unit-based) more precisely
  * than the original `.slice` did.
  */
-function sanitizeBody(text: string): string {
+function sanitizeBody(text: string, maxChars: number = MAX_BODY_CHARS): string {
+  return Array.from(stripNul(text)).slice(0, maxChars).join("");
+}
+
+/** Removes every NUL (Postgres `text` cannot store one — see `sanitizeBody`). */
+function stripNul(text: string): string {
   // NUL_CHAR is built at runtime (String.fromCharCode), never typed as a
   // literal/escaped control character in this source file.
   const NUL_CHAR = String.fromCharCode(0);
-  const noNul = text.split(NUL_CHAR).join("");
-  return Array.from(noNul).slice(0, MAX_BODY_CHARS).join("");
+  return text.split(NUL_CHAR).join("");
+}
+
+/**
+ * A group member's push name for `InboundReply.senderName`: NULs removed
+ * (same Postgres reason as `sanitizeBody`), surrounding whitespace trimmed,
+ * cut to 60 CODE POINTS (0007's `char_length` CHECK; never splits an
+ * emoji). Blank or absent -> null, so the drain falls back to the number.
+ */
+function sanitizeSenderName(pushName: string | null | undefined): string | null {
+  if (typeof pushName !== "string") return null;
+  const NUL_CHAR = String.fromCharCode(0);
+  const trimmed = pushName.split(NUL_CHAR).join("").trim();
+  if (!trimmed) return null;
+  return Array.from(trimmed).slice(0, MAX_SENDER_NAME_CHARS).join("").trimEnd();
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +958,16 @@ export interface RecordInboundInput {
    * insert reads.
    */
   captureMedia?: boolean;
+  /** Opted-in group the message came from (`InboundReply.groupJid`), null for 1:1. The store re-checks it with `isGroupJid` before writing. */
+  groupJid: string | null;
+  /** `InboundReply.senderName` — only meaningful on a group row. */
+  senderName: string | null;
+  /** Non-message event kind (migration 0010); omitted for an ordinary message. */
+  eventKind?: "missed_call" | InboundEventKind;
+  /** Event rows only (migration 0011): the wa_message_id the edit/reaction/delete acts on. */
+  targetWaMessageId?: string;
+  /** Event rows only (migration 0011): whether that target is ours; null when unknown. */
+  targetFromMe?: boolean | null;
 }
 
 /**
@@ -688,6 +1018,17 @@ export interface InboundDeps {
    * lookup shape) that a naive string check would choke on.
    */
   resolvePnForLid?: (lidJid: string) => Promise<string | null>;
+  /**
+   * The session's opted-in group JIDs (file header "GROUPS"; sessions.ts's
+   * `Session.enabledGroups`). Omitted means none — every group message is
+   * dropped `group_not_enabled`.
+   */
+  enabledGroups?: ReadonlySet<string>;
+  /**
+   * WA_INBOUND_EVENTS_ENABLED (`ClassifyOptions.events`). Omitted or false
+   * means today's behaviour exactly: events dropped, quotes ignored.
+   */
+  events?: boolean;
   log: Logger;
 }
 
@@ -706,7 +1047,7 @@ export async function processInboundBatch(
 ): Promise<void> {
   for (const msg of messages) {
     try {
-      const result = classifyInboundMessage(msg, batchType);
+      const result = classifyInboundMessage(msg, batchType, deps.enabledGroups ?? NO_GROUPS, { events: deps.events === true });
       if (result.kind === "dropped") {
         deps.log.debug({ coachId, reason: result.reason }, "inbound message dropped");
         continue;
@@ -760,6 +1101,13 @@ export async function processInboundBatch(
         messageType: reply.messageType,
         receivedAt: reply.receivedAt,
         captureMedia: shouldCaptureMedia,
+        groupJid: reply.groupJid,
+        senderName: reply.senderName,
+        // Event rows only — an ordinary reply names none of these, so its
+        // record call is byte-identical to the events-off one.
+        ...(reply.eventKind
+          ? { eventKind: reply.eventKind, targetWaMessageId: reply.targetWaMessageId, targetFromMe: reply.targetFromMe ?? null }
+          : {}),
       });
 
       if (fresh) {

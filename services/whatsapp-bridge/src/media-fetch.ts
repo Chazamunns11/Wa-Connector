@@ -48,6 +48,7 @@ import {
   type BaileysMediaKind,
   type SniffedMime,
 } from "./media.js";
+import type { TranscodeFailureReason, TranscodeResult } from "./voice-transcode.js";
 
 export type FetchAttachmentResult =
   | { ok: true; buffer: Buffer; sniffedMime: SniffedMime | null }
@@ -254,8 +255,18 @@ export interface OutboundAttachmentCaps {
 }
 
 export type ResolveOutboundAttachmentResult =
-  | { ok: true; kind: BaileysMediaKind; mimetype: SniffedMime; buffer: Buffer; ptt?: boolean }
+  | {
+      ok: true;
+      kind: BaileysMediaKind;
+      mimetype: SniffedMime;
+      buffer: Buffer;
+      ptt?: boolean;
+      /** Non-opus audio while voice transcoding is on: `kind`/`ptt` are the fallback shape (see `mapMimeToBaileysShape`). */
+      transcodeCandidate?: boolean;
+    }
   | { ok: false; reason: "fetch_failed" | "too_large_for_type" | "unsupported_type" };
+
+export type ResolvedOutboundAttachment = Extract<ResolveOutboundAttachmentResult, { ok: true }>;
 
 /**
  * The per-type cap (plan §5.4's table) can't be applied UNTIL the type is
@@ -266,19 +277,61 @@ export type ResolveOutboundAttachmentResult =
  * 40MB image (over the 10MB image cap but under the 100MB document cap) is
  * still refused post-sniff — never silently accepted because it fit under
  * some OTHER type's larger cap.
+ *
+ * `voiceTranscode` (WA_VOICE_TRANSCODE_ENABLED with ffmpeg present) marks
+ * non-opus audio as a transcode candidate and admits webm/wav. A candidate is
+ * always capped at `caps.audio` — the transcoder's input cap — even when its
+ * fallback kind is `document`, so oversized audio is refused here, before
+ * ffmpeg could ever see it. The sniffed bytes go to the mapping so Ogg Vorbis
+ * is never sent as a voice note.
  */
 export async function resolveOutboundAttachment(
   url: string,
-  opts: Omit<FetchAttachmentOptions, "maxBytes"> & { caps: OutboundAttachmentCaps }
+  opts: Omit<FetchAttachmentOptions, "maxBytes"> & { caps: OutboundAttachmentCaps; voiceTranscode?: boolean }
 ): Promise<ResolveOutboundAttachmentResult> {
   const outerCap = Math.max(opts.caps.image, opts.caps.video, opts.caps.audio, opts.caps.document);
   const fetched = await fetchAttachment(url, { ...opts, maxBytes: outerCap });
   if (!fetched.ok) {
     return { ok: false, reason: fetched.reason === "too_large" ? "too_large_for_type" : "fetch_failed" };
   }
-  const mapped = mapMimeToBaileysShape(fetched.sniffedMime);
+  const mapped = mapMimeToBaileysShape(fetched.sniffedMime, { bytes: fetched.buffer, voiceTranscode: opts.voiceTranscode === true });
   if (!mapped || !fetched.sniffedMime) return { ok: false, reason: "unsupported_type" };
-  const cap = maxBytesForKind(mapped.kind, opts.caps);
+  const cap = mapped.transcodeCandidate ? opts.caps.audio : maxBytesForKind(mapped.kind, opts.caps);
   if (fetched.buffer.length > cap) return { ok: false, reason: "too_large_for_type" };
-  return { ok: true, kind: mapped.kind, mimetype: fetched.sniffedMime, buffer: fetched.buffer, ptt: mapped.ptt };
+  const resolved: ResolvedOutboundAttachment = { ok: true, kind: mapped.kind, mimetype: fetched.sniffedMime, buffer: fetched.buffer, ptt: mapped.ptt };
+  if (mapped.transcodeCandidate) resolved.transcodeCandidate = true;
+  return resolved;
+}
+
+/**
+ * Voice notes: turns a transcode candidate into an ogg/opus voice note. Any
+ * failure — whatever the reason, including ones added later, and a thrown
+ * error (counted as `ffmpeg_failed`) — returns `resolved` unchanged, i.e. the
+ * fallback shape (an audio file, or a document for webm/wav). The one
+ * exception is `has_video`: the same original bytes, but always as a
+ * document, since a video must never play as audio. It never fails the
+ * message. Not a candidate → `not_needed`, untouched.
+ */
+export async function prepareOutboundAudio(
+  resolved: ResolvedOutboundAttachment,
+  deps: { transcode: (buf: Buffer, mime: SniffedMime) => Promise<TranscodeResult> }
+): Promise<{
+  content: ResolvedOutboundAttachment & { seconds?: number; waveform?: Uint8Array };
+  outcome: "transcoded" | "not_needed" | TranscodeFailureReason;
+}> {
+  if (!resolved.transcodeCandidate) return { content: resolved, outcome: "not_needed" };
+  let result: TranscodeResult;
+  try {
+    result = await deps.transcode(resolved.buffer, resolved.mimetype);
+  } catch {
+    result = { ok: false, reason: "ffmpeg_failed" };
+  }
+  if (!result.ok && result.reason === "has_video") {
+    return { content: { ok: true, kind: "document", mimetype: resolved.mimetype, buffer: resolved.buffer }, outcome: "has_video" };
+  }
+  if (!result.ok) return { content: resolved, outcome: result.reason };
+  return {
+    content: { ok: true, kind: "audio", mimetype: "audio/ogg", ptt: true, buffer: result.buffer, seconds: result.seconds, waveform: result.waveform },
+    outcome: "transcoded",
+  };
 }

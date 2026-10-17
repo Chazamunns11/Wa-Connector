@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
           return NextResponse.redirect(`${origin}/signup?error=failed`);
         }
         if (outcome.kind === "checkout") return NextResponse.redirect(outcome.url);
-        // The account exists but Checkout failed: the dashboard offers "Add a card".
+        // The account exists but Checkout failed: the dashboard offers "Start your free trial".
         return NextResponse.redirect(`${origin}/dashboard`);
       }
 

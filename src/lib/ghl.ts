@@ -42,6 +42,7 @@
  */
 import { createHash, verify as cryptoVerify } from "crypto";
 import { brandConfig } from "@/lib/brand-config";
+import type { WhatsappInboundMessage } from "@/lib/types";
 
 /**
  * CONFIRMED against the marketplace app's own "Install link" on 3 Aug 2026,
@@ -63,7 +64,7 @@ const API_BASE = "https://services.leadconnectorhq.com";
  * fails loudly (a 4xx from GHL, surfaced via this module's discriminated
  * result) instead of silently drifting with a moving default.
  */
-const API_VERSION = "2021-04-15";
+export const API_VERSION = "2021-04-15";
 
 /**
  * Confirmed 16 Oct 2026 against GoHighLevel's official OpenAPI spec
@@ -105,6 +106,20 @@ const SCOPES = [
   "contacts.write",
   "conversations/message.readonly",
 ];
+
+/**
+ * `workflows.readonly` lets GHL show PingWren's workflow triggers. It is only
+ * requested once `GHL_REQUEST_WORKFLOWS_SCOPE` is "true", because asking for a
+ * scope the marketplace app hasn't enabled in the developer portal breaks the
+ * install. This is its own setting, independent of the firing flag
+ * (`GHL_WORKFLOW_TRIGGERS_ENABLED`): the scope has to be granted, and the
+ * sandbox check done, before firing is switched on. Order: portal scope, this
+ * setting, re-authorise, sandbox check, then the firing flag
+ * (docs/GHL-WORKFLOW-TRIGGERS-SETUP.md).
+ */
+export function ghlOAuthScopes(): string[] {
+  return process.env.GHL_REQUEST_WORKFLOWS_SCOPE === "true" ? [...SCOPES, "workflows.readonly"] : [...SCOPES];
+}
 
 /** GHL is a hard dependency of nothing here — bound every call so a hung request can't hold an OAuth route or a status report open. Matches `whatsapp-bridge.ts`'s own `BRIDGE_TIMEOUT_MS`. */
 const TIMEOUT_MS = 5000;
@@ -198,7 +213,7 @@ export function ghlAuthUrl(state: string): string | null {
     response_type: "code",
     redirect_uri: ghlRedirectUri(),
     client_id: env.clientId,
-    scope: SCOPES.join(" "),
+    scope: ghlOAuthScopes().join(" "),
     // GHL resolves an app VERSION, not just an app. Omit this and the
     // install dies on `error.noAppVersionIdFound` before the operator ever
     // sees a location picker. Derived rather than configured: GHL's client
@@ -649,7 +664,7 @@ export async function updateGhlMessageStatus(
   messageId: string,
   status: "delivered" | "failed" | "pending" | "read",
   errorMessage?: string
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string; status?: number }> {
   try {
     const body: Record<string, unknown> = { status };
     if (status === "failed" && errorMessage) body.error = { message: errorMessage };
@@ -677,7 +692,7 @@ export async function updateGhlMessageStatus(
       // free text.
       const text = await res.text().catch(() => "");
       console.error(`[ghl] status update rejected: HTTP ${res.status}${text ? ` — ${text.slice(0, 300)}` : ""}`);
-      return { ok: false, error: `GHL status update rejected (HTTP ${res.status})` };
+      return { ok: false, error: `GHL status update rejected (HTTP ${res.status})`, status: res.status };
     }
     return { ok: true };
   } catch (err) {
@@ -847,6 +862,74 @@ export type UpsertGhlContactResult =
  * retry decision.
  */
 export async function upsertGhlContact(accessToken: string, locationId: string, phoneE164: string): Promise<UpsertGhlContactResult> {
+  return postGhlContactUpsert(accessToken, { locationId, phone: phoneE164 });
+}
+
+/** The tag every group contact carries, so a client can leave group contacts out of an "SMS everyone" workflow. */
+export const GHL_GROUP_CONTACT_TAG = "whatsapp-group";
+const GHL_GROUP_CONTACT_SUFFIX = " (WhatsApp group)";
+/** GHL contact names are kept to 100 characters, suffix included. */
+const GHL_GROUP_CONTACT_NAME_MAX = 100;
+
+/** `ghlGroupContactKey`'s shape: the JID's digits (`-` kept), `-`, 8 lowercase hex. */
+const GHL_GROUP_CONTACT_KEY_RE = /^[0-9]{1,64}(-[0-9]{1,64})?-[0-9a-f]{8}$/;
+
+/**
+ * The key behind a group contact's placeholder email, PER NUMBER: the group
+ * JID without `@g.us` (its `-` kept, so `12-345` and `123-45` stay distinct;
+ * `-` is valid in an email local part), then `-` and the first 8 hex chars of
+ * sha256(tenantId). The same group seen by two of a location's numbers
+ * therefore gets two GHL contacts, each routed to its own number, rather
+ * than one contact both numbers post into. Hashed so the raw tenant id never
+ * reaches GHL (no tenant id in anything outside the service-role boundary).
+ */
+export function ghlGroupContactKey(groupJid: string, tenantId: string): string {
+  const jidPart = groupJid.replace(/@g\.us$/, "");
+  const tenantPart = createHash("sha256").update(tenantId).digest("hex").slice(0, 8);
+  return `${jidPart}-${tenantPart}`;
+}
+
+/**
+ * Opt-in WhatsApp groups — the ONE GHL contact standing for a group (GHL's
+ * inbound-message API needs a contact and has no group concept). Same
+ * endpoint, request conventions and fixed error strings as `upsertGhlContact`
+ * (it shares `postGhlContactUpsert`).
+ *   - name `<group name> (WhatsApp group)`, the group name trimmed by whole
+ *     characters so the total is at most 100;
+ *   - tag `whatsapp-group`;
+ *   - NO phone: a made-up number could collide with a real contact or be
+ *     texted by an SMS step;
+ *   - a placeholder email `group-<groupKey>@groups.pingwren.invalid`
+ *     (`.invalid` can never deliver, RFC 2606). It is there because GHL may
+ *     refuse a contact with neither phone nor email — not yet confirmed
+ *     against a live location — and it also gives GHL's upsert something to
+ *     dedupe on, so a retried create returns the same contact.
+ * `groupKey` is `ghlGroupContactKey`'s output; anything else is refused
+ * without a request, so only digits, `-` and lowercase hex ever reach the
+ * email.
+ */
+export async function upsertGhlGroupContact(
+  accessToken: string,
+  locationId: string,
+  input: { name: string; groupKey: string }
+): Promise<UpsertGhlContactResult> {
+  if (!GHL_GROUP_CONTACT_KEY_RE.test(input.groupKey)) {
+    return { ok: false, kind: "rejected", error: "GHL group contact key is not a WhatsApp group id" };
+  }
+  const groupName = Array.from(input.name.trim())
+    .slice(0, GHL_GROUP_CONTACT_NAME_MAX - GHL_GROUP_CONTACT_SUFFIX.length)
+    .join("")
+    .trim();
+  return postGhlContactUpsert(accessToken, {
+    locationId,
+    name: groupName ? `${groupName}${GHL_GROUP_CONTACT_SUFFIX}` : "WhatsApp group",
+    email: `group-${input.groupKey}@groups.pingwren.invalid`,
+    tags: [GHL_GROUP_CONTACT_TAG],
+  });
+}
+
+/** `POST /contacts/upsert` with `payload` — the shared request, response parsing and fixed-string failure mapping behind both contact upserts above. */
+async function postGhlContactUpsert(accessToken: string, payload: Record<string, unknown>): Promise<UpsertGhlContactResult> {
   try {
     const res = await fetch(`${API_BASE}/contacts/upsert`, {
       method: "POST",
@@ -855,7 +938,7 @@ export async function upsertGhlContact(accessToken: string, locationId: string, 
         "Content-Type": "application/json",
         Version: CONTACTS_API_VERSION,
       },
-      body: JSON.stringify({ locationId, phone: phoneE164 }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -878,6 +961,114 @@ export async function upsertGhlContact(accessToken: string, locationId: string, 
   } catch (err) {
     console.error("[ghl] contacts/upsert unreachable:", err);
     return { ok: false, kind: "unreachable", error: "GHL contact upsert request failed" };
+  }
+}
+
+/** A GHL contact reduced to what inviting needs. Never logged. */
+export type GhlContactLite = { id: string; firstName: string | null; name: string | null; phone: string | null; tags: string[] };
+
+const GHL_CONTACT_SEARCH_PAGE_SIZE = 100;
+/** Paging stops here even if GHL keeps returning full pages; hitting it sets `truncated`. */
+const GHL_CONTACT_SEARCH_MAX_PAGES = 20;
+
+function strOrNull(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v : null;
+}
+
+/** Reads one GHL contact object defensively (the response shapes are not confirmed against a live location). `null` when it has no id. */
+function toGhlContactLite(raw: unknown): GhlContactLite | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const c = raw as Record<string, unknown>;
+  const id = strOrNull(c.id);
+  if (!id) return null;
+  const firstName = strOrNull(c.firstName);
+  const fullName = [firstName, strOrNull(c.lastName)].filter((p): p is string => p !== null).join(" ");
+  const name = strOrNull(c.contactName) ?? strOrNull(c.name) ?? (fullName || null);
+  const tags = Array.isArray(c.tags) ? c.tags.filter((t): t is string => typeof t === "string") : [];
+  return { id, firstName, name, phone: strOrNull(c.phone), tags };
+}
+
+/**
+ * `GET /contacts/{id}`. Same headers and version as the upserts. Never throws;
+ * failures are fixed strings (no response body, no contact data in logs).
+ */
+export async function getGhlContact(accessToken: string, contactId: string): Promise<{ ok: true; contact: GhlContactLite } | { ok: false; error: string; notFound?: true }> {
+  try {
+    const res = await fetch(`${API_BASE}/contacts/${encodeURIComponent(contactId)}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}`, Version: CONTACTS_API_VERSION },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[ghl] contact read rejected: HTTP ${res.status}`);
+      return res.status === 404
+        ? { ok: false, error: `GHL contact read rejected (HTTP ${res.status})`, notFound: true }
+        : { ok: false, error: `GHL contact read rejected (HTTP ${res.status})` };
+    }
+    const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    const contact = toGhlContactLite(json?.contact ?? json);
+    if (!contact) return { ok: false, error: "GHL contact read returned no contact" };
+    return { ok: true, contact };
+  } catch {
+    console.error("[ghl] contact read unreachable");
+    return { ok: false, error: "GHL contact read request failed" };
+  }
+}
+
+/**
+ * `POST /contacts/search` for a location, by tag (a `tags` filter, matched
+ * case-insensitively — also re-checked here) and/or free text, paged up to
+ * `limit` contacts (and at most 20 pages). `truncated` is true when more matched than `limit`.
+ * Never throws; failures are fixed strings (no response body, no contact data
+ * in logs).
+ */
+export async function searchGhlContacts(
+  accessToken: string,
+  locationId: string,
+  query: { text?: string; tag?: string },
+  limit: number
+): Promise<{ ok: true; contacts: GhlContactLite[]; truncated: boolean } | { ok: false; error: string }> {
+  const tag = query.tag?.trim().toLowerCase() || null;
+  const text = query.text?.trim() || null;
+  const contacts: GhlContactLite[] = [];
+  let truncated = false;
+  try {
+    for (let page = 1; ; page++) {
+      if (page > GHL_CONTACT_SEARCH_MAX_PAGES) {
+        truncated = true;
+        break;
+      }
+      const body: Record<string, unknown> = { locationId, page, pageLimit: GHL_CONTACT_SEARCH_PAGE_SIZE };
+      if (text) body.query = text;
+      if (tag) body.filters = [{ field: "tags", operator: "contains", value: [tag] }];
+      const res = await fetch(`${API_BASE}/contacts/search`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Version: CONTACTS_API_VERSION },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        console.error(`[ghl] contacts/search rejected: HTTP ${res.status}`);
+        return { ok: false, error: `GHL contact search rejected (HTTP ${res.status})` };
+      }
+      const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+      const rows = Array.isArray(json?.contacts) ? (json.contacts as unknown[]) : [];
+      for (const row of rows) {
+        const c = toGhlContactLite(row);
+        if (!c) continue;
+        if (tag && !c.tags.some((t) => t.toLowerCase() === tag)) continue;
+        if (contacts.length >= limit) {
+          truncated = true;
+          break;
+        }
+        contacts.push(c);
+      }
+      if (truncated || rows.length < GHL_CONTACT_SEARCH_PAGE_SIZE) break;
+    }
+    return { ok: true, contacts, truncated };
+  } catch {
+    console.error("[ghl] contacts/search unreachable");
+    return { ok: false, error: "GHL contact search request failed" };
   }
 }
 
@@ -1055,6 +1246,121 @@ export async function addGhlInboundMessage(
 }
 
 /**
+ * `POST /conversations/messages/outbound` — GHL's "add an outbound historical
+ * message": records ONE message we already sent (a group invite, sent by the
+ * app over WhatsApp) in the contact's GHL conversation, so the coach sees it
+ * went out. It only records; GHL does not deliver it. Same headers, version
+ * and provider id source as `addGhlInboundMessage`. NOT idempotent: callers
+ * post once and never retry.
+ *
+ * ASSUMED, NOT CONFIRMED against a live location: the body shape
+ * (`type: "SMS"`, `contactId`, `conversationProviderId`, `message`) mirrors
+ * the inbound endpoint. Verify on the first live invite.
+ *
+ * Never throws. Logs the HTTP status only (never the response body, which
+ * could echo the message text); the result carries the status for the
+ * caller's own fixed-string log.
+ */
+export async function addGhlOutboundMessage(
+  accessToken: string,
+  input: { contactId: string; message: string; conversationProviderId: string }
+): Promise<{ ok: true } | { ok: false; status: number | null }> {
+  try {
+    const res = await fetch(`${API_BASE}/conversations/messages/outbound`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Version: API_VERSION,
+      },
+      body: JSON.stringify({
+        type: "SMS",
+        contactId: input.contactId,
+        conversationProviderId: input.conversationProviderId,
+        message: input.message,
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[ghl] conversations/messages/outbound rejected: HTTP ${res.status}`);
+      return { ok: false, status: res.status };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error("[ghl] conversations/messages/outbound failed:", err instanceof Error ? err.name : "unknown");
+    return { ok: false, status: null };
+  }
+}
+
+/** Prefix of the `ghl_message_id` on rows this app originates (not GHL), e.g. group invites. Re-exported by `src/lib/ghl-provider.ts`. */
+export const APP_MESSAGE_ID_PREFIX = "pwapp_";
+
+export function isAppOriginatedMessageId(id: string): boolean {
+  return /^pwapp_[0-9a-f]{32}$/.test(id);
+}
+
+/**
+ * SMS fallback B (docs/superpowers/plans/2026-10-17-sms-fallback-b.md) — the
+ * global switch. Off unless `GHL_SMS_FALLBACK_ENABLED` is exactly "true",
+ * until the sandbox check shows which provider sends the SMS. Each
+ * sub-account also has its own switch (`ghl_accounts.sms_fallback_enabled`).
+ */
+export function isSmsFallbackEnabled(): boolean {
+  return process.env.GHL_SMS_FALLBACK_ENABLED === "true";
+}
+
+/**
+ * `POST /conversations/messages` — asks GHL to SEND an SMS to the contact
+ * through the sub-account's own SMS provider. Used by the SMS fallback when a
+ * contact isn't on WhatsApp (`src/lib/sms-fallback.ts`). Same headers and
+ * `Version` as the other conversations calls; body `{ type: "SMS",
+ * contactId, message }`.
+ *
+ * UNVERIFIED until the sandbox check: if PingWren is itself the
+ * sub-account's SMS provider, GHL may hand this SMS straight back to our
+ * provider webhook. The caller records a pending echo before calling this,
+ * so `handleProviderOutboundMessage` can refuse it.
+ *
+ * On success returns GHL's `messageId` from the response (null when absent or
+ * not JSON), so the loop guard can recognise this exact SMS if it comes back.
+ *
+ * Never throws; 5 s timeout. Logs the HTTP status or the error name only,
+ * never the body, the contact or the text.
+ */
+export async function sendGhlSms(
+  accessToken: string,
+  input: { contactId: string; message: string }
+): Promise<{ ok: true; messageId: string | null } | { ok: false; status: number | null }> {
+  try {
+    const res = await fetch(`${API_BASE}/conversations/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Version: API_VERSION,
+      },
+      body: JSON.stringify({ type: "SMS", contactId: input.contactId, message: input.message }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[ghl] conversations/messages (SMS fallback) rejected: HTTP ${res.status}`);
+      return { ok: false, status: res.status };
+    }
+    let messageId: string | null = null;
+    try {
+      const json = (await res.json()) as { messageId?: unknown } | null;
+      if (json && typeof json.messageId === "string" && json.messageId.length > 0) messageId = json.messageId;
+    } catch {
+      // Sent, but no readable id: the loop guard falls back to the text hash.
+    }
+    return { ok: true, messageId };
+  } catch (err) {
+    console.error("[ghl] conversations/messages (SMS fallback) failed:", err instanceof Error ? err.name : "unknown");
+    return { ok: false, status: null };
+  }
+}
+
+/**
  * Provably PRE-FLIGHT failures only — the request never reached (or could
  * never have reached) GHL's servers, so a retry cannot possibly double-post.
  * `ENOTFOUND`/`EAI_AGAIN` (DNS resolution never completed) and
@@ -1082,6 +1388,72 @@ const MEDIA_PLACEHOLDERS: Readonly<Record<string, string>> = {
   documentMessage: "[Document received on WhatsApp — view it on the connected phone]",
 };
 const MEDIA_PLACEHOLDER_DEFAULT = "[WhatsApp message received — view it on the connected phone]";
+
+/** Fixed text posted to GHL for a missed WhatsApp call (the bridge stores no body for these rows). */
+export const MISSED_VOICE_CALL_TEXT = "📞 Missed WhatsApp call";
+export const MISSED_VIDEO_CALL_TEXT = "📞 Missed WhatsApp video call";
+
+/** `missedVideoCall` -> the video string; any other messageType -> the voice string. */
+export function describeMissedCall(messageType: string): string {
+  return messageType === "missedVideoCall" ? MISSED_VIDEO_CALL_TEXT : MISSED_VOICE_CALL_TEXT;
+}
+
+/** Message events — the rendered body of an edit, reaction or delete never exceeds this many code points. */
+export const INBOUND_EVENT_MAX_CODE_POINTS = 500;
+/** A reaction quotes at most this many code points of the message it reacted to. */
+const REACTION_QUOTE_MAX_CODE_POINTS = 80;
+export const EDIT_PREFIX = "✏️ Edited: ";
+export const DELETE_TEXT = "🗑 Deleted a message";
+
+/**
+ * Message events — the reply text of a quoted reply's body. With
+ * WA_INBOUND_EVENTS_ENABLED on, the bridge stores a quoted reply as
+ * `↩ "<quote>"`, a newline, then the reply (the prefix is always one line).
+ * Returns the text after the first newline when the body starts with `↩ `
+ * and has one; otherwise the body unchanged. Pure.
+ */
+export function stripQuotePrefix(body: string): string {
+  if (!body.startsWith("↩ ")) return body;
+  const newline = body.indexOf("\n");
+  return newline === -1 ? body : body.slice(newline + 1);
+}
+
+/** Any run of line breaks (CR, LF, NEL, LS, PS) and the whitespace around it, so it can become one space. */
+const LINE_BREAK_RUN = /\s*[\r\n\u0085\u2028\u2029]+\s*/g;
+
+function cutCodePoints(text: string, max: number): string {
+  const points = Array.from(text);
+  return points.length <= max ? text : points.slice(0, max).join("");
+}
+
+/**
+ * Message events — the text posted to GHL for an `edit`, `reaction` or
+ * `delete` row. Pure. `originalBody` is the stored body of the message a
+ * reaction targets (null when it is gone or was ours); only a reaction reads it.
+ * A reaction's quote is the original's reply text (`stripQuotePrefix`) on
+ * one line, cut to 80 code points.
+ * The result is capped at 500 code points, cutting the contact's text, never the prefix.
+ */
+export function renderInboundEvent(row: WhatsappInboundMessage, originalBody: string | null): string {
+  let rendered: string;
+  if (row.eventKind === "edit") {
+    rendered = EDIT_PREFIX + cutCodePoints(row.body ?? "", INBOUND_EVENT_MAX_CODE_POINTS - Array.from(EDIT_PREFIX).length);
+  } else if (row.eventKind === "delete") {
+    rendered = DELETE_TEXT;
+  } else {
+    const emoji = row.body ?? "";
+    if (row.targetFromMe === true) rendered = `${emoji} reacted to your message`;
+    else {
+      // The quote is one line of the contact's own words: a quoted reply's
+      // `↩ "…"` prefix is dropped and line breaks become one space.
+      const quoted = originalBody ? stripQuotePrefix(originalBody).replace(LINE_BREAK_RUN, " ").trim() : "";
+      rendered = quoted
+        ? `${emoji} reacted to "${cutCodePoints(quoted, REACTION_QUOTE_MAX_CODE_POINTS)}"`
+        : `${emoji} reacted to a message`;
+    }
+  }
+  return cutCodePoints(rendered, INBOUND_EVENT_MAX_CODE_POINTS);
+}
 
 /**
  * Plan §Q6 — pure, exported, unit-tested map of fixed strings.

@@ -98,6 +98,18 @@
  * booleans (`isGhlEmbedConfigured()`/`isLiveMode()`/`isWhatsappBridgeConfigured()`),
  * no network involved — see that page's own header.
  *
+ * SEVERAL NUMBERS PER LOCATION (Task 4). Step 7's response also carries
+ * `numbers: { slot, label, isDefault, summary }[]` — every one of the
+ * location's WhatsApp numbers (`listLocationNumbers`), each with its own
+ * redacted summary (one `getWhatsappSessionSummary` read per number, through
+ * the same `toEmbedSummary`), built by `listEmbedNumbers`
+ * (src/app/api/crm/embed/numbers/logic.ts) which ENUMERATES those four fields
+ * so `LocationNumber.tenantId` can never ride along. The client addresses a
+ * number by `slot` on every later call. The top-level `summary` stays for
+ * the pre-slot client, and is SLOT 1's — the number that client's slot-less
+ * calls now reach (see `guard.ts`'s fifth check) — falling back to the
+ * account's default tenant only if slot 1 has no row.
+ *
  * ACCEPTED RISK: THE PAYLOAD IS REPLAYABLE (adversarial review lens 4,
  * finding 7 — MINOR, documented, not fixed — this is inherent to GHL's own
  * protocol, not a bug in this file). The decrypted SSO payload carries no
@@ -126,7 +138,7 @@ import { embedStateFor } from "./logic";
 import { brandConfig } from "@/lib/brand-config";
 import { claimSignupUrl, isClaimConfigured } from "@/lib/ghl-claim";
 import { getWhatsappBridgeHealth, isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
-import { toEmbedWhatsappSummary } from "@/lib/embed-summary";
+import { listEmbedNumbers, toEmbedSummary } from "@/app/api/crm/embed/numbers/logic";
 
 export const dynamic = "force-dynamic";
 
@@ -137,12 +149,10 @@ function fail(status: number, error: string): NextResponse {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
-/**
- * Strips `coachId` off a session summary before it is ever handed to
- * `NextResponse.json` — see this file's header, "NEVER THE TENANT ID
- * EITHER". `null` in, `null` out (a coach — here, GHL location — with no
- * `whatsapp_sessions` row at all).
- */
+// `toEmbedSummary` — the enumerate-never-spread redaction this file's header
+// ("NEVER THE TENANT ID EITHER") describes — now lives in
+// src/app/api/crm/embed/numbers/logic.ts, shared with the per-number list.
+
 export async function POST(request: Request) {
   try {
     if (!isGhlEmbedConfigured()) return fail(503, "embed_not_configured");
@@ -200,14 +210,17 @@ export async function POST(request: Request) {
     }
     const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
     const claimUrl = !account.accountId && isClaimConfigured() ? claimSignupUrl(brandConfig().appUrl, account.locationId) : null;
-    const embedState = embedStateFor(account, owner?.billingStatus ?? null, claimUrl);
+    const embedState = embedStateFor(account, owner?.billingStatus ?? null, claimUrl, owner?.trialEndsAt ?? null);
     if (embedState.state !== "ok") {
       // disabled / unclaimed / billing_paused / not_activated: no embed token, no QR.
       return NextResponse.json({ ok: true, ...embedState });
     }
 
     const token = mintGhlEmbedToken(account.locationId);
-    const summary = await repo.getWhatsappSessionSummary(account.tenantId);
+    // See this file's header, "SEVERAL NUMBERS PER LOCATION".
+    const numbers = await listEmbedNumbers(repo, account.locationId);
+    const slotOne = numbers.find((n) => n.slot === 1);
+    const summary = slotOne ? slotOne.summary : toEmbedSummary(await repo.getWhatsappSessionSummary(account.tenantId));
 
     // See this file's header, "THE BRIDGE-HEALTH PROBE LIVES HERE" — only
     // reachable once a payload has genuinely decrypted to an active,
@@ -217,7 +230,7 @@ export async function POST(request: Request) {
     // display isn't worth the request).
     const bridgeReachable = isWhatsappBridgeConfigured() ? (await getWhatsappBridgeHealth()).ok : null;
 
-    return NextResponse.json({ ok: true, state: "ok", token, label: account.label, summary: toEmbedWhatsappSummary(summary), bridgeReachable });
+    return NextResponse.json({ ok: true, state: "ok", token, label: account.label, summary, numbers, bridgeReachable });
   } catch (err) {
     // Adversarial review lens 4, finding 6 (MINOR) — see this file's header.
     // Never echoes `err` into the response.

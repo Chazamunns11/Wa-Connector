@@ -55,7 +55,11 @@
  *      best-effort ordering, verify-at-go-live whether GHL actually honours
  *      it).
  *   5. RESOLVE — `'ghl_pushed'` on success; see the retry table below for
- *      every failure branch.
+ *      every failure branch. Multiple numbers (Task 3): on success only, the
+ *      contact is then stuck to the number this reply arrived on
+ *      (`recordStickiness`, never throws), and step 4's body carries a
+ *      `[label] ` / `[Number N] ` prefix when the location has more than one
+ *      number.
  *
  * ============ THE RETRY TABLE (plan §Q5, restated in code) ============
  *   - Contact upsert 429/5xx/network error -> RETRYABLE, pre-claim. Row
@@ -152,6 +156,25 @@
  * ONLY in the text posted to GHL — the DB row's `body` stays `null`
  * regardless (this module never writes to that column).
  *
+ * ============ OPT-IN WHATSAPP GROUPS (0007) ============ A row with a
+ * `groupJid` is a message from a WhatsApp group, `fromPhone` being the member
+ * who wrote it. Resolved via `whatsapp_groups (tenant_id = the ROW's tenant,
+ * group_jid)` — memoised per tenant per pass:
+ *   - no group row, or not `enabled` -> claimed and resolved
+ *     `'group_not_enabled'` (terminal, fixed string), with NO GHL call at all.
+ *     The bridge already drops traffic for groups that are not enabled; this
+ *     is the app-side fence for a group switched off after the row landed.
+ *   - enabled -> posted into the ONE GHL contact standing for the group
+ *     (`ghl_contact_id`). The first row creates it (`upsertGhlGroupContact`,
+ *     pre-claim like the phone upsert, same retry and breaker accounting) and
+ *     stores it (`setWhatsappGroupContact`) BEFORE the claim and post, so
+ *     every later row reuses it. The sender is NEVER upserted as a contact
+ *     (group members did not opt in to the CRM) and no stickiness is
+ *     recorded (a group contact belongs to its group's number).
+ *   - body: `<sender name>: <text>` (the sender's E.164 when WhatsApp gave
+ *     no name), the same prefix in front of a media placeholder/label, and
+ *     the multiple-numbers `[label] ` before it: `[Sales] Jane: hello`.
+ *
  * ============ FIXED REASON STRINGS ONLY (hard constraint, restated) ============
  * Every string this module writes to `push_error` is one of the constants
  * below, or a fixed string `src/lib/ghl.ts` already sanitised to (HTTP
@@ -170,24 +193,38 @@
 import {
   addGhlInboundMessage,
   describeInboundMediaPlaceholder,
+  describeMissedCall,
   describeStoredMediaLabel,
   describeTooLargeMediaPlaceholder,
   ghlConversationProviderId,
+  ghlGroupContactKey,
   isGhlDndSyncEnabled,
   setGhlContactDnd,
   refreshGhlToken,
   upsertGhlContact,
+  upsertGhlGroupContact,
   type AddGhlInboundMessageResult,
   type UpsertGhlContactResult,
+  renderInboundEvent,
+  stripQuotePrefix,
 } from "@/lib/ghl";
 import {
+  fireTriggerBestEffort,
+  newTriggerPass,
   resolveGhlAccessToken,
+  resolvePassTarget,
+  settleTriggers,
+  startTrigger,
+  type TriggerPass,
+  type FireTrigger,
   type GhlTokenRefreshDeps,
   type GhlTokenRefreshRepo,
 } from "@/lib/ghl-provider";
+import { toTriggerMessageType } from "@/lib/ghl-triggers";
+import { inboundNumberPrefix } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
 import { classifyOptOutMessage } from "@/lib/opt-out";
-import type { WhatsappInboundMessage } from "@/lib/types";
+import type { LocationNumber, WhatsappGroup, WhatsappInboundMessage } from "@/lib/types";
 
 /** Repo slice this module needs — `GhlTokenRefreshRepo`'s four methods (shared with `resolveGhlAccessToken`) plus this phase's own four, plus the media plan's signed-URL mint. All sessionless — driven exclusively via `webhookRepo` (the whatsapp-replies poke route and the reminders cron, neither carries a user session). */
 export type GhlInboundRepo = GhlTokenRefreshRepo &
@@ -195,12 +232,26 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     GhlRepository,
     | "getGhlAccountByTenantId"
     | "getUnprocessedGhlInboundMessages"
+    | "getInboundBodyByWaMessageId"
     | "claimWhatsappInboundMessage"
     | "recordGhlInboundPushFailure"
     | "resolveGhlInboundMessage"
     | "createWhatsappMediaSignedUrl"
+    // Multiple numbers (Task 3) — the `[label] ` prefix and per-contact
+    // stickiness (see `processGhlInboundRow`'s steps 4 and 5).
+    | "listLocationNumbers"
+    | "recordInboundForStickiness"
+    // Opt-in groups (0007) — the row's group, and its GHL contact once made.
+    | "listWhatsappGroups"
+    | "setWhatsappGroupContact"
+    // Reliability (W10) — STOP/START opt-outs.
     | "recordOptOut"
     | "clearOptOut"
+    // Workflow triggers — the number's phone and who subscribed.
+    | "getTenantPhone"
+    | "listTriggerSubscriptions"
+    // SMS fallback — a contact who messages us is on WhatsApp after all.
+    | "forgetNotOnWhatsapp"
   >;
 
 /**
@@ -212,16 +263,21 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
  */
 export interface GhlInboundDeps extends GhlTokenRefreshDeps {
   upsertContact: (accessToken: string, locationId: string, phoneE164: string) => Promise<UpsertGhlContactResult>;
+  /** Opt-in groups — creates (or finds) the one GHL contact standing for a group. */
+  upsertGroupContact: (accessToken: string, locationId: string, input: { name: string; groupKey: string }) => Promise<UpsertGhlContactResult>;
   addInboundMessage: (
     accessToken: string,
     input: { contactId: string; conversationProviderId: string; body: string; timestampIso?: string; attachments?: string[] }
   ) => Promise<AddGhlInboundMessageResult>;
   /** T10 — only called when `GHL_SYNC_DND === "true"`. */
   setContactDnd: (accessToken: string, contactId: string, dnd: boolean) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Workflow triggers; optional so tests can fake it, else the real helper (which reads the firing flag itself). */
+  fireTrigger?: FireTrigger;
 }
 
 export const defaultGhlInboundDeps: GhlInboundDeps = {
   upsertContact: upsertGhlContact,
+  upsertGroupContact: upsertGhlGroupContact,
   addInboundMessage: addGhlInboundMessage,
   setContactDnd: setGhlContactDnd,
   refreshToken: refreshGhlToken,
@@ -248,12 +304,29 @@ const CIRCUIT_BREAK_AFTER_CONSECUTIVE_FAILURES = 5;
 const REASON_PUSH_EXHAUSTED = "could not deliver this WhatsApp reply to GHL after repeated attempts";
 const REASON_NO_ACCESS_TOKEN = "no valid GHL access token available to push this reply";
 const REASON_ACCOUNT_NOT_FOUND = "GHL account for this WhatsApp session not found";
+/** Global constraint, verbatim — the same string the outbound side refuses with. */
+const REASON_GROUP_NOT_ENABLED = "WhatsApp group sync is turned off for this group";
 
 export const GHL_INBOUND_REASONS = {
   pushExhausted: REASON_PUSH_EXHAUSTED,
   noAccessToken: REASON_NO_ACCESS_TOKEN,
   accountNotFound: REASON_ACCOUNT_NOT_FOUND,
+  groupNotEnabled: REASON_GROUP_NOT_ENABLED,
 } as const;
+
+/** Terminal resolution for a group row whose group is unknown or switched off — never posted to GHL. */
+export const GROUP_NOT_ENABLED_RESOLUTION = "group_not_enabled";
+
+/**
+ * A missed call older than this when the drain reaches it is resolved without
+ * posting (`MISSED_CALL_STALE_RESOLUTION`), so a reconnect after a long outage
+ * never sets off a very late GHL text-back workflow.
+ */
+export const MISSED_CALL_STALE_MS = 6 * 60 * 60 * 1000;
+/** Terminal resolution for a missed call older than `MISSED_CALL_STALE_MS` — never posted to GHL. */
+export const MISSED_CALL_STALE_RESOLUTION = "missed_call_stale";
+/** Terminal resolution for a reaction or delete the sub-account has not turned on, or an event row of an unknown kind — never posted to GHL. */
+export const EVENT_SUPPRESSED_RESOLUTION = "event_suppressed";
 
 export interface DrainGhlInboundRepliesResult {
   /** Unprocessed GHL-tenant rows this pass looked at (capped at `DRAIN_BATCH_CAP`) — `0` whenever `blockedUnconfigured` is `true`, since the list is never even read in that case. */
@@ -270,12 +343,20 @@ export interface DrainGhlInboundRepliesResult {
   retried: number;
   /** Rows this pass lost the claim race on (another poke/cron pass already claimed it) — untouched, no error. */
   claimLost: number;
+  /** Group rows whose group is unknown or switched off — `resolution: 'group_not_enabled'`, never posted. */
+  groupNotEnabled: number;
+  /** Missed calls older than `MISSED_CALL_STALE_MS` — `resolution: 'missed_call_stale'`, never posted. */
+  staleMissedCalls: number;
+  /** Reactions and deletes the sub-account has not turned on, and event rows of an unknown kind — `resolution: 'event_suppressed'`, never posted. */
+  eventsSuppressed: number;
   /** Rows this pass whose text was a STOP-type keyword and recorded an opt-out (idempotent, so a retried row can count again). */
   optedOut: number;
   /** Rows this pass whose text was a START-type keyword and cleared an opt-out. */
   optedIn: number;
   /** `true` iff `GHL_CONVERSATION_PROVIDER_ID` is unset — see this file's STEP 0 note. Every other counter is `0` when this is `true`. */
   blockedUnconfigured: boolean;
+  /** Workflow-trigger fires not started this pass because an earlier fire in it failed. */
+  triggersSkipped: number;
 }
 
 /**
@@ -330,9 +411,13 @@ export async function drainGhlInboundReplies(
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    groupNotEnabled: 0,
+    staleMissedCalls: 0,
+    eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: false,
+    triggersSkipped: 0,
   };
 
   const envProviderId = ghlConversationProviderId();
@@ -352,10 +437,7 @@ export async function drainGhlInboundReplies(
   result.candidates = rows.length;
   if (rows.length === 0) return result;
 
-  // Per-(tenant, phone) contact-id memo for THIS pass only — an efficiency,
-  // not a correctness requirement (see this file's step 2 note: the upsert
-  // is safe to call twice regardless).
-  const contactIdByKey = new Map<string, string>();
+  const memos: PassMemos = { contactIdByKey: new Map(), numbersByLocation: new Map(), groupsByTenant: new Map(), locationByTenant: new Map(), triggers: newTriggerPass(() => result.triggersSkipped++) };
   const breaker: CircuitBreakerState = { consecutiveContactUpsertFailures: 0, consecutivePostFailures: 0 };
 
   for (const row of rows) {
@@ -366,29 +448,67 @@ export async function drainGhlInboundReplies(
       break;
     }
     try {
-      await processGhlInboundRow(repo, deps, row, envProviderId, contactIdByKey, result, breaker);
+      await processGhlInboundRow(repo, deps, row, envProviderId, memos, result, breaker);
     } catch (err) {
       console.error(`[ghl-inbound.drainGhlInboundReplies] row ${row.id} failed unexpectedly (non-fatal):`, err);
       result.retried++;
     }
   }
 
+  // Started trigger fires get a bounded wait; every row is already resolved.
+  await settleTriggers(memos.triggers);
   return result;
 }
 
 /**
+ * Per-pass memos, all efficiency-only and never kept beyond one pass (a
+ * number added or relabelled, or a group switched on or off, shows up on the
+ * very next pass). Only successful reads are cached, so a throw is retried by
+ * the next row too.
+ */
+interface PassMemos {
+  /** Per-(tenant, phone) contact id — the upsert is safe to call twice regardless (step 2). */
+  contactIdByKey: Map<string, string>;
+  /** Multiple numbers (Task 3) — per-location number list (a batch is typically many rows for few locations). */
+  numbersByLocation: Map<string, LocationNumber[]>;
+  /** Opt-in groups — per-tenant group rows. A group contact created this pass is written into its entry, so later rows reuse it. */
+  groupsByTenant: Map<string, WhatsappGroup[]>;
+  /** SMS fallback — the location of each tenant seen this pass (only a found one is kept). */
+  locationByTenant: Map<string, string>;
+  /** Workflow triggers — the fires this pass started, and its number lookups. */
+  triggers: TriggerPass;
+}
+
+/**
  * Classify one inbound text and persist the opt-out / opt-in for that
- * (tenant, number). Whole-message keyword match only (`classifyOptOutMessage`).
+ * (tenant, number). Whole-message keyword match only (`classifyOptOutMessage`),
+ * on the reply text of a quoted reply (`stripQuotePrefix`).
  * Idempotent: recording an opt-out twice or clearing an absent one is
  * harmless, so a row retried after a failed GHL push is safe. The message
  * itself is still delivered to GHL by the caller.
+ *
+ * Opt-in groups (merge ruling): a GROUP row (`groupJid` set) is never
+ * classified — a member typing "STOP" in a group the owner opted into is
+ * talking to the group, not opting out of the business's one-to-one
+ * messages. Multiple numbers: the opt-out is STORED on the number it arrived
+ * on; the outbound check applies it across the location's numbers
+ * (`optedOutReason`, src/lib/ghl-provider.ts), and a START clears it on
+ * every number of the location (`processGhlInboundRow`).
  */
 export async function applyOptOutKeyword(
   repo: Pick<GhlInboundRepo, "recordOptOut" | "clearOptOut">,
   row: WhatsappInboundMessage,
   ghlContactId: string | null
 ): Promise<"opt_out" | "opt_in" | null> {
-  const decision = classifyOptOutMessage(row.body);
+  if (row.groupJid != null) return null;
+  // Only plain messages and edits (their new text) are text the contact typed
+  // as a keyword; a missed call, reaction or delete never is.
+  if (row.eventKind && row.eventKind !== "edit") return null;
+  // An event row of a kind this app doesn't know is never keyword text.
+  if (row.messageType === "event" && row.eventKind !== "edit") return null;
+  // A quoted reply (events on) is `↩ "<quote>"`, a newline, then the reply:
+  // classify the reply, so a quoted "STOP" opts out like a plain one.
+  const decision = classifyOptOutMessage(row.body === null ? null : stripQuotePrefix(row.body));
   if (!decision) return null;
   if (decision.kind === "opt_out") {
     await repo.recordOptOut({ tenantId: row.coachId, phone: row.fromPhone, keyword: decision.keyword, ghlContactId });
@@ -398,16 +518,45 @@ export async function applyOptOutKeyword(
   return "opt_in";
 }
 
+/** The event kinds a `messageType "event"` row may carry that this app renders. */
+function isKnownEventKind(kind: WhatsappInboundMessage["eventKind"]): boolean {
+  return kind === "edit" || kind === "reaction" || kind === "delete";
+}
+
 /** One row's full pipeline — see this file's header for the sequence and retry table. */
+/**
+ * SMS fallback: this phone just messaged us one-to-one (event rows included),
+ * so it is on WhatsApp: forget any "not on WhatsApp" memory for (location,
+ * phone). Never for a group row. Best effort: every error is swallowed and the
+ * row's outcome is untouched. The tenant's location is looked up once per pass.
+ */
+async function forgetNotOnWhatsappBestEffort(repo: GhlInboundRepo, row: WhatsappInboundMessage, memos: PassMemos): Promise<void> {
+  if (row.groupJid != null) return;
+  try {
+    let locationId = memos.locationByTenant.get(row.coachId);
+    if (!locationId) {
+      const account = await repo.getGhlAccountByTenantId(row.coachId);
+      if (!account) return;
+      locationId = account.locationId;
+      memos.locationByTenant.set(row.coachId, locationId);
+    }
+    await repo.forgetNotOnWhatsapp(locationId, row.fromPhone);
+  } catch {
+    console.error("[ghl-inbound] could not clear the not-on-WhatsApp memory (non-fatal)");
+  }
+}
+
 async function processGhlInboundRow(
   repo: GhlInboundRepo,
   deps: GhlInboundDeps,
   row: WhatsappInboundMessage,
   envProviderId: string,
-  contactIdByKey: Map<string, string>,
+  memos: PassMemos,
   result: DrainGhlInboundRepliesResult,
   breaker: CircuitBreakerState
 ): Promise<void> {
+  await forgetNotOnWhatsappBestEffort(repo, row, memos);
+
   // Exhaustion pre-check — mirrors `src/lib/ghl-provider.ts`'s
   // `drainPendingSend` exhaustion branch exactly (Phase 1-2 finding 1's own
   // fix shape). A row that has already failed `MAX_PUSH_ATTEMPTS` times sits
@@ -425,8 +574,56 @@ async function processGhlInboundRow(
     return;
   }
 
+  // A missed call that is too old (the bridge was offline, or this drain was
+  // stalled) is resolved without posting: a text-back hours later would be
+  // worse than none. No GHL call, so the circuit breaker is untouched.
+  if (row.eventKind === "missed_call" && Date.now() - Date.parse(row.receivedAt) > MISSED_CALL_STALE_MS) {
+    const claimed = await repo.claimWhatsappInboundMessage(row.id);
+    if (!claimed) {
+      result.claimLost++;
+      return;
+    }
+    await repo.resolveGhlInboundMessage(row.id, { resolution: MISSED_CALL_STALE_RESOLUTION, pushError: null });
+    result.staleMissedCalls++;
+    return;
+  }
+
+  // An event row (`messageType "event"`) of a kind this app doesn't know
+  // (a newer bridge, or a row read without 0011's columns) is never posted:
+  // posting it would show a reaction or delete as a plain message.
+  if (row.messageType === "event" && !isKnownEventKind(row.eventKind)) {
+    const claimed = await repo.claimWhatsappInboundMessage(row.id);
+    if (!claimed) {
+      result.claimLost++;
+      return;
+    }
+    await repo.resolveGhlInboundMessage(row.id, { resolution: EVENT_SUPPRESSED_RESOLUTION, pushError: null });
+    result.eventsSuppressed++;
+    return;
+  }
+
+  // Opt-in groups — resolve the row's group by the ROW's tenant (the number
+  // the message arrived on). Unknown or switched off: never reaches GHL. A
+  // `groupJid` of any value (even an empty string) takes this path, so a
+  // group row can never fall through to the one-to-one path below.
+  let group: WhatsappGroup | null = null;
+  if (row.groupJid != null) {
+    group = await findRowGroup(repo, row.coachId, row.groupJid, memos.groupsByTenant);
+    if (!group || !group.enabled) {
+      const claimed = await repo.claimWhatsappInboundMessage(row.id);
+      if (!claimed) {
+        result.claimLost++;
+        return;
+      }
+      await repo.resolveGhlInboundMessage(row.id, { resolution: GROUP_NOT_ENABLED_RESOLUTION, pushError: REASON_GROUP_NOT_ENABLED });
+      result.groupNotEnabled++;
+      return;
+    }
+  }
+
   // STOP/START: persist the opt-out before any GHL call or claim, so it holds
   // even if the push below fails; idempotent, so a retried row is harmless.
+  // Never for a group row (`applyOptOutKeyword`).
   const optOutOutcome = await applyOptOutKeyword(repo, row, null);
   if (optOutOutcome === "opt_out") result.optedOut++;
   else if (optOutOutcome === "opt_in") result.optedIn++;
@@ -458,6 +655,20 @@ async function processGhlInboundRow(
     return;
   }
 
+  // Reactions and deletes are posted only when the sub-account turned them
+  // on (they land as new messages and can trigger "Customer replied"
+  // workflows). Resolved without a GHL call, so the breaker is untouched.
+  if ((row.eventKind === "reaction" && !account.showReactions) || (row.eventKind === "delete" && !account.showDeletes)) {
+    const claimed = await repo.claimWhatsappInboundMessage(row.id);
+    if (!claimed) {
+      result.claimLost++;
+      return;
+    }
+    await repo.resolveGhlInboundMessage(row.id, { resolution: EVENT_SUPPRESSED_RESOLUTION, pushError: null });
+    result.eventsSuppressed++;
+    return;
+  }
+
   const accessToken = await resolveGhlAccessToken(repo, deps, account);
   if (!accessToken) {
     await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: REASON_NO_ACCESS_TOKEN, unclaim: false });
@@ -469,11 +680,15 @@ async function processGhlInboundRow(
   // ever sets it (0069), so this is always `envProviderId` in practice.
   const conversationProviderId = account.conversationProviderId ?? envProviderId;
 
-  // Step 2 — upsert contact, PRE-CLAIM, idempotent (plan §Q2/§Q4).
+  // Step 2 — upsert contact, PRE-CLAIM, idempotent (plan §Q2/§Q4). A group
+  // row uses the group's contact instead (created on its first message, and
+  // stored before the claim and post); the sender is never upserted.
   const memoKey = `${row.coachId}:${row.fromPhone}`;
-  let contactId = contactIdByKey.get(memoKey) ?? null;
+  let contactId = group ? group.ghlContactId : (memos.contactIdByKey.get(memoKey) ?? null);
   if (!contactId) {
-    const upsert = await deps.upsertContact(accessToken, account.locationId, row.fromPhone);
+    const upsert = group
+      ? await deps.upsertGroupContact(accessToken, account.locationId, { name: group.name, groupKey: ghlGroupContactKey(group.groupJid, group.tenantId) })
+      : await deps.upsertContact(accessToken, account.locationId, row.fromPhone);
     if (!upsert.ok) {
       breaker.consecutiveContactUpsertFailures++;
       await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: upsert.error, unclaim: false });
@@ -485,7 +700,43 @@ async function processGhlInboundRow(
     // nothing about the messages endpoint's health.
     breaker.consecutiveContactUpsertFailures = 0;
     contactId = upsert.contactId;
-    contactIdByKey.set(memoKey, contactId);
+    if (group) {
+      // Stored BEFORE anything is posted to it: a throw here leaves the row
+      // un-claimed for the next pass, and GHL's upsert dedupes on the group's
+      // placeholder email, so that retry gets the same contact back. The key
+      // is per number (`ghlGroupContactKey`), so the same group on another of
+      // the location's numbers is a separate contact.
+      await repo.setWhatsappGroupContact(group.tenantId, group.groupJid, contactId);
+      group.ghlContactId = contactId;
+    } else {
+      memos.contactIdByKey.set(memoKey, contactId);
+    }
+  }
+
+  // Multiple numbers (Task 3) — read PRE-CLAIM, like the upsert: a failure
+  // here throws to `drainGhlInboundReplies`'s per-row catch with the row
+  // still un-claimed, so it is simply retried next pass (never pushed
+  // without knowing which number it came in on). `row.coachId` — the number
+  // this reply actually arrived on — is what the prefix describes, never
+  // `account.tenantId` (the location's DEFAULT number, whichever number the
+  // row came from — see `getGhlAccountByTenantId`'s JSDoc).
+  // Memoised per location for this pass (`memos.numbersByLocation`); only a
+  // successful read is cached, so a throw is retried by the next row too.
+  let locationNumbers = memos.numbersByLocation.get(account.locationId);
+  if (!locationNumbers) {
+    locationNumbers = await repo.listLocationNumbers(account.locationId);
+    memos.numbersByLocation.set(account.locationId, locationNumbers);
+  }
+  const numberPrefix = inboundNumberPrefix(locationNumbers, row.coachId);
+
+  // Multiple numbers × STOP (merge ruling): the outbound check blocks a
+  // contact opted out on ANY of the location's numbers, so a START must
+  // clear the opt-out on every one of them, not only the number it arrived
+  // on (already cleared in `applyOptOutKeyword`). Idempotent, pre-claim.
+  if (optOutOutcome === "opt_in") {
+    for (const n of locationNumbers) {
+      if (n.tenantId !== row.coachId) await repo.clearOptOut(n.tenantId, row.fromPhone);
+    }
   }
 
   // T10 — optional DND mirror (GHL_SYNC_DND, off by default). Never blocks the
@@ -499,6 +750,14 @@ async function processGhlInboundRow(
       console.error("[ghl-inbound] DND sync threw (non-fatal):", err instanceof Error ? err.message : "unknown error");
     }
   }
+
+  // A reaction to one of the contact's own messages quotes it: read PRE-claim,
+  // like the upsert, so a failure throws with the row un-claimed and is retried.
+  // `null` (expired or gone) renders "reacted to a message".
+  const originalBody =
+    row.eventKind === "reaction" && row.targetFromMe !== true && row.targetWaMessageId
+      ? await repo.getInboundBodyByWaMessageId(row.coachId, row.targetWaMessageId)
+      : null;
 
   // Step 3 — atomic claim, reused verbatim from the coach drain (see this
   // file's header's CLAIM-VS-NO-CLAIM ASYMMETRY note).
@@ -515,11 +774,26 @@ async function processGhlInboundRow(
   // `null`/`undefined` for EVERY coach-tenant row and every row written
   // while `WA_MEDIA_INBOUND_ENABLED` was off, in which case this collapses
   // to exactly Q6's original placeholder-only behaviour.
-  const { body, attachments } = row.body !== null ? { body: row.body, attachments: undefined } : await resolveMediaAttachment(repo, row);
+  // A missed call carries a fixed string and never touches media resolution.
+  const { body, attachments } =
+    row.eventKind === "missed_call"
+      ? { body: describeMissedCall(row.messageType), attachments: undefined }
+      : row.eventKind === "edit" || row.eventKind === "reaction" || row.eventKind === "delete"
+        ? { body: renderInboundEvent(row, originalBody), attachments: undefined }
+      : row.body !== null
+        ? { body: row.body, attachments: undefined }
+        : await resolveMediaAttachment(repo, row);
   const post = await deps.addInboundMessage(accessToken, {
     contactId,
     conversationProviderId,
-    body,
+    // Multiple numbers (Task 3) — `[label] ` / `[Number N] ` when the
+    // location has more than one number (media placeholders/labels
+    // included), else "" so a single-number location's body is byte-for-byte
+    // unchanged. No truncation needed: this module never length-caps the
+    // body it posts (GHL takes the reply as-is), and the prefix is at most a
+    // 40-char label (0006's CHECK) plus brackets. A group row adds its
+    // sender after it: `[Sales] Jane: hello`.
+    body: numberPrefix + (group ? `${groupSenderLabel(row)}: ` : "") + body,
     timestampIso: row.receivedAt,
     attachments,
   });
@@ -528,6 +802,10 @@ async function processGhlInboundRow(
     breaker.consecutivePostFailures = 0;
     await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_pushed", pushError: null });
     result.pushed++;
+    // Not for a group contact: it belongs to its group's number, and the
+    // sender is not a contact at all.
+    if (!group) await recordStickiness(repo, account.locationId, contactId, row);
+    fireInboundTrigger(repo, deps, memos, account.locationId, locationNumbers, contactId, row, group !== null || optOutOutcome !== null);
     return;
   }
 
@@ -561,6 +839,93 @@ async function processGhlInboundRow(
   // re-resolves the token from scratch before retrying.
   await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: post.error, unclaim: true });
   result.retried++;
+}
+
+/**
+ * Workflow triggers, after a push that landed: a plain one-to-one message starts
+ * `whatsapp_message_received` (no text) and a missed call `whatsapp_missed_call`.
+ * Group rows, edit/reaction/delete rows and STOP/START keywords fire nothing.
+ * Starts the fire in the background (awaited with the rest at the end of the
+ * pass) and never throws, so it can never change or delay the row's result.
+ */
+function fireInboundTrigger(
+  repo: GhlInboundRepo,
+  deps: GhlInboundDeps,
+  memos: PassMemos,
+  locationId: string,
+  locationNumbers: LocationNumber[],
+  contactId: string,
+  row: WhatsappInboundMessage,
+  skip: boolean
+): void {
+  try {
+    // A group row, or a STOP/START keyword (a compliance keyword, not a conversation).
+    if (skip) return;
+    const isMissedCall = row.eventKind === "missed_call";
+    if (row.eventKind && !isMissedCall) return;
+    startTrigger(memos.triggers, async () => {
+      const target = await resolvePassTarget(repo, memos.triggers, locationId, row.coachId, locationNumbers);
+      if (!target) return true;
+      if (isMissedCall) {
+        return fireTriggerBestEffort(repo, deps, locationId, "whatsapp_missed_call", { ...target, isVideo: row.messageType === "missedVideoCall", contactId });
+      }
+      return fireTriggerBestEffort(repo, deps, locationId, "whatsapp_message_received", {
+        ...target,
+        messageType: toTriggerMessageType(row.messageType),
+        contactId,
+      });
+    });
+  } catch {
+    // never changes the drain result
+  }
+}
+
+/** Opt-in groups — the row's `whatsapp_groups` entry for its own tenant, or null. Memoised per tenant for the pass. */
+async function findRowGroup(
+  repo: GhlInboundRepo,
+  tenantId: string,
+  groupJid: string,
+  groupsByTenant: Map<string, WhatsappGroup[]>
+): Promise<WhatsappGroup | null> {
+  let groups = groupsByTenant.get(tenantId);
+  if (!groups) {
+    groups = await repo.listWhatsappGroups(tenantId);
+    groupsByTenant.set(tenantId, groups);
+  }
+  return groups.find((g) => g.groupJid === groupJid) ?? null;
+}
+
+/** Who wrote a group message: their WhatsApp display name, else their E.164 number. */
+function groupSenderLabel(row: WhatsappInboundMessage): string {
+  return row.senderName?.trim() || row.fromPhone;
+}
+
+/**
+ * Multiple numbers (Task 3) — step 5b, only after a push that LANDED (and
+ * after the row is already resolved `ghl_pushed`): this contact now sticks
+ * to the number this reply arrived on, so the next outbound to them goes out
+ * from it (`resolveSendingTenant`, src/lib/sending-number.ts).
+ *
+ *   - `row.coachId`, never `account.tenantId` — the account's tenant is the
+ *     location's DEFAULT number regardless of which number the row came in
+ *     on; recording it would silently re-stick every contact to the default.
+ *   - `row.receivedAt` — when the contact wrote, not when this drain ran.
+ *     The repository only overwrites a STRICTLY NEWER value
+ *     (`shouldReplaceSticky`, plus the conditional `last_inbound_at <
+ *     received_at` update in supabase.ts), so an out-of-order or replayed
+ *     row drained after a newer one can never move the contact back.
+ *   - Never throws: the reply is already in GHL and its row resolved — a
+ *     stickiness write failing must not count the row as retried (it would
+ *     never be re-pushed anyway, it is claimed). Worst case the contact
+ *     keeps its previous sticky number (or the default) until their next
+ *     reply.
+ */
+async function recordStickiness(repo: GhlInboundRepo, locationId: string, ghlContactId: string, row: WhatsappInboundMessage): Promise<void> {
+  try {
+    await repo.recordInboundForStickiness(locationId, ghlContactId, row.coachId, row.receivedAt);
+  } catch (err) {
+    console.error(`[ghl-inbound] row ${row.id} pushed, but recording the contact's sticky number failed (non-fatal):`, err);
+  }
 }
 
 /**
