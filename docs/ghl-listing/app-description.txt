@@ -1,0 +1,5 @@
+PingWren puts WhatsApp inside your HighLevel conversations. Link a WhatsApp number by scanning a QR code, then send and reply from the inbox you already use. Every message is saved on the contact.
+
+PingWren becomes the sub-account's message provider, so your existing workflows and automations send on WhatsApp with nothing to rebuild. No Meta approval and no message templates.
+
+Up to 3 WhatsApp numbers per sub-account.
