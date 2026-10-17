@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { AccountsPanel } from "@/components/owner/AccountsPanel";
 import { GhlAccountsPanel, type AdminLocationNumber } from "@/components/owner/GhlAccountsPanel";
 import { GhlHealthPanel } from "@/components/owner/GhlHealthPanel";
 import { Wordmark } from "@/components/shell/Wordmark";
@@ -52,7 +53,7 @@ export default async function AdminPage({
   // ONE bridge health probe for the whole page (never per-row), only attempted
   // when the bridge is configured at all.
   const whatsappBridgeConfigured = isWhatsappBridgeConfigured();
-  const [whatsappSummaries, whatsappHealth, ghlAccounts, ghlHealth] = await Promise.all([
+  const [whatsappSummaries, whatsappHealth, ghlAccounts, ghlHealth, accountRows] = await Promise.all([
     repo.getWhatsappSessionSummaries({ role: "owner" }),
     whatsappBridgeConfigured ? getWhatsappBridgeHealth() : Promise.resolve(null),
     repo.getGhlAccounts(),
@@ -60,6 +61,7 @@ export default async function AdminPage({
     // `GhlHealthPanel`'s own "health unavailable right now" card instead of
     // taking the whole page down.
     safeGetGhlHealthSnapshot(() => repo.getGhlHealthSnapshot()),
+    repo.listAccountsForAdmin(),
   ]);
   const whatsappBridgeReachable = whatsappHealth === null ? null : whatsappHealth.ok;
 
@@ -94,6 +96,8 @@ export default async function AdminPage({
           <Wordmark size="md" />
           <p className="text-sm text-ink-faint">Signed in as {session.email}</p>
         </header>
+
+        <AccountsPanel rows={accountRows} />
 
         <GhlAccountsPanel
           accounts={ghlAccounts}

@@ -39,6 +39,8 @@ import type { GhlEmbedWhatsappSummary, LocationNumber, WhatsappSessionSummary } 
 import type { BridgeOkResult } from "@/lib/whatsapp-bridge";
 import type { GuardFailureBody } from "@/lib/bridge-panel-guard";
 import { parseLabelInput, parseSlotParam, type LocationSlot } from "@/lib/location-numbers";
+import { toEmbedWhatsappSummary } from "@/lib/embed-summary";
+import { embedStateFor } from "@/app/api/crm/embed/session/logic";
 
 /** The narrow repo slice this module touches — `repo` in production, a fake in tests. */
 export type EmbedNumbersRepo = Pick<
@@ -50,6 +52,11 @@ export type EmbedNumbersRepo = Pick<
   | "setDefaultLocationNumber"
   | "setLocationNumberLabel"
   | "getWhatsappSessionSummary"
+  // Accounts and billing (merge ruling) — adding a number re-checks the
+  // location's activation and billing, the same gate the embed session
+  // applies before it mints a token (`embedStateFor`).
+  | "getGhlAccountByLocationId"
+  | "getAccountById"
 >;
 
 /** What the browser sees for one number. Structurally unable to carry a tenant id. */
@@ -71,9 +78,10 @@ export interface EmbedNumberView {
  * `whatsapp_sessions` row yet).
  */
 export function toEmbedSummary(summary: WhatsappSessionSummary | null): GhlEmbedWhatsappSummary | null {
-  if (!summary) return null;
-  const { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday } = summary;
-  return { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday };
+  // One redaction for every browser surface (merge): `toEmbedWhatsappSummary`
+  // (src/lib/embed-summary.ts) enumerates the same fields plus the held
+  // message count, and never the tenant id.
+  return toEmbedWhatsappSummary(summary);
 }
 
 /**
@@ -121,6 +129,13 @@ const UNKNOWN_NUMBER = () => failure(404, "unknown_number", "That WhatsApp numbe
 const LAST_NUMBER = () =>
   failure(409, "last_number", "This is the only WhatsApp number on this sub-account, so it can't be removed.");
 const LIMIT = () => failure(409, "limit", "This sub-account already has 3 WhatsApp numbers.");
+/**
+ * Accounts and billing (merge ruling): one billed unit per activated
+ * LOCATION, whatever its number count — so numbers 2-3 never consume an
+ * activation slot, but they can only be added to a location that may send.
+ */
+const NOT_SENDABLE = (state: string) =>
+  failure(409, state, "Activate WhatsApp for this sub-account, with billing up to date, before adding another number.");
 const LOGOUT_FAILED = () => failure(502, "logout_failed", "Couldn't disconnect that WhatsApp number. Please try again.");
 
 async function okList(repo: EmbedNumbersRepo, locationId: string, slot?: LocationSlot): Promise<NumbersRouteResult> {
@@ -140,6 +155,15 @@ export async function decideAddNumber(
   if (body === null) return INVALID_BODY();
   const label = parseLabelInput(body.label);
   if (!label.ok) return INVALID_LABEL();
+  // Same gate as the embed session's token mint (`embedStateFor`), re-checked
+  // here because an embed token outlives a cancellation or deactivation.
+  // Activation is per location (`ghl_accounts.activated_at`), so nothing here
+  // touches the activation count or the Stripe quantity.
+  const account = await repo.getGhlAccountByLocationId(locationId);
+  if (!account) return UNKNOWN_NUMBER();
+  const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
+  const state = embedStateFor(account, owner?.billingStatus ?? null, null);
+  if (state.state !== "ok") return NOT_SENDABLE(state.state);
   const added = await repo.addLocationNumber(locationId, label.label);
   if (!added.ok) return LIMIT();
   return okList(repo, locationId, added.number.slot);

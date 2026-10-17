@@ -197,6 +197,8 @@ import {
   describeTooLargeMediaPlaceholder,
   ghlConversationProviderId,
   ghlGroupContactKey,
+  isGhlDndSyncEnabled,
+  setGhlContactDnd,
   refreshGhlToken,
   upsertGhlContact,
   upsertGhlGroupContact,
@@ -210,6 +212,7 @@ import {
 } from "@/lib/ghl-provider";
 import { inboundNumberPrefix } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
+import { classifyOptOutMessage } from "@/lib/opt-out";
 import type { LocationNumber, WhatsappGroup, WhatsappInboundMessage } from "@/lib/types";
 
 /** Repo slice this module needs — `GhlTokenRefreshRepo`'s four methods (shared with `resolveGhlAccessToken`) plus this phase's own four, plus the media plan's signed-URL mint. All sessionless — driven exclusively via `webhookRepo` (the whatsapp-replies poke route and the reminders cron, neither carries a user session). */
@@ -229,6 +232,9 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     // Opt-in groups (0004) — the row's group, and its GHL contact once made.
     | "listWhatsappGroups"
     | "setWhatsappGroupContact"
+    // Reliability (W10) — STOP/START opt-outs.
+    | "recordOptOut"
+    | "clearOptOut"
   >;
 
 /**
@@ -246,12 +252,15 @@ export interface GhlInboundDeps extends GhlTokenRefreshDeps {
     accessToken: string,
     input: { contactId: string; conversationProviderId: string; body: string; timestampIso?: string; attachments?: string[] }
   ) => Promise<AddGhlInboundMessageResult>;
+  /** T10 — only called when `GHL_SYNC_DND === "true"`. */
+  setContactDnd: (accessToken: string, contactId: string, dnd: boolean) => Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
 export const defaultGhlInboundDeps: GhlInboundDeps = {
   upsertContact: upsertGhlContact,
   upsertGroupContact: upsertGhlGroupContact,
   addInboundMessage: addGhlInboundMessage,
+  setContactDnd: setGhlContactDnd,
   refreshToken: refreshGhlToken,
   refreshWaitMs: 1000,
   // Same runtime-import rationale as `defaultGhlProviderDeps` — see that
@@ -306,6 +315,10 @@ export interface DrainGhlInboundRepliesResult {
   claimLost: number;
   /** Group rows whose group is unknown or switched off — `resolution: 'group_not_enabled'`, never posted. */
   groupNotEnabled: number;
+  /** Rows this pass whose text was a STOP-type keyword and recorded an opt-out (idempotent, so a retried row can count again). */
+  optedOut: number;
+  /** Rows this pass whose text was a START-type keyword and cleared an opt-out. */
+  optedIn: number;
   /** `true` iff `GHL_CONVERSATION_PROVIDER_ID` is unset — see this file's STEP 0 note. Every other counter is `0` when this is `true`. */
   blockedUnconfigured: boolean;
 }
@@ -363,6 +376,8 @@ export async function drainGhlInboundReplies(
     retried: 0,
     claimLost: 0,
     groupNotEnabled: 0,
+    optedOut: 0,
+    optedIn: 0,
     blockedUnconfigured: false,
   };
 
@@ -419,6 +434,37 @@ interface PassMemos {
   groupsByTenant: Map<string, WhatsappGroup[]>;
 }
 
+/**
+ * Classify one inbound text and persist the opt-out / opt-in for that
+ * (tenant, number). Whole-message keyword match only (`classifyOptOutMessage`).
+ * Idempotent: recording an opt-out twice or clearing an absent one is
+ * harmless, so a row retried after a failed GHL push is safe. The message
+ * itself is still delivered to GHL by the caller.
+ *
+ * Opt-in groups (merge ruling): a GROUP row (`groupJid` set) is never
+ * classified — a member typing "STOP" in a group the owner opted into is
+ * talking to the group, not opting out of the business's one-to-one
+ * messages. Multiple numbers: the opt-out is STORED on the number it arrived
+ * on; the outbound check applies it across the location's numbers
+ * (`optedOutReason`, src/lib/ghl-provider.ts), and a START clears it on
+ * every number of the location (`processGhlInboundRow`).
+ */
+export async function applyOptOutKeyword(
+  repo: Pick<GhlInboundRepo, "recordOptOut" | "clearOptOut">,
+  row: WhatsappInboundMessage,
+  ghlContactId: string | null
+): Promise<"opt_out" | "opt_in" | null> {
+  if (row.groupJid != null) return null;
+  const decision = classifyOptOutMessage(row.body);
+  if (!decision) return null;
+  if (decision.kind === "opt_out") {
+    await repo.recordOptOut({ tenantId: row.coachId, phone: row.fromPhone, keyword: decision.keyword, ghlContactId });
+    return "opt_out";
+  }
+  await repo.clearOptOut(row.coachId, row.fromPhone);
+  return "opt_in";
+}
+
 /** One row's full pipeline — see this file's header for the sequence and retry table. */
 async function processGhlInboundRow(
   repo: GhlInboundRepo,
@@ -464,6 +510,13 @@ async function processGhlInboundRow(
       return;
     }
   }
+
+  // STOP/START: persist the opt-out before any GHL call or claim, so it holds
+  // even if the push below fails; idempotent, so a retried row is harmless.
+  // Never for a group row (`applyOptOutKeyword`).
+  const optOutOutcome = await applyOptOutKeyword(repo, row, null);
+  if (optOutOutcome === "opt_out") result.optedOut++;
+  else if (optOutOutcome === "opt_in") result.optedIn++;
 
   // PUSH_ATTEMPTS LOST-UPDATE UNDER CONCURRENT PASSES (adversarial-review
   // finding 3, accepted — same call Phase 1-2 already made for
@@ -551,6 +604,28 @@ async function processGhlInboundRow(
     memos.numbersByLocation.set(account.locationId, locationNumbers);
   }
   const numberPrefix = inboundNumberPrefix(locationNumbers, row.coachId);
+
+  // Multiple numbers × STOP (merge ruling): the outbound check blocks a
+  // contact opted out on ANY of the location's numbers, so a START must
+  // clear the opt-out on every one of them, not only the number it arrived
+  // on (already cleared in `applyOptOutKeyword`). Idempotent, pre-claim.
+  if (optOutOutcome === "opt_in") {
+    for (const n of locationNumbers) {
+      if (n.tenantId !== row.coachId) await repo.clearOptOut(n.tenantId, row.fromPhone);
+    }
+  }
+
+  // T10 — optional DND mirror (GHL_SYNC_DND, off by default). Never blocks the
+  // opt-out (already persisted above) or the push; failures are logged only.
+  if (optOutOutcome && isGhlDndSyncEnabled()) {
+    try {
+      const dnd = await deps.setContactDnd(accessToken, contactId, optOutOutcome === "opt_out");
+      if (!dnd.ok) console.error(`[ghl-inbound] DND sync failed (non-fatal): ${dnd.error}`);
+      if (optOutOutcome === "opt_out") await applyOptOutKeyword(repo, row, contactId); // idempotent; records the contact id
+    } catch (err) {
+      console.error("[ghl-inbound] DND sync threw (non-fatal):", err instanceof Error ? err.message : "unknown error");
+    }
+  }
 
   // Step 3 — atomic claim, reused verbatim from the coach drain (see this
   // file's header's CLAIM-VS-NO-CLAIM ASYMMETRY note).

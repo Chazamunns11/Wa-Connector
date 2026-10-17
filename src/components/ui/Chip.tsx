@@ -3,11 +3,11 @@ import type { ReactNode } from "react";
 export type ChipTone = "win" | "loss" | "warn" | "info" | "accent" | "muted";
 
 const TONE_CLASSES: Record<ChipTone, string> = {
-  win: "bg-win/10 text-win border-win/30",
-  loss: "bg-loss/10 text-loss border-loss/30",
-  warn: "bg-warn/10 text-warn border-warn/30",
-  info: "bg-info/10 text-info border-info/30",
-  accent: "bg-transparent text-accent border-accent/50",
+  win: "bg-win-soft text-win border-win/30",
+  loss: "bg-loss-soft text-loss border-loss/30",
+  warn: "bg-warn-soft text-warn border-warn/30",
+  info: "bg-info-soft text-info border-info/30",
+  accent: "bg-accent-soft text-accent-text border-accent-text/40",
   muted: "bg-raised text-ink-faint border-border",
 };
 

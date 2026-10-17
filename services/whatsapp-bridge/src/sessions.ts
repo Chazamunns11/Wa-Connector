@@ -387,6 +387,16 @@ export async function recordNotOnWhatsapp(store: BridgeStore, poke: PortalPoke |
 }
 
 /**
+ * A session reached `connection === "open"` (first link or a reconnect).
+ * Schedules the outbound poke so the portal's held-message release pass runs
+ * now (src/lib/ghl-held.ts); the hourly cron is the backstop (hard rule 6).
+ * No-op if `poke` is null (unconfigured).
+ */
+export function recordReconnected(poke: PortalPoke | null): void {
+  poke?.schedule();
+}
+
+/**
  * The exact fields `shutdownOneSession` touches, and nothing else —
  * deliberately STRUCTURAL rather than importing `Session` itself, so
  * `test/sessions-shutdown.test.ts` can pin the ordering that fixes the
@@ -1089,6 +1099,7 @@ export class SessionManager {
         // a fresh session — fail closed).
         void this.loadEnabledGroups(session);
         void this.drainQueue(session);
+        recordReconnected(this.outboundPoke);
       }
 
       if (connection === "close") {

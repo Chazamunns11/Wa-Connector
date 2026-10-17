@@ -144,8 +144,13 @@ function base64UrlDecode(input: string): string {
  *   restated in this feature's own terms in `src/lib/ghl-connect-link.ts`'s
  *   header (an emergency lever, not a routine one — links take 30 seconds to
  *   reissue).
+ *
+ * - `ghl-claim` — a GoHighLevel sub-account's "claim this install" token
+ *   (`src/lib/ghl-claim.ts`), carried as `/signup?claim=<token>` so a new
+ *   account can take ownership of an unclaimed install. Carries
+ *   `{ locationId }`, 30-minute TTL, dedicated ONBOARD_STATE_SECRET only.
  */
-export type SignedStateKind = "signup" | "stripe-self" | "calendar-google" | "ghl-install" | "ghl-embed" | "ghl-connect-link" | "ghl-connect-session";
+export type SignedStateKind = "signup" | "stripe-self" | "calendar-google" | "ghl-install" | "ghl-embed" | "ghl-connect-link" | "ghl-connect-session" | "ghl-claim";
 
 interface KindedStatePayload {
   /** The purpose this state was minted for — checked on every verify. */

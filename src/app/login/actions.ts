@@ -56,3 +56,25 @@ export async function sendLoginLinkAction(formData: FormData): Promise<void> {
 
   redirect("/login?sent=1");
 }
+
+/** Ends the session (cookie client, so the auth cookies are cleared) and returns to /login. */
+export async function signOutAction(): Promise<void> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    throw new Error("Supabase is not configured: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are both required.");
+  }
+  const cookieStore = await cookies();
+  const supabase = createServerClient(url, anonKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+      },
+    },
+  });
+  await supabase.auth.signOut();
+  redirect("/login");
+}

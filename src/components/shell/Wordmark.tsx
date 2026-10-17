@@ -25,7 +25,7 @@ export function Wordmark({ size = "md" }: { size?: Size }) {
 
   return (
     <span
-      className="block shrink-0 font-display font-bold uppercase italic leading-none text-ink"
+      className="block shrink-0 font-display font-bold leading-none text-ink"
       style={{ fontSize: Math.round(height * 0.8), lineHeight: `${height}px` }}
     >
       {name}

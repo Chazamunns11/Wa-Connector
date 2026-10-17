@@ -59,6 +59,8 @@ export interface WhatsappSessionSummary {
    * of anything, just nothing sent.
    */
   sentToday: number;
+  /** Count of this number's GoHighLevel messages currently `held` (disconnected, waiting to be sent on reconnect). */
+  heldMessages: number;
 }
 
 /**
@@ -165,6 +167,10 @@ export interface GhlAccount {
   brandLogoPath: string | null;
   /** Per-client connect-page branding (migration 0076) — `#RRGGBB`, normalised by `normaliseHex` at write time, or `null` for the default brand colour. Same "null means unset OR pre-migration, and both read the same way" posture as `brandLogoPath` above. */
   brandAccentColor: string | null;
+  /** Owning account (migration 0002); null = installed but not yet claimed. */
+  accountId: string | null;
+  /** Non-null = billed, active number (migration 0002). */
+  activatedAt: string | null;
 }
 
 /**
@@ -191,6 +197,8 @@ export interface GhlAccountSummary {
   createdAt: string;
   brandLogoPath: string | null;
   brandAccentColor: string | null;
+  accountId: string | null;
+  activatedAt: string | null;
 }
 
 /**
@@ -224,7 +232,7 @@ export interface GhlAccountDraft {
 }
 
 /** `'pending_send'` -> `'accepted'` (the bridge accepted the send) | `'refused'` (a terminal refusal reported inline — see the plan's D3 status table). Mirrors `ghl_outbound_messages.send_state`'s CHECK (0069). */
-export type GhlOutboundSendState = "pending_send" | "accepted" | "refused";
+export type GhlOutboundSendState = "pending_send" | "held" | "accepted" | "refused";
 
 /** What was last reported to GHL's Update Message Status endpoint for a row, if anything — `null` until Phase 2's drain reports an outcome. */
 export type GhlOutboundReportedStatus = "delivered" | "failed";
@@ -361,6 +369,17 @@ export interface GhlOutboundAttachmentDraft {
 // CHECK). The bridge (service-role) is the ONLY writer; this type is a pure
 // READ shape.
 // ---------------------------------------------------------------------------
+
+/** A contact who replied STOP to one number (`whatsapp_opt_outs`, migration 0004). Per (tenant, phone). */
+export interface OptOut {
+  tenantId: string;
+  /** Strict E.164 of the contact who opted out. */
+  phone: string;
+  optedOutAt: string;
+  /** Canonical matched keyword (`STOP`, `UNSUBSCRIBE`, ...). */
+  keyword: string;
+  ghlContactId: string | null;
+}
 
 /**
  * One prospect-authored WhatsApp reply, as read back for a single call's
@@ -591,3 +610,52 @@ export interface GhlHealthSnapshot {
 
 /** How a client's logo is seated on the connect page (copied from PortalHub `types.ts`; only the type — `brand.ts`'s `ResolvedBranding` needs it). */
 export type LogoBackdrop = "none" | "light" | "dark";
+
+// ---------------------------------------------------------------------------
+// Accounts and billing (migration 0002)
+// ---------------------------------------------------------------------------
+
+export type BillingStatus = "pending" | "trialing" | "active" | "past_due" | "paused" | "cancelled" | "comped";
+export type AccountKind = "agency" | "business";
+
+export interface Account {
+  id: string;
+  name: string;
+  kind: AccountKind;
+  ownerEmail: string;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  billingStatus: BillingStatus;
+  trialEndsAt: string | null;
+  cancelledAt: string | null;
+  cleanedUpAt: string | null;
+  createdAt: string;
+}
+
+/** Inserts with billingStatus 'pending'. */
+export interface AccountDraft {
+  name: string;
+  kind: AccountKind;
+  ownerEmail: string;
+}
+
+export interface AccountBillingPatch {
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  billingStatus?: BillingStatus;
+  trialEndsAt?: string | null;
+  cancelledAt?: string | null;
+  cleanedUpAt?: string | null;
+}
+
+export interface AccountAdminRow {
+  account: Account;
+  locations: number;
+  activeNumbers: number;
+}
+
+export interface LocationStats {
+  pendingSend: number;
+  failedLast7Days: { count: number; reasons: string[] };
+  everReceived: boolean;
+}

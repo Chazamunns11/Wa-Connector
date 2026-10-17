@@ -8,7 +8,13 @@
  * lazily (importing this module needs no env; the first query does).
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { DEFAULT_PHONE_REGION, normalisePhoneE164 } from "@/lib/phone";
 import type {
+  Account,
+  AccountBillingPatch,
+  AccountDraft,
+  AccountKind,
+  BillingStatus,
   GhlAccount,
   GhlAccountBrandingPatch,
   GhlAccountDraft,
@@ -22,6 +28,8 @@ import type {
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
   LocationNumber,
+  LocationStats,
+  Role,
   Scope,
   WhatsappGroup,
   WhatsappInboundMessage,
@@ -31,6 +39,7 @@ import type {
 import { LOGO_BUCKET, LOGO_EXTENSION, normaliseHex, type SafeLogoType } from "@/lib/brand";
 import { ghlTenantKeyQueryFilters } from "@/lib/ghl";
 import { GROUP_SEND_CAP_UNITS } from "@/lib/ghl-provider";
+import { ActivationCapError } from "@/lib/billing/activation";
 import {
   buildGhlHealthSnapshot,
   GHL_HEALTH_INBOUND_ROW_CAP,
@@ -51,6 +60,10 @@ import type { GhlRepository } from "./repository";
  * path to them. Created lazily so merely importing this module never throws
  * when the env is absent (build, tests); the first query does.
  */
+function normaliseEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 function getServiceClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -84,7 +97,7 @@ interface WhatsappSessionSummaryRow {
   last_disconnect_reason: string | null;
 }
 
-function mapWhatsappSessionSummary(row: WhatsappSessionSummaryRow, sentToday: number): WhatsappSessionSummary {
+function mapWhatsappSessionSummary(row: WhatsappSessionSummaryRow, sentToday: number, heldMessages = 0): WhatsappSessionSummary {
   return {
     coachId: row.coach_id,
     status: row.status,
@@ -92,6 +105,7 @@ function mapWhatsappSessionSummary(row: WhatsappSessionSummaryRow, sentToday: nu
     lastConnectedAt: row.last_connected_at,
     lastDisconnectReason: row.last_disconnect_reason,
     sentToday,
+    heldMessages,
   };
 }
 
@@ -234,6 +248,9 @@ interface GhlAccountRow {
    */
   brand_logo_path?: string | null;
   brand_accent_color?: string | null;
+  /** Migration 0002 — optional for the same pre-migration reason as the 0075/0076 columns. */
+  account_id?: string | null;
+  activated_at?: string | null;
 }
 
 function mapGhlAccount(row: GhlAccountRow): GhlAccount {
@@ -265,6 +282,8 @@ function mapGhlAccount(row: GhlAccountRow): GhlAccount {
     // that would make that ambiguous.
     brandLogoPath: typeof row.brand_logo_path === "string" ? row.brand_logo_path : null,
     brandAccentColor: typeof row.brand_accent_color === "string" ? row.brand_accent_color : null,
+    accountId: typeof row.account_id === "string" ? row.account_id : null,
+    activatedAt: typeof row.activated_at === "string" ? row.activated_at : null,
   };
 }
 
@@ -273,7 +292,7 @@ function mapGhlAccount(row: GhlAccountRow): GhlAccount {
 // `GhlAccountSummary`, so the redacted projection needs to carry them; see
 // that interface's own JSDoc (src/lib/types.ts).
 const GHL_ACCOUNT_SUMMARY_COLUMNS =
-  "location_id, tenant_id, label, company_id, status, last_error, created_at, brand_logo_path, brand_accent_color";
+  "location_id, tenant_id, label, company_id, status, last_error, created_at, brand_logo_path, brand_accent_color, account_id, activated_at";
 
 interface GhlAccountSummaryRow {
   location_id: string;
@@ -285,6 +304,8 @@ interface GhlAccountSummaryRow {
   created_at: string;
   brand_logo_path?: string | null;
   brand_accent_color?: string | null;
+  account_id?: string | null;
+  activated_at?: string | null;
 }
 
 /** Built field-by-field, deliberately, never a spread of `GhlAccountRow` — see `mapCalendarConnectionSummary`'s identical rationale (a future column added to `ghl_accounts` can never ride along into a page prop by accident). */
@@ -298,6 +319,42 @@ function mapGhlAccountSummary(row: GhlAccountSummaryRow): GhlAccountSummary {
     brandAccentColor: typeof row.brand_accent_color === "string" ? row.brand_accent_color : null,
     status: row.status as GhlAccountStatus,
     lastError: row.last_error,
+    createdAt: row.created_at,
+    accountId: typeof row.account_id === "string" ? row.account_id : null,
+    activatedAt: typeof row.activated_at === "string" ? row.activated_at : null,
+  };
+}
+
+interface AccountRow {
+  id: string;
+  name: string;
+  kind: string;
+  owner_email: string;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  billing_status: string;
+  trial_ends_at: string | null;
+  cancelled_at: string | null;
+  cleaned_up_at: string | null;
+  created_at: string;
+}
+
+const ACCOUNT_COLUMNS =
+  "id, name, kind, owner_email, stripe_customer_id, stripe_subscription_id, billing_status, trial_ends_at, cancelled_at, cleaned_up_at, created_at";
+
+function mapAccount(row: AccountRow): Account {
+  return {
+    id: row.id,
+    name: row.name,
+    // CHECK-constrained in 0002.
+    kind: row.kind as AccountKind,
+    ownerEmail: row.owner_email,
+    stripeCustomerId: row.stripe_customer_id,
+    stripeSubscriptionId: row.stripe_subscription_id,
+    billingStatus: row.billing_status as BillingStatus,
+    trialEndsAt: row.trial_ends_at,
+    cancelledAt: row.cancelled_at,
+    cleanedUpAt: row.cleaned_up_at,
     createdAt: row.created_at,
   };
 }
@@ -399,6 +456,27 @@ function mapGhlOutboundAttachment(row: GhlOutboundAttachmentRow): GhlOutboundAtt
  * Fixed by paginating with `.range()` until a page comes back short of
  * `PAGE_SIZE`, so this counts EVERY matching row regardless of volume.
  */
+/** Rows still waiting to leave (`pending_send` or `held`) per tenant; absent = 0. Paged so volume never truncates. */
+async function countWaitingByTenant(supabase: SupabaseClient, tenantIds: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (tenantIds.length === 0) return counts;
+  const PAGE_SIZE = 1000;
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .select("tenant_id, send_state")
+      .in("tenant_id", tenantIds)
+      .in("send_state", ["pending_send", "held"])
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as { tenant_id: string }[];
+    for (const r of page) counts.set(r.tenant_id, (counts.get(r.tenant_id) ?? 0) + 1);
+    if (page.length < PAGE_SIZE) break;
+  }
+  return counts;
+}
+
 async function getWhatsappSentTodayByCoach(supabase: SupabaseClient, coachIds: string[]): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   if (coachIds.length === 0) return counts;
@@ -1052,7 +1130,10 @@ export class SupabaseGhlRepository implements GhlRepository {
     return { message: mapGhlOutboundMessage(existing as GhlOutboundMessageRow), isNew: false };
   }
 
-  async updateGhlOutboundSendState(id: string, patch: { sendState: GhlOutboundSendState; sendAttempts?: number; refusalReason?: string }) {
+  async updateGhlOutboundSendState(
+    id: string,
+    patch: { sendState: GhlOutboundSendState; sendAttempts?: number; refusalReason?: string; onlyIfSendState?: GhlOutboundSendState }
+  ): Promise<number> {
     const supabase = getServiceClient();
     const update: Record<string, unknown> = { send_state: patch.sendState };
     if (patch.sendAttempts !== undefined) update.send_attempts = patch.sendAttempts;
@@ -1060,7 +1141,8 @@ export class SupabaseGhlRepository implements GhlRepository {
     // exists for the duration a row is a bridge-send retry candidate — clear
     // it the instant the row leaves 'pending_send' (see that migration's
     // header and Repository.updateGhlOutboundSendState's JSDoc).
-    if (patch.sendState !== "pending_send") update.pending_text = null;
+    // A held row keeps its text: the release pass still has to send it.
+    if (patch.sendState !== "pending_send" && patch.sendState !== "held") update.pending_text = null;
     // 0071_ghl_outbound_refusal_reason.sql — stamped once, alongside (not
     // instead of) report_error, and never cleared again (adversarial-review
     // finding 3 — see Repository.updateGhlOutboundSendState's JSDoc).
@@ -1086,9 +1168,14 @@ export class SupabaseGhlRepository implements GhlRepository {
     // pending_send-to-pending_send retry-bookkeeping write needs this,
     // because it's the only one that can race a state transition already in
     // flight from elsewhere.
-    if (patch.sendState === "pending_send") query = query.eq("send_state", "pending_send");
-    const { error } = await query;
+    // An explicit `onlyIfSendState` replaces the automatic guard: the held
+    // release pass writes held -> accepted/refused, where the automatic
+    // `.eq("send_state","pending_send")` would match nothing.
+    if (patch.onlyIfSendState !== undefined) query = query.eq("send_state", patch.onlyIfSendState);
+    else if (patch.sendState === "pending_send") query = query.eq("send_state", "pending_send");
+    const { data, error } = await query.select("id");
     if (error) throw error;
+    return (data ?? []).length;
   }
 
   /**
@@ -1112,6 +1199,7 @@ export class SupabaseGhlRepository implements GhlRepository {
       .from("ghl_outbound_messages")
       .select("*, ghl_accounts!inner(status)")
       .is("reported_status", null)
+      .neq("send_state", "held")
       .eq("ghl_accounts.status", "active")
       .order("created_at", { ascending: true })
       .limit(limit);
@@ -1121,6 +1209,56 @@ export class SupabaseGhlRepository implements GhlRepository {
     // and ignores it, same as every other mapper in this file that never
     // spreads a raw row.
     return ((data ?? []) as unknown as GhlOutboundMessageRow[]).map(mapGhlOutboundMessage);
+  }
+
+  async listHeldTenantIds() {
+    const supabase = getServiceClient();
+    // Tenant-fair: keyset-page on tenant_id, so a tenant with thousands of held rows cannot hide the others.
+    const PAGE = 1000;
+    const MAX_TENANTS = 1000;
+    const ids: string[] = [];
+    let after: string | null = null;
+    for (let pages = 0; pages < 50 && ids.length < MAX_TENANTS; pages++) {
+      let q = supabase.from("ghl_outbound_messages").select("tenant_id").eq("send_state", "held").order("tenant_id", { ascending: true }).limit(PAGE);
+      if (after !== null) q = q.gt("tenant_id", after);
+      const { data, error } = await q;
+      if (error) throw error;
+      const page = ((data ?? []) as { tenant_id: string }[]).map((r) => r.tenant_id);
+      for (const id of page) if (ids[ids.length - 1] !== id) ids.push(id);
+      if (page.length < PAGE) break;
+      after = page[page.length - 1];
+    }
+    return ids;
+  }
+
+  async listHeldGhlOutboundMessages(tenantId: string, limit = 50) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .eq("send_state", "held")
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    if (error) throw error;
+    return ((data ?? []) as unknown as GhlOutboundMessageRow[]).map(mapGhlOutboundMessage);
+  }
+
+  async listExpiredHeldGhlOutboundMessages(cutoffIso: string, limit = 50) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .select("*")
+      .eq("send_state", "held")
+      .lt("created_at", cutoffIso)
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    if (error) throw error;
+    return ((data ?? []) as unknown as GhlOutboundMessageRow[]).map(mapGhlOutboundMessage);
+  }
+
+  async countHeldByTenant(tenantIds: string[]) {
+    return countWaitingByTenant(getServiceClient(), tenantIds);
   }
 
   async markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundReportedStatus | null; reportError: string | null }) {
@@ -1425,7 +1563,8 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (error) throw error;
     if (!data) return null;
     const sentTodayByCoach = await getWhatsappSentTodayByCoach(supabase, [coachId]);
-    return mapWhatsappSessionSummary(data as unknown as WhatsappSessionSummaryRow, sentTodayByCoach.get(coachId) ?? 0);
+    const held = await countWaitingByTenant(supabase, [coachId]);
+    return mapWhatsappSessionSummary(data as unknown as WhatsappSessionSummaryRow, sentTodayByCoach.get(coachId) ?? 0, held.get(coachId) ?? 0);
   }
 
   async getWhatsappSessionSummaries(scope: Scope) {
@@ -1444,7 +1583,352 @@ export class SupabaseGhlRepository implements GhlRepository {
       supabase,
       rows.map((r) => r.coach_id)
     );
-    return rows.map((row) => mapWhatsappSessionSummary(row, sentTodayByCoach.get(row.coach_id) ?? 0));
+    const held = await countWaitingByTenant(
+      supabase,
+      rows.map((r) => r.coach_id)
+    );
+    return rows.map((row) => mapWhatsappSessionSummary(row, sentTodayByCoach.get(row.coach_id) ?? 0, held.get(row.coach_id) ?? 0));
+  }
+
+  // -------------------------------------------------------------------------
+  // Accounts and billing (migration 0002)
+  // -------------------------------------------------------------------------
+
+  async getAccountById(id: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("accounts").select(ACCOUNT_COLUMNS).eq("id", id).maybeSingle();
+    if (error) throw error;
+    return data ? mapAccount(data as unknown as AccountRow) : null;
+  }
+
+  async getAccountByStripeCustomerId(customerId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("accounts")
+      .select(ACCOUNT_COLUMNS)
+      .eq("stripe_customer_id", customerId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapAccount(data as unknown as AccountRow) : null;
+  }
+
+  async createAccount(draft: AccountDraft) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("accounts")
+      .insert({ name: draft.name, kind: draft.kind, owner_email: draft.ownerEmail, billing_status: "pending" })
+      .select(ACCOUNT_COLUMNS)
+      .single();
+    if (error) throw error;
+    return mapAccount(data as unknown as AccountRow);
+  }
+
+  async updateAccountBilling(id: string, patch: AccountBillingPatch) {
+    const update: Record<string, unknown> = {};
+    if (patch.stripeCustomerId !== undefined) update.stripe_customer_id = patch.stripeCustomerId;
+    if (patch.stripeSubscriptionId !== undefined) update.stripe_subscription_id = patch.stripeSubscriptionId;
+    if (patch.billingStatus !== undefined) update.billing_status = patch.billingStatus;
+    if (patch.trialEndsAt !== undefined) update.trial_ends_at = patch.trialEndsAt;
+    if (patch.cancelledAt !== undefined) update.cancelled_at = patch.cancelledAt;
+    if (patch.cleanedUpAt !== undefined) update.cleaned_up_at = patch.cleanedUpAt;
+    if (Object.keys(update).length === 0) return;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("accounts").update(update).eq("id", id);
+    if (error) throw error;
+  }
+
+  async listAccountsForAdmin() {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("accounts")
+      .select(ACCOUNT_COLUMNS)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    const accounts = ((data ?? []) as unknown as AccountRow[]).map(mapAccount);
+    const locations = new Map<string, number>();
+    const active = new Map<string, number>();
+    const PAGE_SIZE = 1000;
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data: page, error: pageError } = await supabase
+        .from("ghl_accounts")
+        .select("account_id, activated_at")
+        .not("account_id", "is", null)
+        .order("location_id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (pageError) throw pageError;
+      const rows = (page ?? []) as { account_id: string; activated_at: string | null }[];
+      for (const r of rows) {
+        locations.set(r.account_id, (locations.get(r.account_id) ?? 0) + 1);
+        if (r.activated_at) active.set(r.account_id, (active.get(r.account_id) ?? 0) + 1);
+      }
+      if (rows.length < PAGE_SIZE) break;
+    }
+    return accounts.map((account) => ({
+      account,
+      locations: locations.get(account.id) ?? 0,
+      activeNumbers: active.get(account.id) ?? 0,
+    }));
+  }
+
+  async listAccountsCancelledBefore(iso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("accounts")
+      .select(ACCOUNT_COLUMNS)
+      .lt("cancelled_at", iso)
+      .is("cleaned_up_at", null)
+      .order("cancelled_at", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as unknown as AccountRow[]).map(mapAccount);
+  }
+
+  async createProfile(draft: { id: string; role: Role; email: string; accountId: string | null }) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("profiles")
+      .insert({ id: draft.id, role: draft.role, email: normaliseEmail(draft.email), account_id: draft.accountId });
+    if (error) throw error;
+  }
+
+  async getProfileByEmail(email: string) {
+    const supabase = getServiceClient();
+    // Migration 0002 lower-cases existing profiles.email and every write path
+    // stores it lower-cased (normaliseEmail), so an exact match on the
+    // lower-cased input is correct and uses the plain unique index
+    // profiles_email_idx; no LIKE metacharacters to escape.
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, role, account_id")
+      .eq("email", normaliseEmail(email))
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const row = data as { id: string; role: Role; account_id: string | null };
+    return { id: row.id, role: row.role, accountId: row.account_id };
+  }
+
+  async listGhlAccountsForAccount(accountId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_accounts")
+      .select(GHL_ACCOUNT_SUMMARY_COLUMNS)
+      .eq("account_id", accountId)
+      .order("label", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as unknown as GhlAccountSummaryRow[]).map(mapGhlAccountSummary);
+  }
+
+  async claimGhlAccount(locationId: string, accountId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_accounts")
+      .update({ account_id: accountId })
+      .eq("location_id", locationId)
+      .is("account_id", null)
+      .select("location_id");
+    if (error) throw error;
+    return (data ?? []).length === 1;
+  }
+
+  async setGhlActivated(locationId: string, activatedAt: string | null, opts: { platformCap?: number | null } = {}) {
+    const supabase = getServiceClient();
+    if (activatedAt === null) {
+      const { data, error } = await supabase.from("ghl_accounts").update({ activated_at: null }).eq("location_id", locationId).select("location_id");
+      if (error) throw error;
+      return (data ?? []).length;
+    }
+    const { data, error } = await supabase.rpc("activate_ghl_location", {
+      p_location_id: locationId,
+      p_activated_at: activatedAt,
+      p_platform_cap: opts.platformCap ?? null,
+    });
+    if (error) {
+      if (/trial_cap/.test(error.message)) throw new ActivationCapError("trial_cap");
+      if (/platform_cap/.test(error.message)) throw new ActivationCapError("platform_cap");
+      throw error;
+    }
+    return typeof data === "number" ? data : 0;
+  }
+
+  async countActivatedForAccount(accountId: string) {
+    const supabase = getServiceClient();
+    const { count, error } = await supabase
+      .from("ghl_accounts")
+      .select("location_id", { count: "exact", head: true })
+      .eq("account_id", accountId)
+      .not("activated_at", "is", null);
+    if (error) throw error;
+    return count ?? 0;
+  }
+
+  async countActivatedAll() {
+    const supabase = getServiceClient();
+    const { count, error } = await supabase
+      .from("ghl_accounts")
+      .select("location_id", { count: "exact", head: true })
+      .not("activated_at", "is", null);
+    if (error) throw error;
+    return count ?? 0;
+  }
+
+  async getWhatsappSessionSummariesForTenants(tenantIds: string[]) {
+    if (tenantIds.length === 0) return [];
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_sessions")
+      .select(WHATSAPP_SESSION_SUMMARY_COLUMNS)
+      .in("coach_id", tenantIds)
+      .order("coach_id", { ascending: true });
+    if (error) throw error;
+    const rows = (data ?? []) as unknown as WhatsappSessionSummaryRow[];
+    const sentTodayByCoach = await getWhatsappSentTodayByCoach(
+      supabase,
+      rows.map((r) => r.coach_id)
+    );
+    const held = await countWaitingByTenant(
+      supabase,
+      rows.map((r) => r.coach_id)
+    );
+    return rows.map((row) => mapWhatsappSessionSummary(row, sentTodayByCoach.get(row.coach_id) ?? 0, held.get(row.coach_id) ?? 0));
+  }
+
+  async getLocationStats(locationIds: string[], sinceIso: string) {
+    const result: Record<string, LocationStats> = {};
+    for (const id of locationIds) {
+      result[id] = { pendingSend: 0, failedLast7Days: { count: 0, reasons: [] }, everReceived: false };
+    }
+    if (locationIds.length === 0) return result;
+    const supabase = getServiceClient();
+
+    // (a) Recent rows, paginated so volume never silently truncates the counts.
+    const PAGE_SIZE = 1000;
+    const seenInRecent = new Set<string>();
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from("ghl_outbound_messages")
+        .select("location_id, send_state, refusal_reason, reported_status")
+        .in("location_id", locationIds)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      const page = (data ?? []) as {
+        location_id: string;
+        send_state: string;
+        refusal_reason: string | null;
+        reported_status: string | null;
+      }[];
+      for (const r of page) {
+        const stats = result[r.location_id];
+        if (!stats) continue;
+        seenInRecent.add(r.location_id);
+        if (r.send_state === "pending_send" || r.send_state === "held") stats.pendingSend += 1;
+        if (r.send_state === "refused" || r.reported_status === "failed") {
+          stats.failedLast7Days.count += 1;
+          const reasons = stats.failedLast7Days.reasons;
+          if (r.refusal_reason && reasons.length < 3 && !reasons.includes(r.refusal_reason)) reasons.push(r.refusal_reason);
+        }
+      }
+      if (page.length < PAGE_SIZE) break;
+    }
+
+    // (b) Has this location ever had a row at all? Ids already seen in pass
+    // (a) have; probe only the rest (one limit-1 query each), 10 at a time.
+    const PROBE_CHUNK = 10;
+    for (const id of seenInRecent) result[id].everReceived = true;
+    const toProbe = locationIds.filter((id) => !seenInRecent.has(id));
+    for (let i = 0; i < toProbe.length; i += PROBE_CHUNK) {
+      await Promise.all(
+        toProbe.slice(i, i + PROBE_CHUNK).map(async (id) => {
+          const { data, error } = await supabase.from("ghl_outbound_messages").select("location_id").eq("location_id", id).limit(1);
+          if (error) throw error;
+          result[id].everReceived = (data ?? []).length > 0;
+        })
+      );
+    }
+    return result;
+  }
+
+  async recordOptOut(input: { tenantId: string; phone: string; keyword: string; ghlContactId: string | null }) {
+    const phone = normalisePhoneE164(input.phone, DEFAULT_PHONE_REGION);
+    if (!phone) {
+      // Skip, don't throw: the caller would retry the same inbound row on every pass and the reply would never reach GHL.
+      console.error(`[opt-out] recordOptOut: phone is not a valid number (tenant ${input.tenantId}); opt-out not recorded`);
+      return;
+    }
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("whatsapp_opt_outs").upsert(
+      {
+        tenant_id: input.tenantId,
+        phone,
+        keyword: input.keyword,
+        ghl_contact_id: input.ghlContactId,
+        // merge-duplicates only rewrites the columns we send, so refresh the timestamp explicitly.
+        opted_out_at: new Date().toISOString(),
+      },
+      { onConflict: "tenant_id,phone" }
+    );
+    if (error) throw error;
+  }
+
+  async clearOptOut(tenantId: string, phone: string) {
+    const normalised = normalisePhoneE164(phone, DEFAULT_PHONE_REGION);
+    if (!normalised) return;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("whatsapp_opt_outs").delete().eq("tenant_id", tenantId).eq("phone", normalised);
+    if (error) throw error;
+  }
+
+  async isOptedOut(tenantId: string, phone: string) {
+    const normalised = normalisePhoneE164(phone, DEFAULT_PHONE_REGION);
+    if (!normalised) return false;
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_opt_outs")
+      .select("phone")
+      .eq("tenant_id", tenantId)
+      .eq("phone", normalised)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async countOptOutsByTenant(tenantIds: string[]) {
+    const counts = new Map<string, number>(tenantIds.map((id) => [id, 0]));
+    if (tenantIds.length === 0) return counts;
+    const supabase = getServiceClient();
+    const PAGE_SIZE = 1000;
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from("whatsapp_opt_outs")
+        .select("tenant_id")
+        .in("tenant_id", tenantIds)
+        .order("tenant_id", { ascending: true })
+        .order("phone", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      const page = (data ?? []) as { tenant_id: string }[];
+      for (const r of page) counts.set(r.tenant_id, (counts.get(r.tenant_id) ?? 0) + 1);
+      if (page.length < PAGE_SIZE) break;
+    }
+    return counts;
+  }
+
+  async recordStripeEvent(eventId: string, type: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("stripe_events").insert({ id: eventId, type }).select("id");
+    if (error) {
+      if ((error as { code?: string }).code === "23505") return false;
+      throw error;
+    }
+    return (data ?? []).length === 1;
+  }
+
+  async deleteStripeEvent(eventId: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("stripe_events").delete().eq("id", eventId);
+    if (error) throw error;
   }
 
   async getGhlHealthSnapshot() {

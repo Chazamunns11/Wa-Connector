@@ -39,7 +39,7 @@ import {
   type EmbedNumbersRepo,
 } from "@/app/api/crm/embed/numbers/logic";
 import { MAX_PANEL_BODY_BYTES, readSmallJsonBody, toPanelBridgeResponse } from "@/lib/bridge-panel-guard";
-import type { GhlAccount, LocationNumber, WhatsappSessionSummary } from "@/lib/types";
+import type { Account, GhlAccount, LocationNumber, WhatsappSessionSummary } from "@/lib/types";
 import type { BridgeOkResult } from "@/lib/whatsapp-bridge";
 
 const LOCATION_ID = "loc-numbers-1";
@@ -279,12 +279,24 @@ interface FakeNumbersRepo extends EmbedNumbersRepo {
   numbers: LocationNumber[];
   calls: string[];
   addResult?: "limit";
+  /** Accounts and billing (merge): the location's activation and its owner's billing status. */
+  activatedAt: string | null;
+  billingStatus: Account["billingStatus"];
 }
 
 function fakeNumbersRepo(initial: LocationNumber[]): FakeNumbersRepo {
   const repo: FakeNumbersRepo = {
     numbers: initial.map((n) => ({ ...n })),
     calls: [],
+    activatedAt: "2026-10-01T00:00:00.000Z",
+    billingStatus: "active",
+    async getGhlAccountByLocationId(locationId: string) {
+      if (locationId !== LOCATION_ID) return null;
+      return { locationId, tenantId: "t", status: "active", accountId: "acc-1", activatedAt: repo.activatedAt } as GhlAccount;
+    },
+    async getAccountById(id: string) {
+      return { id, billingStatus: repo.billingStatus } as Account;
+    },
     async listLocationNumbers(locationId: string) {
       repo.calls.push(`list:${locationId}`);
       return locationId === LOCATION_ID ? [...repo.numbers].sort((a, b) => a.slot - b.slot) : [];
@@ -495,4 +507,25 @@ test("decideUpdateNumber: unknown slot is 404, a bad slot 400, and a body with n
   assert.equal((await decideUpdateNumber(repo, LOCATION_ID, { slot: "1", makeDefault: true })).status, 400);
   assert.equal((await decideUpdateNumber(repo, LOCATION_ID, { slot: 1 })).status, 400);
   assert.equal((await decideUpdateNumber(repo, LOCATION_ID, { slot: 1, makeDefault: false })).status, 400);
+});
+
+// Accounts and billing (merge ruling): adding numbers 2-3 never consumes an
+// activation slot, but it is only allowed on a location that may send.
+test("decideAddNumber: a location that is not activated -> 409 not_activated, nothing added", async () => {
+  const repo = fakeNumbersRepo(ONLY_SLOT_1);
+  repo.activatedAt = null;
+  const result = await decideAddNumber(repo, LOCATION_ID, { label: "Sales" });
+  assert.equal(result.status, 409);
+  assert.equal((result.body as { code: string }).code, "not_activated");
+  assert.equal(repo.numbers.length, 1);
+  assert.equal(repo.calls.some((c) => c.startsWith("add:")), false);
+});
+
+test("decideAddNumber: a cancelled owner account -> 409 billing_paused, nothing added", async () => {
+  const repo = fakeNumbersRepo(ONLY_SLOT_1);
+  repo.billingStatus = "cancelled";
+  const result = await decideAddNumber(repo, LOCATION_ID, {});
+  assert.equal(result.status, 409);
+  assert.equal((result.body as { code: string }).code, "billing_paused");
+  assert.equal(repo.numbers.length, 1);
 });

@@ -1,97 +1,97 @@
 @import "tailwindcss";
 
+/* PINGWREN THEME. Cream is the default ground; Ink sections opt in with
+   `.surface-dark`. Token NAMES are the old ones on purpose (bg, card, raised,
+   well, ink = the TEXT colour, accent...), so call sites repaint without
+   per-component hexes. Brand swatches (public/brand/README.md):
+   Ink #1B1F2A, Wren #7A4E2D, Tan #D9A47A, Cream #F6F1EA, Coral #FF5A36.
+   Every text pairing below is >= 4.5:1; borders that mark a control are
+   >= 3:1 (docs/design/website/README.md, "PingWren brand applied"). */
 :root {
-  /* PORTAL PALETTE — Uberstyle dashboard redesign (design handoff, Aug 2026;
-     tokens sourced from the design system ramp — do not invent new
-     hexes). Token NAMES are unchanged from the previous palette on purpose:
-     every existing `bg-card` / `text-ink` / `border-border` call site
-     repaints to the new skin with no per-screen edits.
+  /* Grounds: Cream page, white panels, a deeper sand for raised bands. */
+  --color-bg: #FFFFFF;
+  --color-card: #FFFFFF;
+  --color-raised: #EEF0F4;
+  --color-well: #FFFFFF;
 
-     Surfaces are the "ink" ramp: ink-900 page ground, ink-800 panels,
-     ink-700 raised chips/tracks/nav states. */
-  --color-bg: #0B0C0D;
-  --color-card: #121417;
-  --color-raised: #1A1D21;
-  /* Inset wells (form fields, QR panels, previews) — ink-850. */
-  --color-well: #0F1113;
+  /* Hairlines (decorative panel edges) and the stronger edge that marks a
+     control (inputs, secondary buttons, tabs): 3.3:1 on Cream. */
+  --color-border: rgba(27, 31, 42, 0.14);
+  --color-divider: rgba(27, 31, 42, 0.09);
+  --color-border-strong: #8C8478;
 
-  /* Borders on dark are translucent white hairlines, not solid greys:
-     panels at .07, row rules inside a panel at .05 (also read by the global
-     reset below). Hover state for a panel border is rgba(255,255,255,.16) —
-     applied per component, no token. */
-  --color-border: rgba(255, 255, 255, 0.07);
-  --color-divider: rgba(255, 255, 255, 0.05);
+  /* Text: Ink body, a softer Ink for secondary copy, a muted Ink for meta. */
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #454A57;
+  --color-ink-faint: #5F6270;
 
-  /* Text on dark: white primary/numerals, grey-300 body, grey-500 secondary
-     (eyebrows, timestamps, captions). grey-500 (#8C9296) is ~5.5:1 on
-     --color-card — clear of WCAG AA for the small meta text it carries. */
-  --color-ink: #FFFFFF;
-  --color-ink-dim: #C9CED1;
-  --color-ink-faint: #8C9296;
+  /* Accent: Coral fills (buttons, step rules, the one diagram highlight) always
+     carry Ink text (5.3:1); white on Coral is 3.1:1 and is not used. Coral is
+     not readable as small text on Cream, so accent TEXT and links are Wren
+     (6.3:1). The dark scope swaps Wren for Tan. */
+  --color-accent: #FF5A36;
+  --color-accent-ink: #1B1F2A;
+  --color-accent-text: #1B1F2A;
+  --color-focus: #1B1F2A;
 
-  /* Accent — brand Teal (teal-500), used SPARINGLY: active nav,
-     one data series, positive money, the primary CTA. Status colours below
-     are never teal. `--color-accent-ink` is the brand's own Ink swatch, the
-     text that sits ON a teal fill (8.45:1). `--color-accent-text` is the
-     teal-as-TEXT tier: teal-400 on dark, flipped to teal-700 by the
-     `.surface-light` scope below. */
-  --color-accent: #17BEB4;
-  --color-accent-ink: #0B0C0D;
-  --color-accent-text: #3ED2C7;
+  /* Status: deep, distinct hues on solid tints, text >= 5.9:1. Win is a forest
+     green, nowhere near WhatsApp's. A word always accompanies the colour. */
+  --color-win: #17663F;
+  --color-loss: #A8231B;
+  --color-warn: #7A5000;
+  --color-info: #1D5596;
+  --color-win-soft: #E3F1E8;
+  --color-loss-soft: #FBE6E3;
+  --color-warn-soft: #F8EBCC;
+  --color-info-soft: #E2ECF7;
+  --color-accent-soft: #FFE6DE;
 
-  /* Semantic status — never teal. Soft tiers are the tag/pill backgrounds
-     (translucent tints on dark; the `.surface-light` scope swaps them for
-     the design system's solid 50-level tints). */
-  --color-win: #2FBF71;
-  --color-loss: #E5484D;
-  --color-warn: #F2B23E;
-  --color-info: #3E9BEE;
-  --color-win-soft: rgba(47, 191, 113, 0.12);
-  --color-loss-soft: rgba(229, 72, 77, 0.12);
-  --color-warn-soft: rgba(242, 178, 62, 0.12);
-  --color-info-soft: rgba(62, 155, 238, 0.12);
-  --color-accent-soft: rgba(23, 190, 180, 0.12);
+  /* Message bubbles are Paper with Ink text on every ground (Cream or Ink). */
+  --color-paper: #FFFFFF;
+  --color-paper-ink: #1B1F2A;
 
-  /* Motion — the one easing the whole portal uses. Hovers 120ms, state
-     changes 180ms, drawers 260ms. */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
-  --font-display: var(--font-chakra-petch);
-  --font-body: var(--font-barlow);
+  --font-display: var(--font-bricolage);
+  --font-body: var(--font-body-sans);
   --font-mono: var(--font-jetbrains-mono);
 }
 
 /**
- * Light-surface scope — the redesign floats its data tables (and only its
- * data tables) on a WHITE panel sitting on the dark ground. Cell renderers,
- * StatusPill and money formatting all speak in tokens (`text-ink`,
- * `bg-win-soft`, …), so rather than fork light variants of every one of
- * them, this class flips the tokens inside the panel — the same
- * scoped-custom-property mechanism. Values are the design system's
- * light pairs: grey-200 panel borders, grey-100 row rules, grey-50 row
- * hover, grey-600 tertiary text, dark status text over 50-level tint
- * backgrounds, and Deep Teal for teal-as-text.
+ * Ink scope: header, hero, feature bands, footer. Same token names, flipped to
+ * the dark half of the palette: Cream text, Tan links (the kit's "wren on
+ * dark"), Coral accent. The logo on these sections is the reverse artwork.
  */
+.surface-dark {
+  --color-bg: #1B1F2A;
+  --color-card: #242938;
+  --color-raised: #2D3345;
+  --color-well: #151823;
+  --color-border: rgba(246, 241, 234, 0.16);
+  --color-divider: rgba(246, 241, 234, 0.1);
+  --color-border-strong: #7E8290;
+  --color-ink: #FFFFFF;
+  --color-ink-dim: #D3CCC0;
+  --color-ink-faint: #A8A296;
+  --color-accent-text: #D9A47A;
+  --color-focus: #D9A47A;
+  --color-win: #6FD0A0;
+  --color-loss: #FF8F86;
+  --color-warn: #F2B23E;
+  --color-info: #86BDF2;
+  --color-win-soft: rgba(111, 208, 160, 0.14);
+  --color-loss-soft: rgba(255, 143, 134, 0.14);
+  --color-warn-soft: rgba(242, 178, 62, 0.14);
+  --color-info-soft: rgba(134, 189, 242, 0.14);
+  --color-accent-soft: rgba(255, 90, 54, 0.16);
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+}
+
+/* Legacy alias: docs and legal wrappers still say `surface-light`; it is now
+   simply the default Cream theme restated. */
 .surface-light {
-  --color-bg: #FFFFFF;
-  --color-card: #FFFFFF;
-  --color-raised: #F6F7F8;
-  --color-well: #F6F7F8;
-  --color-border: #E1E4E6;
-  --color-divider: #EDEFF0;
-  --color-ink: #0B0C0D;
-  --color-ink-dim: #1A1D21;
-  --color-ink-faint: #6E757A;
-  --color-accent-text: #0C7C76;
-  --color-win: #12805A;
-  --color-loss: #C0272C;
-  --color-warn: #8A5B08;
-  --color-info: #1F5FC4;
-  --color-win-soft: #E8F8EF;
-  --color-loss-soft: #FDECEC;
-  --color-warn-soft: #FDF4E3;
-  --color-info-soft: #EAF3FD;
-  --color-accent-soft: #E6FAF8;
+  background-color: var(--color-bg);
   color: var(--color-ink);
 }
 
@@ -102,6 +102,7 @@
   --color-well: var(--color-well);
   --color-border: var(--color-border);
   --color-divider: var(--color-divider);
+  --color-border-strong: var(--color-border-strong);
 
   --color-ink: var(--color-ink);
   --color-ink-dim: var(--color-ink-dim);
@@ -126,8 +127,10 @@
   --font-mono: var(--font-mono);
 }
 
-* {
-  border-color: var(--color-border);
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
 }
 
 html,
@@ -143,6 +146,8 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Bricolage Grotesque, loaded at 500 and 800 only (the logo's own rhythm:
+   "ping" 800, "wren" 500). h1/h2 take 800, smaller headings 500. */
 h1,
 h2,
 h3,
@@ -150,6 +155,15 @@ h4,
 h5,
 h6 {
   font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  font-optical-sizing: auto;
+}
+
+h1,
+h2 {
+  font-weight: 800;
+  letter-spacing: -0.025em;
 }
 
 .font-mono-nums {
@@ -158,12 +172,9 @@ h6 {
   font-feature-settings: "tnum" 1;
 }
 
-/* Thin scrollbars for dark UI — thumb is the ramp's ink-600, a solid a shade
-   above the raised surface (the hairline border tokens are now translucent
-   whites, far too faint to serve as a scrollbar). */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #23272c transparent;
+  scrollbar-color: var(--color-border-strong) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -172,7 +183,7 @@ h6 {
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: #23272c;
+  background-color: var(--color-border-strong);
   border-radius: 999px;
 }
 
@@ -180,30 +191,123 @@ h6 {
   background: transparent;
 }
 
-/* Focus is always visible: 2px teal outline at 2px offset, everywhere —
-   never outline:none. */
+/* Focus is always visible: 2px outline at 2px offset, never outline:none.
+   Ink on Cream (14.7:1), Tan on Ink (7.5:1). */
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
 
-/* The redesign drops the old teal inner glow: dark panels carry no shadow at
-   all, and a hovered panel simply sharpens its hairline. The class stays
-   because call sites outside the shared primitives still reference it. */
 .card-glow {
   transition: border-color 120ms var(--ease-out);
 }
 
 .card-glow:hover {
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: var(--color-border-strong);
 }
 
-/* Page entrance: sections fade in and rise 12px, staggered ~60ms at the call
-   site via animation-delay. No spring, no loops. */
-@keyframes rise {
+/* ---- website ---- */
+
+/* Skip link: off-screen until focused, then pinned top-left above the header. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -64px;
+  z-index: 50;
+  padding: 12px 16px;
+  border-radius: 4px;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
+/* Prose spacing for long reading pages (docs, legal). Lines stay under ~62ch. */
+.prose-flow > * + * {
+  margin-top: 16px;
+}
+
+.prose-flow > h2 {
+  margin-top: 48px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.prose-flow > h3 {
+  margin-top: 32px;
+  font-size: 18px;
+}
+
+.prose-flow p,
+.prose-flow li {
+  max-width: 62ch;
+  line-height: 1.6;
+}
+
+.prose-flow ul,
+.prose-flow ol {
+  padding-left: 24px;
+}
+
+.prose-flow ul {
+  list-style: disc;
+}
+
+.prose-flow ol {
+  list-style: decimal;
+}
+
+/* ---- message bubbles ----
+   Shape from the PingWren logo bubble: generous radius, one square-ish corner
+   on the tail side. Outgoing tails bottom-right, inbound bottom-left. */
+.bubble {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  padding: 10px 14px;
+  border: 1px solid rgba(27, 31, 42, 0.14);
+  background: var(--color-paper);
+  color: var(--color-paper-ink);
+  line-height: 1.4;
+}
+
+.bubble-out {
+  border-radius: 20px 20px 4px 20px;
+}
+
+.bubble-in {
+  border-radius: 20px 20px 20px 4px;
+}
+
+/* A message that was not sent: dashed outline, muted text (Ink-dim on Paper is 7.9:1). */
+.bubble-unsent {
+  border: 1px dashed var(--color-border-strong);
+  background: transparent;
+  color: var(--color-ink-dim);
+}
+
+/* ---- home hero: one load sequence, about 1.2s ----
+   1 the WhatsApp bubble slides up 16px into place at full opacity (150-600ms)
+   2 the two grey ticks (delivered) fade in (1200ms)
+   3 Sam's reply arrives (1550ms)
+   Final state is the default style, so reduced motion simply drops the
+   animations and shows the finished frame. */
+@keyframes hero-land {
+  from {
+    transform: translateY(16px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes hero-fade-up {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -211,12 +315,957 @@ h6 {
   }
 }
 
-.rise-in {
-  animation: rise 620ms var(--ease-out) both;
+.hero-bubble {
+  animation: hero-land 450ms var(--ease-out) 750ms both;
+}
+
+/* "Delivered" fades in on its own at 600ms (REDESIGN section 7); the reply follows at 950ms. */
+@keyframes hero-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.hero-delivered {
+  animation: hero-fade 200ms var(--ease-out) 1200ms both;
+}
+
+.hero-late {
+  animation: hero-fade-up 350ms var(--ease-out) 1550ms both;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rise-in {
+  .hero-bubble,
+  .hero-delivered,
+  .hero-late,
+  .phones .phone {
     animation: none;
+  }
+
+}
+
+/* ---- Task 13: Paper ground ----
+   A second :root block, appended so the earlier one stays untouched. Paper
+   (white) is the page ground; Cream becomes the one note band per page; Wren
+   (--color-rule) draws the 2px section rules. */
+:root {
+  --color-bg: #FFFFFF;
+  --color-raised: #EEF0F4;
+  --color-well: #EEF0F4;
+  --color-rule: #1B1F2A;
+  --color-sms: #E9E9EB;
+}
+
+.surface-dark {
+  --color-rule: #D9A47A;
+}
+
+@theme inline {
+  --color-rule: var(--color-rule);
+  --color-sms: var(--color-sms);
+}
+
+/* Marketing body copy: 17px on the printed-feeling Paper ground. */
+.site-body {
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+/* The one section device: a 2px Wren rule the width of the column, 24px above
+   the heading. */
+.section-rule::before {
+  content: "";
+  display: block;
+  height: 2px;
+  width: 100%;
+  margin-bottom: 24px;
+  background: var(--color-rule);
+}
+
+/* Phone for the sample messages: device proportions (bezel, island, status
+   bar, composer, home bar) so it reads as a phone, not a card. A phone is a
+   light object even on an Ink section, so it restates the light-scope tokens
+   it needs. 13B reshaped this block from 13A's small card. */
+.phone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 272px;
+  padding: 9px;
+  border-radius: 40px;
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #454A57;
+  --color-ink-faint: #5F6270;
+  --color-border: rgba(27, 31, 42, 0.14);
+  --color-well: #EEF0F4;
+  background: #0E1118;
+  color: var(--color-ink);
+  box-shadow:
+    0 0 0 1.5px #4A5163,
+    0 32px 56px -28px rgba(0, 0, 0, 0.7);
+}
+
+.phone-island {
+  position: absolute;
+  top: 17px;
+  left: 50%;
+  z-index: 2;
+  width: 64px;
+  height: 18px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: #0E1118;
+}
+
+.phone-screen {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 32px;
+  background: #FFFFFF;
+}
+
+.phone-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 22px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.phone-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px 9px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.phone-head-sms {
+  position: relative;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 10px 8px;
+  border-bottom: 1px solid var(--color-border);
+  background: #F6F7F9;
+  font-size: 12px;
+}
+
+.phone-head-sms .phone-back {
+  position: absolute;
+  left: 12px;
+  top: 14px;
+  color: #4A5162;
+}
+
+.phone-head-chat {
+  background: #1F2433;
+  --color-ink: #FFFFFF;
+  color: var(--color-ink);
+}
+
+.phone-who {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.phone-sub {
+  font-size: 10px;
+  font-weight: 400;
+  color: #C3C7D1;
+}
+
+.phone-tools {
+  flex: none;
+}
+
+.phone-avatar {
+  display: inline-flex;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #D9A47A;
+  color: #1B1F2A;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.phone-avatar-sms {
+  width: 26px;
+  height: 26px;
+  background: #C3C7D1;
+  font-size: 12px;
+}
+
+.phone-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 10px;
+}
+
+.phone-meta {
+  margin-bottom: 12px;
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--color-ink-faint);
+}
+
+.phone-composer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 8px;
+  font-size: 13px;
+  color: var(--color-ink-faint);
+}
+
+.phone-composer-sms {
+  padding: 0 4px;
+}
+
+.phone-composer-sms .phone-field {
+  flex: 1;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+.phone-plus {
+  display: inline-flex;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #EEF0F4;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.phone-composer-chat .phone-field {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #FFFFFF;
+}
+
+.phone-mic {
+  flex: none;
+}
+
+.phone-home {
+  display: block;
+  width: 96px;
+  height: 4px;
+  margin: 2px auto 8px;
+  border-radius: 999px;
+  background: var(--color-ink);
+  opacity: 0.85;
+}
+
+
+/* Browser-ish chrome around a sample app screen. */
+.sample-chrome {
+  border: 3px solid var(--color-ink);
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--color-card);
+  color: var(--color-ink);
+}
+
+/* ---- Task 14: Direction B (coral field) ----
+   Coral is a GROUND with Ink text only (white on Coral fails AA, W22/W36).
+   White and Ink sections, Mist for the FAQ and wells; no cream anywhere. */
+:root {
+  --color-bg: #FFFFFF;
+  --color-card: #FFFFFF;
+  --color-raised: #EEF0F4;
+  --color-well: #EEF0F4;
+  --color-border: #D5D9E1;
+  --color-divider: #D5D9E1;
+  --color-border-strong: #1B1F2A;
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #4A5162;
+  --color-ink-faint: #4A5162;
+  --color-accent: #FF5A36;
+  --color-accent-ink: #1B1F2A;
+  --color-accent-text: #1B1F2A;
+  --color-rule: #1B1F2A;
+  --color-focus: #1B1F2A;
+  --color-sms: #EEF0F4;
+}
+
+.surface-dark {
+  --color-bg: #1B1F2A;
+  --color-card: #242938;
+  --color-raised: #2D3345;
+  --color-well: #151823;
+  --color-ink: #FFFFFF;
+  --color-ink-dim: #E4E7EE;
+  --color-ink-faint: #C3C7D1;
+  --color-accent-text: #FFFFFF;
+  --color-rule: #FF5A36;
+  --color-focus: #FFFFFF;
+  --color-border: rgba(255, 255, 255, 0.18);
+  --color-divider: rgba(255, 255, 255, 0.12);
+  --color-border-strong: #FFFFFF;
+}
+
+/* Coral scope: every text token is Ink because nothing lighter passes on Coral
+   (#4A5162 is 2.9:1). The primary button here is an Ink pill. */
+.surface-coral {
+  --color-bg: #FF5A36;
+  --color-card: #FFFFFF;
+  --color-raised: #FFFFFF;
+  --color-well: #FFFFFF;
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #1B1F2A;
+  --color-ink-faint: #1B1F2A;
+  --color-accent: #1B1F2A;
+  --color-accent-ink: #FFFFFF;
+  --color-accent-text: #1B1F2A;
+  --color-rule: #1B1F2A;
+  --color-focus: #1B1F2A;
+  --color-border: rgba(27, 31, 42, 0.35);
+  --color-divider: rgba(27, 31, 42, 0.25);
+  --color-border-strong: #1B1F2A;
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+}
+
+/* The rotated phones may hang past the column; never a horizontal scrollbar. */
+html,
+body {
+  overflow-x: clip;
+}
+
+/* Type scale (B's). Sentence case, Bricolage 800, no eyebrows. */
+h3 {
+  font-weight: 800;
+  letter-spacing: -0.015em;
+}
+
+.h-display {
+  font-size: clamp(2.1rem, 5.2vw, 4rem);
+  line-height: 0.98;
+  letter-spacing: -0.025em;
+}
+
+.band {
+  padding-block: clamp(64px, 9vw, 120px);
+}
+
+/* ---- pill buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 0 26px;
+  border: 2px solid var(--color-ink);
+  border-radius: 999px;
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--ease-out),
+    color 120ms var(--ease-out),
+    transform 150ms var(--ease-out);
+}
+
+.btn-sm {
+  min-height: 44px;
+  padding: 0 20px;
+}
+
+.btn-ink {
+  background: #1B1F2A;
+  border-color: #1B1F2A;
+  color: #FFFFFF;
+}
+
+.btn-line {
+  background: transparent;
+  color: var(--color-ink);
+}
+
+.btn-line:hover {
+  background: rgba(27, 31, 42, 0.08);
+}
+
+.surface-dark .btn-line:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-coral {
+  background: #FF5A36;
+  color: #1B1F2A;
+}
+
+.btn-ink:hover {
+  background: #2D3345;
+}
+
+.btn-coral:hover {
+  background: #FF7455;
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .btn:hover {
+    transform: translateY(-2px);
+  }
+}
+
+/* Full-width buttons below 640px; the header button is not in a stack. */
+.btn-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+@media (max-width: 639px) {
+  .btn-stack {
+    flex-direction: column;
+  }
+
+  .btn-stack .btn {
+    width: 100%;
+  }
+}
+
+/* ---- slab ---- */
+.slab {
+  border: 3px solid var(--color-ink);
+  border-radius: 20px;
+  background: var(--color-card);
+  color: var(--color-ink);
+}
+
+.slab-2 {
+  border-width: 2px;
+}
+
+.slab-lift {
+  border-radius: 24px;
+  box-shadow: 12px 12px 0 var(--color-accent);
+}
+
+@media (max-width: 639px) {
+  .slab-lift {
+    box-shadow: 6px 6px 0 var(--color-accent);
+  }
+}
+
+/* ---- ruled rows (safety) ---- */
+.rules {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rules > li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 20px;
+  padding: 22px 0;
+  border-top: 3px solid var(--color-rule);
+}
+
+.rules > li:last-child {
+  border-bottom: 3px solid var(--color-rule);
+}
+
+.rules > li > b {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1.5rem, 3vw, 2.2rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+@media (max-width: 639px) {
+  .rules > li {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
+/* ---- disclosure (FAQ, troubleshooting): CSS chevron, no JS ---- */
+.disclosure {
+  border-top: 2px solid var(--color-rule);
+}
+
+.disclosure:last-child {
+  border-bottom: 2px solid var(--color-rule);
+}
+
+.disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 44px;
+  padding: 20px 0;
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+}
+
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > summary::after {
+  content: "";
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  border-right: 3px solid var(--color-ink);
+  border-bottom: 3px solid var(--color-ink);
+  transform: rotate(45deg);
+  transition: transform 200ms var(--ease-out);
+}
+
+.disclosure[open] > summary::after {
+  transform: rotate(-135deg);
+}
+
+.disclosure > p {
+  max-width: 60ch;
+  padding-bottom: 22px;
+}
+
+/* ---- dashboard board ---- */
+.board {
+  overflow: hidden;
+  border: 3px solid var(--color-ink);
+  border-radius: 20px;
+  background: var(--color-card);
+  color: var(--color-ink);
+}
+
+.board-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  background: #1B1F2A;
+  color: #FFFFFF;
+  font-weight: 600;
+}
+
+.pill-sample {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #FF5A36;
+  color: #1B1F2A;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-ink);
+}
+
+.dot-off {
+  background: #FFFFFF;
+  border: 3px solid var(--color-ink);
+}
+
+.meter {
+  min-width: 60px;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--color-raised);
+}
+
+.meter > i {
+  display: block;
+  height: 100%;
+  background: var(--color-ink);
+}
+
+.attn {
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: #FF5A36;
+  color: #1B1F2A;
+  font-weight: 600;
+}
+
+/* ---- setup steps ---- */
+.path-chip {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #FF5A36;
+  color: #1B1F2A;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.step-num {
+  display: block;
+  margin-bottom: 18px;
+  color: #FF5A36;
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(4.5rem, 9vw, 8rem);
+  font-weight: 800;
+  line-height: 0.8;
+  letter-spacing: -0.05em;
+}
+
+/* ---- phones, restyled for B (class names unchanged) ----
+   Both full height at every width (the SMS crop rules are gone, Task 14B).
+   Hard offset shadow, no soft blur. */
+.phone {
+  width: clamp(158px, 22vw, 300px);
+  max-width: none;
+  height: auto;
+  border-radius: 34px;
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #4A5162;
+  --color-ink-faint: #4A5162;
+  --color-border: #D5D9E1;
+  --color-well: #EEF0F4;
+  box-shadow: 0 30px 0 -12px rgba(27, 31, 42, 0.18);
+}
+
+.phone-screen {
+  min-height: clamp(340px, 46vw, 580px);
+  border-radius: 26px;
+}
+
+.phones {
+  position: relative;
+  margin: 0;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: clamp(10px, 2vw, 24px);
+  transform: translateY(clamp(150px, 27vw, 350px));
+}
+
+.phones > .phone:nth-child(1) {
+  transform: rotate(-4deg) translateY(30px);
+}
+
+.phones > .phone:nth-child(2) {
+  transform: rotate(3deg) translateY(-6px);
+}
+
+@media (max-width: 900px) {
+  .phones {
+    margin-top: 24px;
+    transform: translateY(110px);
+  }
+}
+
+/* ---- Task 14B: home page ----
+   The one orchestrated moment: both phones rise first (0-600ms), then the
+   bubble, Delivered, the ping and the reply follow (750-1900ms). `translate`
+   is its own property, so the tilt transforms are untouched. Inside
+   no-preference, so the finished frame renders straight away otherwise. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes hero-rise {
+    from {
+      opacity: 0;
+      translate: 0 60px;
+    }
+    to {
+      opacity: 1;
+      translate: 0 0;
+    }
+  }
+
+  .phones .phone {
+    animation: hero-rise 600ms var(--ease-out) both;
+  }
+
+  .phones .phone:nth-child(2) {
+    animation-delay: 120ms;
+  }
+}
+
+.hero-big {
+  display: block;
+  margin: 0.06em 0 0.02em -0.04em;
+  font-size: clamp(6.5rem, 17vw, 15rem);
+  line-height: 0.8;
+  letter-spacing: -0.06em;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-h1 {
+  max-width: 15ch;
+  font-size: clamp(2.1rem, 4.6vw, 4.1rem);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+}
+
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+  gap: 0 24px;
+  padding-top: clamp(24px, 5vw, 64px);
+}
+
+.hang-pad {
+  padding-top: clamp(180px, 25vw, 340px);
+}
+
+.h2-b {
+  font-size: clamp(2.1rem, 5.2vw, 4rem);
+  line-height: 0.98;
+  letter-spacing: -0.025em;
+}
+
+.price-h2 {
+  max-width: 14ch;
+  font-size: clamp(2.2rem, 6vw, 5rem);
+  line-height: 0.95;
+  letter-spacing: -0.025em;
+}
+
+@media (min-width: 901px) {
+  .rules > li {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .hero-big {
+    font-size: clamp(6.5rem, 22vw, 12rem);
+  }
+
+  .hero-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-h1 {
+    max-width: none;
+  }
+
+  .hang-pad {
+    padding-top: 230px;
+  }
+}
+
+/* ---- Task 15: WhatsApp-style chat mock-up (W39) ----
+   No WhatsApp green and no logo. The outgoing bubble is a pale Coral tint, the
+   ticks are grey (blue would mean "read", which we cannot see). */
+.chat-wallpaper {
+  background-color: #E3E7EE;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='88' height='88' viewBox='0 0 88 88' fill='none' stroke='%231B1F2A' stroke-opacity='.09' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='14' cy='14' r='5'/%3E%3Cpath d='M50 12h10M55 7v10'/%3E%3Cpath d='M70 34c3-4 6 4 9 0s6 4 9 0' transform='translate(-12 4)'/%3E%3Crect x='8' y='46' width='10' height='10' rx='3' transform='rotate(18 13 51)'/%3E%3Cpath d='M44 52l6 10h-12z'/%3E%3Ccircle cx='72' cy='72' r='3'/%3E%3Cpath d='M20 78c2-3 4 3 6 0s4 3 6 0'/%3E%3Cpath d='M70 20l4 4m0-4l-4 4'/%3E%3C/svg%3E");
+  background-size: 88px 88px;
+}
+
+.day-chip {
+  width: fit-content;
+  margin: 0 auto 10px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: #FFFFFF;
+  box-shadow: 0 1px 0 rgba(27, 31, 42, 0.12);
+  font-size: 10.5px;
+  color: #4A5162;
+}
+
+.wa-msg {
+  position: relative;
+  max-width: 88%;
+  padding: 6px 8px 5px;
+  border-radius: 9px;
+  font-size: clamp(11.5px, 1.15vw, 14.5px);
+  line-height: 1.32;
+  color: #1B1F2A;
+  box-shadow: 0 1px 0 rgba(27, 31, 42, 0.14);
+}
+
+.wa-msg::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
+.wa-out {
+  background: #FFDDD3;
+  border-top-right-radius: 0;
+}
+
+.wa-in {
+  background: #FFFFFF;
+  border-top-left-radius: 0;
+}
+
+.wa-sms {
+  max-width: 90%;
+  padding: 7px 10px;
+  border-radius: 16px;
+  background: #E4E7EE;
+}
+
+/* The tail: a small wedge in the bubble's colour, on the square corner. */
+.bubble-tail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 9px;
+  height: 11px;
+  background: inherit;
+}
+
+.wa-out.bubble-tail::before {
+  right: -8px;
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+.wa-in.bubble-tail::before {
+  left: -8px;
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+}
+
+.wa-meta {
+  float: right;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 7px 0 -3px 10px;
+  font-size: 0.72em;
+  color: #4A5162;
+}
+
+.wa-ticks {
+  display: block;
+  color: #5F6676;
+}
+
+.no-reply {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4A5162;
+}
+
+.phone-field {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.phone-composer svg {
+  flex: none;
+}
+
+@media (max-width: 600px) {
+  .phone-tools,
+  .phone-sub {
+    display: none;
+  }
+
+  .phone-composer {
+    font-size: 11px;
+  }
+}
+
+/* ---- print: the how-to-connect help sheet (A4, black on white, logo kept) ---- */
+@page {
+  size: A4;
+  margin: 12mm;
+}
+
+@media print {
+  .no-print,
+  .skip-link,
+  footer.surface-dark,
+  .site-body > header > div > *:not(:first-child) {
+    display: none !important;
+  }
+
+  .site-body > header,
+  .connect-sheet,
+  .connect-sheet * {
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+  }
+
+  .connect-sheet .sheet-top {
+    grid-template-columns: minmax(0, 1fr) 15rem !important;
+    gap: 20pt !important;
+  }
+
+  .connect-sheet .sheet-figure {
+    zoom: 0.62;
+  }
+
+  .connect-sheet .mt-12 {
+    margin-top: 14pt !important;
+  }
+
+  .connect-sheet .sheet-top .grid {
+    gap: 12pt !important;
+  }
+
+  .connect-sheet h1 {
+    font-size: 26pt;
+  }
+
+  .connect-sheet section {
+    padding-top: 8pt !important;
+    padding-bottom: 0 !important;
+  }
+
+  .connect-sheet .sheet-block,
+  .connect-sheet .sheet-step {
+    break-inside: avoid;
+  }
+
+  .connect-sheet {
+    font-size: 10.5pt;
+    line-height: 1.4;
   }
 }

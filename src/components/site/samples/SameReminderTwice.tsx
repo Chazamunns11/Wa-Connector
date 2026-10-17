@@ -1,0 +1,53 @@
+import { PhoneFrame } from "./PhoneFrame";
+import { Ticks } from "./Ticks";
+
+/**
+ * The signature figure: the same reminder as a text message nobody answered,
+ * and in a chat app where Sam did. Pure markup and CSS (.hero-* and .wa-* in
+ * globals.css), no client JS. Nothing here claims a rate; both phones are
+ * made-up samples, so Sam is a made-up name and nothing is captioned.
+ */
+const REMINDER = "Hi Sam, your appointment is at 2pm tomorrow. Reply YES to confirm.";
+const REPLY = "Yes, see you at 2";
+
+const LABEL = `Two phones showing the same appointment reminder, "${REMINDER}" On the left it is a text message sent yesterday at 14:02 with no reply. On the right it is a WhatsApp-style chat where the message shows two grey ticks, Delivered, and Sam has replied "${REPLY}", which appears back in Conversations.`;
+
+export function SameReminderTwice() {
+  return (
+    <figure role="img" aria-label={LABEL} className="phones">
+      <PhoneFrame title="Sam" variant="sms" composer="Text Message">
+        <p className="phone-meta">
+          Text Message
+          <br />
+          Yesterday 14:02
+        </p>
+        <div className="flex flex-col items-end">
+          <p className="wa-msg wa-sms">{REMINDER}</p>
+          <p className="no-reply">No reply</p>
+        </div>
+      </PhoneFrame>
+
+      <PhoneFrame title="Sam" variant="whatsapp" composer="Message">
+        <p className="day-chip">Yesterday</p>
+        <div className="flex flex-col items-end">
+          <p className="hero-bubble wa-msg wa-out bubble-tail">
+            {REMINDER}
+            <span className="wa-meta">
+              14:02{" "}
+              <span className="hero-delivered">
+                <Ticks />
+              </span>
+            </span>
+          </p>
+        </div>
+        <div className="hero-late mt-2 flex flex-col items-start">
+          <p className="wa-msg wa-in bubble-tail">
+            {REPLY}
+            <span className="wa-meta">14:09</span>
+          </p>
+          <p className="day-chip mt-2">Back in Conversations</p>
+        </div>
+      </PhoneFrame>
+    </figure>
+  );
+}

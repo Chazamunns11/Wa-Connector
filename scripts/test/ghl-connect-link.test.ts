@@ -697,7 +697,10 @@ function fakeSessionRepo(
     },
     async getWhatsappSessionSummary(tenantId: string) {
       summaryCalls.push(tenantId);
-      return null;
+      return {
+        coachId: tenantId, status: "disconnected", phoneNumber: "+447700900101", lastConnectedAt: "2026-10-10T00:00:00Z",
+        lastDisconnectReason: null, sentToday: 1, heldMessages: 5,
+      };
     },
   };
 }
@@ -856,6 +859,8 @@ test("decideConnectSession: a genuinely valid token for an active, version-match
     assert.deepEqual(verifiedSession, { ok: true, locationId: SESSION_LOCATION_ID, v: 3, slot: 1 });
     assert.equal(decision.label, "Session Logic Test Location");
     assert.equal(decision.bridgeReachable, true);
+    assert.equal(decision.summary?.heldMessages, 5);
+    assert.equal("coachId" in (decision.summary ?? {}), false);
   }
   assert.deepEqual(repo.accountCalls, [SESSION_LOCATION_ID]);
   assert.deepEqual(repo.summaryCalls, [SESSION_TENANT_ID]);

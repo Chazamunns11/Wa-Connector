@@ -1,0 +1,621 @@
+# Theme
+Tailwind v4, CSS-first: tokens in `src/app/globals.css` (`:root` + `@theme inline`), NO tailwind.config. Usage via utilities like `bg-bg text-ink border-border bg-accent text-accent-ink`. Fonts injected in `src/app/layout.tsx` as CSS vars.
+
+## Part 1 - Token summary
+**Brand:** PingWren, "Bubble Wren" logo (wren in a speech bubble). Wordmark lowercase `pingwren`: "ping" 800, "wren" 500, Bricolage Grotesque. Don't use WhatsApp green (#25D366) or WhatsApp logo. Swatches: Ink #1B1F2A, Wren #7A4E2D, Tan #D9A47A, Cream #F6F1EA, Coral #FF5A36.
+
+**Light (default `:root`, final values after "Paper ground" override):** bg #FFFFFF; card #FFFFFF; raised #F6F1EA; well #F6F1EA; border rgba(27,31,42,.14); divider rgba(27,31,42,.09); border-strong #8C8478; ink #1B1F2A; ink-dim #454A57; ink-faint #5F6270; accent #FF5A36 (always with accent-ink #1B1F2A text); accent-text #7A4E2D; focus #1B1F2A; rule #7A4E2D; sms #E9E9EB; paper #FFFFFF/paper-ink #1B1F2A. Status: win #17663F, loss #A8231B, warn #7A5000, info #1D5596; soft tints win #E3F1E8, loss #FBE6E3, warn #F8EBCC, info #E2ECF7, accent-soft #FFE6DE.
+**Dark (`.surface-dark`, used by header/hero/footer/bands):** bg #1B1F2A; card #242938; raised #2D3345; well #151823; border rgba(246,241,234,.16); divider rgba(246,241,234,.1); border-strong #7E8290; ink #F6F1EA; ink-dim #D3CCC0; ink-faint #A8A296; accent-text #D9A47A; focus #D9A47A; rule #D9A47A; win #6FD0A0; loss #FF8F86; warn #F2B23E; info #86BDF2; soft tints are 14-16% alpha of those.
+**Fonts:** display `--font-display` = Bricolage Grotesque (500, 800; h1/h2 800 tracking -0.025em, h3-h6 500 -0.015em); body `--font-body` = Instrument Sans (400/500/600), marketing body `.site-body` 17px/1.55; mono JetBrains Mono (`.font-mono-nums`). No custom type scale; Tailwind defaults. `.prose-flow` for docs/legal (h2 24px, h3 18px, 62ch lines).
+**Spacing/breakpoints:** Tailwind v4 defaults (4px base; sm 640, md 768, lg 1024, xl 1280). Phone mock heights switch at 1024px.
+**Radius:** bubbles 20px (tail corner 4px), phone 40px/screen 32px, sample-chrome 8px, pills 999px, skip-link 4px. **Shadows:** only phone (`0 0 0 1.5px #4A5163, 0 32px 56px -28px rgba(0,0,0,.7)`).
+**Motion:** `--ease-out: cubic-bezier(.2,.8,.2,1)`; `.rise-in` 620ms; hero sequence (`.hero-bubble/.hero-ping/.hero-delivered/.hero-late`) ~1.2s; all disabled under prefers-reduced-motion. Focus: 2px outline offset 2px, always visible.
+**Utilities/devices:** `.section-rule` (2px Wren rule above section headings), `.bubble .bubble-out/.bubble-in/.bubble-unsent`, `.phone*`, `.sample-chrome`, `.card-glow`, `.skip-link`, `.surface-dark/.surface-light`.
+Per-tenant accent override: `brandCssVars()` in `src/lib/brand-config.ts` sets `--color-accent`/`--color-accent-ink` on the (site) layout.
+
+## Logo files (`public/brand/`, from public/brand/README.md)
+| File | Use |
+| --- | --- |
+| `pingwren-logo.svg` (+`@3x.png`) | Horizontal logo, light backgrounds (viewBox 473x148) |
+| `pingwren-logo-reverse.svg` | Horizontal logo, dark backgrounds |
+| `pingwren-logo-stacked.svg` / `-stacked-reverse.svg` | Square-ish layouts |
+| `pingwren-logo-black.svg` / `-white.svg` | One-colour (wren cut out) |
+| `pingwren-mark.svg` / `-reverse` / `-black` / `-white` | Icon only |
+| `pingwren-app-icon.svg`, `-512.png`, `-1024.png` | App icon / GHL Marketplace tile (coral square) |
+| `favicon.svg`, `favicon.ico`, `favicon-16/32/48/180.png` | Browser tab; 180 = Apple touch icon |
+Rules: keep clear space >= wren head height; don't recolour, stretch or outline the mark. Mark geometry (inline-able): bubble path `M28 8H72A22 22 0 0 1 94 30V58A22 22 0 0 1 72 80H38L14 95L21 77A22 22 0 0 1 6 58V30A22 22 0 0 1 28 8Z` fill #1B1F2A; wren body ellipse cx50 cy55 rx21 ry15, head circle cx65 cy43 r11, tail polygon `33,52 19,29 27,26 40,47` all #F6F1EA; beak polygon `74,40 86,44 74,48` #FF5A36; eye circle cx68 cy41 r2.3 #1B1F2A.
+
+## Part 2 - Raw sources
+
+### `src/app/globals.css`
+Tailwind v4 theme, tokens and utilities (complete)
+
+```css
+@import "tailwindcss";
+
+/* PINGWREN THEME. Cream is the default ground; Ink sections opt in with
+   `.surface-dark`. Token NAMES are the old ones on purpose (bg, card, raised,
+   well, ink = the TEXT colour, accent...), so call sites repaint without
+   per-component hexes. Brand swatches (public/brand/README.md):
+   Ink #1B1F2A, Wren #7A4E2D, Tan #D9A47A, Cream #F6F1EA, Coral #FF5A36.
+   Every text pairing below is >= 4.5:1; borders that mark a control are
+   >= 3:1 (docs/design/website/README.md, "PingWren brand applied"). */
+:root {
+  /* Grounds: Cream page, white panels, a deeper sand for raised bands. */
+  --color-bg: #F6F1EA;
+  --color-card: #FFFFFF;
+  --color-raised: #EFE8DD;
+  --color-well: #FFFFFF;
+
+  /* Hairlines (decorative panel edges) and the stronger edge that marks a
+     control (inputs, secondary buttons, tabs): 3.3:1 on Cream. */
+  --color-border: rgba(27, 31, 42, 0.14);
+  --color-divider: rgba(27, 31, 42, 0.09);
+  --color-border-strong: #8C8478;
+
+  /* Text: Ink body, a softer Ink for secondary copy, a muted Ink for meta. */
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #454A57;
+  --color-ink-faint: #5F6270;
+
+  /* Accent: Coral fills (buttons, step rules, the one diagram highlight) always
+     carry Ink text (5.3:1); white on Coral is 3.1:1 and is not used. Coral is
+     not readable as small text on Cream, so accent TEXT and links are Wren
+     (6.3:1). The dark scope swaps Wren for Tan. */
+  --color-accent: #FF5A36;
+  --color-accent-ink: #1B1F2A;
+  --color-accent-text: #7A4E2D;
+  --color-focus: #1B1F2A;
+
+  /* Status: deep, distinct hues on solid tints, text >= 5.9:1. Win is a forest
+     green, nowhere near WhatsApp's. A word always accompanies the colour. */
+  --color-win: #17663F;
+  --color-loss: #A8231B;
+  --color-warn: #7A5000;
+  --color-info: #1D5596;
+  --color-win-soft: #E3F1E8;
+  --color-loss-soft: #FBE6E3;
+  --color-warn-soft: #F8EBCC;
+  --color-info-soft: #E2ECF7;
+  --color-accent-soft: #FFE6DE;
+
+  /* Message bubbles are Paper with Ink text on every ground (Cream or Ink). */
+  --color-paper: #FFFFFF;
+  --color-paper-ink: #1B1F2A;
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --font-display: var(--font-bricolage);
+  --font-body: var(--font-body-sans);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+/**
+ * Ink scope: header, hero, feature bands, footer. Same token names, flipped to
+ * the dark half of the palette: Cream text, Tan links (the kit's "wren on
+ * dark"), Coral accent. The logo on these sections is the reverse artwork.
+ */
+.surface-dark {
+  --color-bg: #1B1F2A;
+  --color-card: #242938;
+  --color-raised: #2D3345;
+  --color-well: #151823;
+  --color-border: rgba(246, 241, 234, 0.16);
+  --color-divider: rgba(246, 241, 234, 0.1);
+  --color-border-strong: #7E8290;
+  --color-ink: #F6F1EA;
+  --color-ink-dim: #D3CCC0;
+  --color-ink-faint: #A8A296;
+  --color-accent-text: #D9A47A;
+  --color-focus: #D9A47A;
+  --color-win: #6FD0A0;
+  --color-loss: #FF8F86;
+  --color-warn: #F2B23E;
+  --color-info: #86BDF2;
+  --color-win-soft: rgba(111, 208, 160, 0.14);
+  --color-loss-soft: rgba(255, 143, 134, 0.14);
+  --color-warn-soft: rgba(242, 178, 62, 0.14);
+  --color-info-soft: rgba(134, 189, 242, 0.14);
+  --color-accent-soft: rgba(255, 90, 54, 0.16);
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+}
+
+/* Legacy alias: docs and legal wrappers still say `surface-light`; it is now
+   simply the default Cream theme restated. */
+.surface-light {
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-card: var(--color-card);
+  --color-raised: var(--color-raised);
+  --color-well: var(--color-well);
+  --color-border: var(--color-border);
+  --color-divider: var(--color-divider);
+  --color-border-strong: var(--color-border-strong);
+
+  --color-ink: var(--color-ink);
+  --color-ink-dim: var(--color-ink-dim);
+  --color-ink-faint: var(--color-ink-faint);
+
+  --color-accent: var(--color-accent);
+  --color-accent-ink: var(--color-accent-ink);
+  --color-accent-text: var(--color-accent-text);
+
+  --color-win: var(--color-win);
+  --color-loss: var(--color-loss);
+  --color-warn: var(--color-warn);
+  --color-info: var(--color-info);
+  --color-win-soft: var(--color-win-soft);
+  --color-loss-soft: var(--color-loss-soft);
+  --color-warn-soft: var(--color-warn-soft);
+  --color-info-soft: var(--color-info-soft);
+  --color-accent-soft: var(--color-accent-soft);
+
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Bricolage Grotesque, loaded at 500 and 800 only (the logo's own rhythm:
+   "ping" 800, "wren" 500). h1/h2 take 800, smaller headings 500. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  font-optical-sizing: auto;
+}
+
+h1,
+h2 {
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.font-mono-nums {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-border-strong);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Focus is always visible: 2px outline at 2px offset, never outline:none.
+   Ink on Cream (14.7:1), Tan on Ink (7.5:1). */
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.card-glow {
+  transition: border-color 120ms var(--ease-out);
+}
+
+.card-glow:hover {
+  border-color: var(--color-border-strong);
+}
+
+/* ---- website ---- */
+
+/* Skip link: off-screen until focused, then pinned top-left above the header. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: -64px;
+  z-index: 50;
+  padding: 12px 16px;
+  border-radius: 4px;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
+/* Prose spacing for long reading pages (docs, legal). Lines stay under ~62ch. */
+.prose-flow > * + * {
+  margin-top: 16px;
+}
+
+.prose-flow > h2 {
+  margin-top: 48px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.prose-flow > h3 {
+  margin-top: 32px;
+  font-size: 18px;
+}
+
+.prose-flow p,
+.prose-flow li {
+  max-width: 62ch;
+  line-height: 1.6;
+}
+
+.prose-flow ul,
+.prose-flow ol {
+  padding-left: 24px;
+}
+
+.prose-flow ul {
+  list-style: disc;
+}
+
+.prose-flow ol {
+  list-style: decimal;
+}
+
+/* ---- message bubbles ----
+   Shape from the PingWren logo bubble: generous radius, one square-ish corner
+   on the tail side. Outgoing tails bottom-right, inbound bottom-left. */
+.bubble {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  padding: 10px 14px;
+  border: 1px solid rgba(27, 31, 42, 0.14);
+  background: var(--color-paper);
+  color: var(--color-paper-ink);
+  line-height: 1.4;
+}
+
+.bubble-out {
+  border-radius: 20px 20px 4px 20px;
+}
+
+.bubble-in {
+  border-radius: 20px 20px 20px 4px;
+}
+
+/* A message that was not sent: dashed outline, muted text (Ink-dim on Paper is 7.9:1). */
+.bubble-unsent {
+  border: 1px dashed var(--color-border-strong);
+  background: transparent;
+  color: var(--color-ink-dim);
+}
+
+/* ---- home hero: one load sequence, about 1.2s ----
+   1 the WhatsApp bubble slides up 16px into place at full opacity (150-600ms)
+   2 a Coral dot pings on its tail corner (650-1150ms)
+   3 "Delivered", the reply and "Back in Conversations" arrive (950-1300ms)
+   Final state is the default style, so reduced motion simply drops the
+   animations and shows the finished frame. */
+@keyframes hero-land {
+  from {
+    transform: translateY(16px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes hero-ping-ring {
+  from {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(3);
+  }
+}
+
+@keyframes hero-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hero-bubble {
+  animation: hero-land 450ms var(--ease-out) 150ms both;
+}
+
+.hero-ping::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--color-accent);
+  animation: hero-ping-ring 500ms ease-out 650ms both;
+}
+
+.hero-ping {
+  animation: hero-fade-up 200ms var(--ease-out) 650ms both;
+}
+
+/* "Delivered" fades in on its own at 600ms (REDESIGN section 7); the reply follows at 950ms. */
+@keyframes hero-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.hero-delivered {
+  animation: hero-fade 200ms var(--ease-out) 600ms both;
+}
+
+.hero-late {
+  animation: hero-fade-up 350ms var(--ease-out) 950ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-bubble,
+  .hero-ping,
+  .hero-ping::after,
+  .hero-delivered,
+  .hero-late {
+    animation: none;
+  }
+
+  .hero-ping::after {
+    display: none;
+  }
+}
+
+/* ---- Task 13: Paper ground ----
+   A second :root block, appended so the earlier one stays untouched. Paper
+   (white) is the page ground; Cream becomes the one note band per page; Wren
+   (--color-rule) draws the 2px section rules. */
+:root {
+  --color-bg: #FFFFFF;
+  --color-raised: #F6F1EA;
+  --color-well: #F6F1EA;
+  --color-rule: #7A4E2D;
+  --color-sms: #E9E9EB;
+}
+
+.surface-dark {
+  --color-rule: #D9A47A;
+}
+
+@theme inline {
+  --color-rule: var(--color-rule);
+  --color-sms: var(--color-sms);
+}
+
+/* Marketing body copy: 17px on the printed-feeling Paper ground. */
+.site-body {
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+/* The one section device: a 2px Wren rule the width of the column, 24px above
+   the heading. */
+.section-rule::before {
+  content: "";
+  display: block;
+  height: 2px;
+  width: 100%;
+  margin-bottom: 24px;
+  background: var(--color-rule);
+}
+
+/* Phone for the sample messages: device proportions (bezel, island, status
+   bar, composer, home bar) so it reads as a phone, not a card. A phone is a
+   light object even on an Ink section, so it restates the light-scope tokens
+   it needs. 13B reshaped this block from 13A's small card. */
+.phone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 272px;
+  height: 410px;
+  padding: 9px;
+  border-radius: 40px;
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #454A57;
+  --color-ink-faint: #5F6270;
+  --color-border: rgba(27, 31, 42, 0.14);
+  --color-well: #F6F1EA;
+  background: #0E1118;
+  color: var(--color-ink);
+  box-shadow:
+    0 0 0 1.5px #4A5163,
+    0 32px 56px -28px rgba(0, 0, 0, 0.7);
+}
+
+/* Below 1024px the SMS phone is cropped to its top: the reminder and the
+   stamp, not 250px of empty thread. */
+.phone-sms {
+  height: 260px;
+}
+
+.phone-sms .phone-composer,
+.phone-sms .phone-home {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .phone,
+  .phone-sms {
+    height: 548px;
+  }
+
+  .phone-sms .phone-composer {
+    display: flex;
+  }
+
+  .phone-sms .phone-home {
+    display: block;
+  }
+}
+
+.phone-island {
+  position: absolute;
+  top: 17px;
+  left: 50%;
+  z-index: 2;
+  width: 64px;
+  height: 18px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: #0E1118;
+}
+
+.phone-screen {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 32px;
+  background: #FFFFFF;
+}
+
+.phone-chat .phone-screen {
+  background: var(--color-well);
+}
+
+.phone-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 22px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.phone-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.phone-head-sms {
+  justify-content: center;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.phone-head-chat {
+  background: #2D3345;
+  --color-ink: #F6F1EA;
+  color: var(--color-ink);
+}
+
+.phone-avatar {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #D9A47A;
+  color: #1B1F2A;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.phone-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 12px;
+}
+
+.phone-meta {
+  margin-bottom: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-ink-faint);
+}
+
+.phone-composer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 10px 8px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: #FFFFFF;
+  font-size: 14px;
+  color: var(--color-ink-faint);
+}
+
+.phone-home {
+  display: block;
+  width: 96px;
+  height: 4px;
+  margin: 2px auto 8px;
+  border-radius: 999px;
+  background: var(--color-ink);
+  opacity: 0.85;
+}
+
+.phone-sms .bubble-out {
+  background: var(--color-sms);
+  border-color: transparent;
+  color: var(--color-ink);
+}
+
+/* Browser-ish chrome around a sample app screen. */
+.sample-chrome {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-card);
+  color: var(--color-ink);
+}
+```
+
+### Font setup
+See `src/app/layout.tsx` in layouts.md (Bricolage_Grotesque 500/800 as --font-bricolage; Instrument_Sans as --font-body-sans; JetBrains_Mono as --font-jetbrains-mono).

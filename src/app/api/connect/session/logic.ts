@@ -59,6 +59,7 @@
  */
 import type { GhlAccountStatus, GhlEmbedWhatsappSummary, LocationNumber, WhatsappSessionSummary } from "@/lib/types";
 import type { LocationSlot } from "@/lib/location-numbers";
+import { toEmbedWhatsappSummary } from "@/lib/embed-summary";
 import { isConnectLinkConfigured, mintConnectSessionToken, verifyConnectLinkToken } from "@/lib/ghl-connect-link";
 import { getWhatsappBridgeHealth, isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
 import { checkConnectSessionThrottle, type ConnectThrottleDecision } from "@/lib/connect-throttle";
@@ -143,13 +144,6 @@ export type ConnectSessionDecision =
       /** Which number this link connects — slot and label only, never the tenant id. */
       number: { slot: LocationSlot; label: string | null; isDefault: boolean };
     };
-
-/** Same "enumerate, never spread" discipline as `toEmbedSummary` in `src/app/api/crm/embed/session/route.ts` — a future field added to `WhatsappSessionSummary` must never ride along by default. */
-function toConnectSummary(summary: WhatsappSessionSummary | null): GhlEmbedWhatsappSummary | null {
-  if (!summary) return null;
-  const { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday } = summary;
-  return { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday };
-}
 
 /**
  * The full decision for one `POST /api/connect/session` attempt — see this
@@ -254,7 +248,7 @@ export async function decideConnectSession(
     kind: "ok",
     token: sessionToken,
     label: account.label,
-    summary: toConnectSummary(summary),
+    summary: toEmbedWhatsappSummary(summary),
     bridgeReachable,
     // Enumerated, never spread — `number` carries the tenant id.
     number: { slot: verified.slot, label: number.label, isDefault: number.isDefault },

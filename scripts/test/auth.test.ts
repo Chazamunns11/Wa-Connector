@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 
 interface FakeState {
   user: { id: string; email?: string } | null;
-  profile: { role: string; email: string } | null;
+  profile: { role: string; email: string; account_id?: string | null } | null;
   profileLookups: string[];
 }
 
@@ -97,13 +97,21 @@ test("assertOwner: a profile with an unknown role -> throws", async () => {
 
 test("assertOwner: an `owner` role -> returns the session shape", async () => {
   const { assertOwner } = await loadAuth();
-  reset({ id: "user-owner", email: "owner@example.com" }, { role: "owner", email: "owner@example.com" });
+  reset({ id: "user-owner", email: "owner@example.com" }, { role: "owner", email: "owner@example.com", account_id: null });
   const session = await assertOwner();
-  assert.deepEqual(session, { profileId: "user-owner", role: "owner", email: "owner@example.com" });
+  assert.deepEqual(session, { profileId: "user-owner", role: "owner", email: "owner@example.com", accountId: null });
 });
 
 test("getSession: an `account` role is a session, just not an owner one", async () => {
   const { getSession } = await loadAuth();
-  reset({ id: "user-account", email: "client@example.com" }, { role: "account", email: "client@example.com" });
-  assert.deepEqual(await getSession(), { profileId: "user-account", role: "account", email: "client@example.com" });
+  reset({ id: "user-account", email: "client@example.com" }, { role: "account", email: "client@example.com", account_id: "acc-1" });
+  assert.deepEqual(await getSession(), { profileId: "user-account", role: "account", email: "client@example.com", accountId: "acc-1" });
+});
+
+test("getProfile: returns accountId from account_id, null when absent", async () => {
+  const { getProfile } = await loadAuth();
+  reset(null, { role: "account", email: "client@example.com", account_id: "acc-1" });
+  assert.deepEqual(await getProfile("u"), { role: "account", email: "client@example.com", accountId: "acc-1" });
+  reset(null, { role: "owner", email: "owner@example.com", account_id: null });
+  assert.deepEqual(await getProfile("u"), { role: "owner", email: "owner@example.com", accountId: null });
 });

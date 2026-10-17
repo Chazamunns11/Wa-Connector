@@ -149,6 +149,8 @@ knowing about if you're reading this before the rest of the package lands:
   `PORTAL_INBOUND_URL` / `WA_INBOUND_POKE_SECRET`, both optional and unset by
   default). This makes a forged reply structurally impossible: the only way
   a row can exist is that this service's service-role key inserted it.
+  The same poke fires when a session reconnects (`recordReconnected`), so the
+  portal releases held messages for that number straight away.
 - **No ledger gate**: every tenant is a GHL location whose linked number is
   a dedicated business number, so cold inbound from a prospect who was never
   messaged first is the point. Every reply that passes the filter chain

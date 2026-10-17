@@ -465,7 +465,7 @@ export function ConnectLinkClient({
         </>
       ) : (
         <>
-          <h2 className="font-display text-lg font-bold uppercase italic text-ink">
+          <h2 className="font-display text-lg font-bold text-ink">
             {connectHeading(number)}
           </h2>
 

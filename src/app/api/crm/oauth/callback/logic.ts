@@ -38,7 +38,7 @@ import type { GhlTokens } from "@/lib/ghl";
  * same as `route.ts` always was — this feature has never run sessionless
  * (see `route.ts`'s own header, "THE authorisation").
  */
-export type GhlOauthCallbackRepo = Pick<GhlRepository, "getGhlAccountByLocationId" | "upsertGhlAccount" | "createGhlTenant">;
+export type GhlOauthCallbackRepo = Pick<GhlRepository, "getGhlAccountByLocationId" | "upsertGhlAccount" | "createGhlTenant" | "claimGhlAccount">;
 
 /**
  * The install (or reinstall) write for ONE GHL location — moved verbatim out
@@ -65,6 +65,9 @@ export type GhlOauthCallbackRepo = Pick<GhlRepository, "getGhlAccountByLocationI
  * the "partial failure must not abort the batch" requirement the
  * multi-location path needs (see `runGhlBulkInstall`'s own JSDoc).
  */
+/** `conflict`: the location already belongs to a different account, so nothing was written. */
+export type InstallOutcome = "installed" | "conflict" | "failed";
+
 export async function installGhlLocation(
   repo: GhlOauthCallbackRepo,
   tokens: GhlTokens,
@@ -85,9 +88,16 @@ export async function installGhlLocation(
    * themselves — see the "reinstall-keeps-its-label" rule in `route.ts`'s
    * header, which this extends rather than replaces.
    */
-  locationName?: string | null
-): Promise<boolean> {
-  if (!tokens.locationId || !tokens.refreshToken) return false;
+  locationName?: string | null,
+  /**
+   * The account installing, or null for an owner install or an unclaimed
+   * Marketplace install. A location already owned by a DIFFERENT account is a
+   * conflict (nothing written). A null account never changes ownership: it
+   * refreshes tokens on any row and leaves account_id as it was.
+   */
+  accountId: string | null = null
+): Promise<InstallOutcome> {
+  if (!tokens.locationId || !tokens.refreshToken) return "failed";
   const locationId = tokens.locationId;
   const refreshToken = tokens.refreshToken;
   // Normalised to `undefined` rather than left as-is, because `??` only
@@ -98,6 +108,7 @@ export async function installGhlLocation(
   const resolvedName = locationName?.trim() ? locationName.trim() : undefined;
   try {
     const existing = await repo.getGhlAccountByLocationId(locationId);
+    if (accountId && existing?.accountId && existing.accountId !== accountId) return "conflict";
     // KNOWN RACE (adversarial-review finding 10, accepted as harmless/
     // cosmetic — not fixed here, carried over verbatim from `route.ts`):
     // two concurrent callbacks for the SAME genuinely-new `locationId` can
@@ -127,10 +138,17 @@ export async function installGhlLocation(
       accessTokenExpiresAt: tokens.expiresAt,
       refreshToken,
     });
-    return true;
+    // Stamp ownership only where the row is unowned. The claim is a conditional
+    // UPDATE (account_id IS NULL), so losing a race to another account is a
+    // conflict rather than a silent steal.
+    if (accountId && !existing?.accountId) {
+      const claimed = await repo.claimGhlAccount(locationId, accountId);
+      if (!claimed) return "conflict";
+    }
+    return "installed";
   } catch (err) {
     console.error("[ghl/oauth/callback] could not save account:", err);
-    return false;
+    return "failed";
   }
 }
 
@@ -160,6 +178,8 @@ export const GHL_BULK_INSTALL_CAP = 25;
 export interface GhlBulkInstallDeps {
   /** `getGhlLocationTokenFromAgency` (src/lib/ghl.ts) in production, bound to this callback's own agency access token — `null` means that ONE location's exchange failed and counts against `failed`, never aborts the run. */
   getLocationToken: (companyId: string, locationId: string) => Promise<GhlTokens | null>;
+  /** Called with each location id skipped because another account owns it (the route sends the Slack note). */
+  onConflict?: (locationId: string) => void;
 }
 
 export interface GhlBulkInstallResult {
@@ -167,6 +187,8 @@ export interface GhlBulkInstallResult {
   totalFound: number;
   installed: number;
   failed: number;
+  /** Locations skipped because another account already owns them. */
+  conflicts: number;
   /** `totalFound` minus however many were actually attempted this run. `> 0` means `GHL_BULK_INSTALL_CAP` was hit — these locations were never even tried, so they must never be folded into `failed` (that would claim GHL rejected them, which is false) or silently dropped (see `GHL_BULK_INSTALL_CAP`'s own JSDoc, "NOT A SILENT CAP"). */
   skippedOverCap: number;
 }
@@ -198,12 +220,14 @@ export async function runGhlBulkInstall(
   deps: GhlBulkInstallDeps,
   companyId: string,
   locations: { locationId: string; name: string | null }[],
-  cap: number = GHL_BULK_INSTALL_CAP
+  cap: number = GHL_BULK_INSTALL_CAP,
+  accountId: string | null = null
 ): Promise<GhlBulkInstallResult> {
   const totalFound = locations.length;
   const toProcess = locations.slice(0, cap);
   let installed = 0;
   let failed = 0;
+  let conflicts = 0;
   for (const location of toProcess) {
     const tokens = await deps.getLocationToken(companyId, location.locationId);
     if (!tokens) {
@@ -213,9 +237,12 @@ export async function runGhlBulkInstall(
     // `location.name` is the whole reason the bulk path reads
     // `installedLocations` rather than working from ids alone — see
     // `installGhlLocation`'s `locationName` JSDoc.
-    const ok = await installGhlLocation(repo, tokens, location.name);
-    if (ok) installed++;
-    else failed++;
+    const outcome = await installGhlLocation(repo, tokens, location.name, accountId);
+    if (outcome === "installed") installed++;
+    else if (outcome === "conflict") {
+      conflicts++;
+      deps.onConflict?.(location.locationId);
+    } else failed++;
   }
-  return { totalFound, installed, failed, skippedOverCap: totalFound - toProcess.length };
+  return { totalFound, installed, failed, conflicts, skippedOverCap: totalFound - toProcess.length };
 }
