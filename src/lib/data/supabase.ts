@@ -1535,6 +1535,18 @@ export class SupabaseGhlRepository implements GhlRepository {
     return rows.filter((row) => !isFreshPendingMedia(row)).slice(0, limit).map(mapWhatsappInboundMessage);
   }
 
+  async getInboundBodyByWaMessageId(tenantId: string, waMessageId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_inbound_messages")
+      .select("body")
+      .eq("coach_id", tenantId)
+      .eq("wa_message_id", waMessageId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as { body: string | null } | null)?.body ?? null;
+  }
+
   /**
    * Atomic claim — see Repository.claimWhatsappInboundMessage's JSDoc. The
    * `.select("id")` + row-count check is the SAME "did my own UPDATE

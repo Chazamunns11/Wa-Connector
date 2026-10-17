@@ -42,6 +42,7 @@
  */
 import { createHash, verify as cryptoVerify } from "crypto";
 import { brandConfig } from "@/lib/brand-config";
+import type { WhatsappInboundMessage } from "@/lib/types";
 
 /**
  * CONFIRMED against the marketplace app's own "Install link" on 3 Aug 2026,
@@ -1313,6 +1314,39 @@ export const MISSED_VIDEO_CALL_TEXT = "📞 Missed WhatsApp video call";
 /** `missedVideoCall` -> the video string; any other messageType -> the voice string. */
 export function describeMissedCall(messageType: string): string {
   return messageType === "missedVideoCall" ? MISSED_VIDEO_CALL_TEXT : MISSED_VOICE_CALL_TEXT;
+}
+
+/** Message events — the rendered body of an edit, reaction or delete never exceeds this many code points. */
+export const INBOUND_EVENT_MAX_CODE_POINTS = 500;
+/** A reaction quotes at most this many code points of the message it reacted to. */
+const REACTION_QUOTE_MAX_CODE_POINTS = 80;
+export const EDIT_PREFIX = "✏️ Edited: ";
+export const DELETE_TEXT = "🗑 Deleted a message";
+
+function cutCodePoints(text: string, max: number): string {
+  const points = Array.from(text);
+  return points.length <= max ? text : points.slice(0, max).join("");
+}
+
+/**
+ * Message events — the text posted to GHL for an `edit`, `reaction` or
+ * `delete` row. Pure. `originalBody` is the stored body of the message a
+ * reaction targets (null when it is gone or was ours); only a reaction reads it.
+ * The result is capped at 500 code points, cutting the contact's text, never the prefix.
+ */
+export function renderInboundEvent(row: WhatsappInboundMessage, originalBody: string | null): string {
+  let rendered: string;
+  if (row.eventKind === "edit") {
+    rendered = EDIT_PREFIX + cutCodePoints(row.body ?? "", INBOUND_EVENT_MAX_CODE_POINTS - Array.from(EDIT_PREFIX).length);
+  } else if (row.eventKind === "delete") {
+    rendered = DELETE_TEXT;
+  } else {
+    const emoji = row.body ?? "";
+    if (row.targetFromMe === true) rendered = `${emoji} reacted to your message`;
+    else if (originalBody) rendered = `${emoji} reacted to "${cutCodePoints(originalBody, REACTION_QUOTE_MAX_CODE_POINTS)}"`;
+    else rendered = `${emoji} reacted to a message`;
+  }
+  return cutCodePoints(rendered, INBOUND_EVENT_MAX_CODE_POINTS);
 }
 
 /**

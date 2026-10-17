@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { describeInboundMediaPlaceholder, describeMissedCall, MISSED_VIDEO_CALL_TEXT, MISSED_VOICE_CALL_TEXT } from "@/lib/ghl";
+import { describeInboundMediaPlaceholder, describeMissedCall, renderInboundEvent, MISSED_VIDEO_CALL_TEXT, MISSED_VOICE_CALL_TEXT } from "@/lib/ghl";
 import type { AddGhlInboundMessageResult, UpsertGhlContactResult } from "@/lib/ghl";
 import {
   drainGhlInboundReplies,
@@ -95,6 +95,8 @@ function makeAccount(overrides: Partial<GhlAccount> = {}): GhlAccount {
     refreshToken: "refresh-token-1",
     status: "active",
     lastError: null,
+    showReactions: false,
+    showDeletes: false,
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
     ...overrides,
@@ -153,7 +155,9 @@ function createFakeRepo(
   accounts: GhlAccount[] = [],
   rows: WhatsappInboundMessage[] = [],
   numbers: Record<string, LocationNumber[]> = {},
-  groups: WhatsappGroup[] = []
+  groups: WhatsappGroup[] = [],
+  /** Message events — stored original bodies, keyed `tenant:waMessageId`. */
+  originals: Map<string, string> = new Map()
 ) {
   const groupsByKey = new Map(groups.map((g) => [`${g.tenantId}:${g.groupJid}`, { ...g }]));
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
@@ -218,6 +222,11 @@ function createFakeRepo(
         .filter((r) => accountForTenant(r.coachId)?.status === "active")
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
         .slice(0, limit);
+    },
+    /** Message events — the stored body of an inbound row by (tenant, wa message id); the fixtures key it via `waMessageId`. */
+    async getInboundBodyByWaMessageId(tenantId: string, waMessageId: string) {
+      calls.push({ method: "getInboundBodyByWaMessageId", args: [tenantId, waMessageId] });
+      return originals.get(`${tenantId}:${waMessageId}`) ?? null;
     },
     async claimWhatsappInboundMessage(id: string) {
       calls.push({ method: "claimWhatsappInboundMessage", args: [id] });
@@ -342,6 +351,7 @@ test("drainGhlInboundReplies: GHL_CONVERSATION_PROVIDER_ID unset -> zero repo re
     claimLost: 0,
     groupNotEnabled: 0,
     staleMissedCalls: 0,
+    eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: true,
@@ -730,6 +740,7 @@ test("drainGhlInboundReplies: the LIST call itself throwing -> an all-zero resul
     claimLost: 0,
     groupNotEnabled: 0,
     staleMissedCalls: 0,
+    eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: false,
@@ -1452,4 +1463,167 @@ test("hasInboundFromPhone (portal): a missed call doesn't count as having messag
   const body = src.slice(start, src.indexOf("\n  }\n", start));
   assert.match(body, /\.is\("group_jid", null\)/);
   assert.match(body, /\.is\("event_kind", null\)/);
+});
+
+// ---------------------------------------------------------------------------
+// Message events — edits, reactions and deletes.
+// ---------------------------------------------------------------------------
+
+function eventRow(kind: "edit" | "reaction" | "delete", overrides: Partial<WhatsappInboundMessage> = {}): WhatsappInboundMessage {
+  return makeRow({
+    messageType: "event",
+    eventKind: kind,
+    targetWaMessageId: "WA-TARGET-1",
+    targetFromMe: false,
+    receivedAt: freshIso(),
+    ...overrides,
+  });
+}
+
+test("renderInboundEvent: exact formats", () => {
+  assert.equal(renderInboundEvent(eventRow("edit", { body: "new text" }), null), "✏️ Edited: new text");
+  assert.equal(renderInboundEvent(eventRow("delete", { body: null }), null), "🗑 Deleted a message");
+  assert.equal(renderInboundEvent(eventRow("reaction", { body: "👍" }), "see you at six"), '👍 reacted to "see you at six"');
+  assert.equal(renderInboundEvent(eventRow("reaction", { body: "👍", targetFromMe: true }), "ignored"), "👍 reacted to your message");
+  assert.equal(renderInboundEvent(eventRow("reaction", { body: "👍" }), null), "👍 reacted to a message");
+});
+
+test("renderInboundEvent: a reaction quotes the first 80 code points of the original", () => {
+  const out = renderInboundEvent(eventRow("reaction", { body: "❤️" }), "😀".repeat(100));
+  assert.equal(out, `❤️ reacted to "${"😀".repeat(80)}"`);
+});
+
+test("renderInboundEvent: an edit is capped at 500 code points total, cutting the text", () => {
+  const out = renderInboundEvent(eventRow("edit", { body: "😀".repeat(500) }), null);
+  assert.equal(Array.from(out).length, 500);
+  assert.ok(out.startsWith("✏️ Edited: "));
+});
+
+test("reaction suppressed by default", async () => {
+  const row = eventRow("reaction", { body: "👍" });
+  const { repo, calls } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 0);
+  assert.equal(result.eventsSuppressed, 1);
+  assert.equal(result.pushed, 0);
+  const resolved = calls.find((c) => c.method === "resolveGhlInboundMessage");
+  assert.deepEqual(resolved?.args, [row.id, { resolution: "event_suppressed", pushError: null }]);
+});
+
+test("reaction posted when showReactions", async () => {
+  const row = eventRow("reaction", { body: "👍" });
+  const originals = new Map([[`${TENANT_ID}:WA-TARGET-1`, "see you at six"]]);
+  const { repo, calls } = createFakeRepo([makeAccount({ showReactions: true })], [row], {}, [], originals);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(postCalls[0]?.body, '👍 reacted to "see you at six"');
+  assert.deepEqual(calls.find((c) => c.method === "getInboundBodyByWaMessageId")?.args, [TENANT_ID, "WA-TARGET-1"]);
+});
+
+test("reaction to our own message posts without a lookup", async () => {
+  const row = eventRow("reaction", { body: "👍", targetFromMe: true });
+  const { repo, calls } = createFakeRepo([makeAccount({ showReactions: true })], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "👍 reacted to your message");
+  assert.equal(calls.some((c) => c.method === "getInboundBodyByWaMessageId"), false);
+});
+
+test("reaction to an expired message renders \"reacted to a message\"", async () => {
+  const row = eventRow("reaction", { body: "🔥" });
+  const { repo } = createFakeRepo([makeAccount({ showReactions: true })], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(postCalls[0]?.body, "🔥 reacted to a message");
+});
+
+test("delete suppressed by default", async () => {
+  const row = eventRow("delete", { body: null });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 0);
+  assert.equal(result.eventsSuppressed, 1);
+});
+
+test("delete posted when showDeletes", async () => {
+  const row = eventRow("delete", { body: null });
+  const { repo } = createFakeRepo([makeAccount({ showDeletes: true })], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "🗑 Deleted a message");
+});
+
+test("showReactions does not enable deletes, nor the reverse", async () => {
+  const del = eventRow("delete", { body: null });
+  const rea = eventRow("reaction", { body: "👍" });
+  const a = createFakeRepo([makeAccount({ showReactions: true })], [del]);
+  const b = createFakeRepo([makeAccount({ showDeletes: true })], [rea]);
+  const da = makeDeps();
+  const db = makeDeps();
+
+  await drainGhlInboundReplies(a.repo, da.deps);
+  await drainGhlInboundReplies(b.repo, db.deps);
+
+  assert.equal(da.postCalls.length, 0);
+  assert.equal(db.postCalls.length, 0);
+});
+
+test("edits post by default, with number prefix and group sender label", async () => {
+  const row = eventRow("edit", { body: "actually 7pm", coachId: SECOND_TENANT_ID });
+  const { repo } = createFakeRepo([makeAccount()], [row], TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "[Sales] ✏️ Edited: actually 7pm");
+});
+
+test("edit to STOP opts out", async () => {
+  const row = eventRow("edit", { body: "STOP" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.optedOut, 1);
+  assert.equal(optOuts.size, 1);
+  assert.equal(postCalls[0]?.body, "✏️ Edited: STOP");
+});
+
+test("reaction \"STOP\" is not a keyword", async () => {
+  const row = eventRow("reaction", { body: "STOP" });
+  const { repo, optOuts } = createFakeRepo([makeAccount({ showReactions: true })], [row]);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(optOuts.size, 0);
+  assert.equal(result.optedOut, 0);
+});
+
+test("a suppressed reaction on a needs-no-token path makes no GHL call", async () => {
+  const row = eventRow("reaction", { body: "👍" });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls, upsertCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 0);
+  assert.equal(upsertCalls.length, 0);
 });

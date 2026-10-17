@@ -205,6 +205,7 @@ import {
   upsertGhlGroupContact,
   type AddGhlInboundMessageResult,
   type UpsertGhlContactResult,
+  renderInboundEvent,
 } from "@/lib/ghl";
 import {
   resolveGhlAccessToken,
@@ -222,6 +223,7 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     GhlRepository,
     | "getGhlAccountByTenantId"
     | "getUnprocessedGhlInboundMessages"
+    | "getInboundBodyByWaMessageId"
     | "claimWhatsappInboundMessage"
     | "recordGhlInboundPushFailure"
     | "resolveGhlInboundMessage"
@@ -307,6 +309,8 @@ export const GROUP_NOT_ENABLED_RESOLUTION = "group_not_enabled";
 export const MISSED_CALL_STALE_MS = 6 * 60 * 60 * 1000;
 /** Terminal resolution for a missed call older than `MISSED_CALL_STALE_MS` — never posted to GHL. */
 export const MISSED_CALL_STALE_RESOLUTION = "missed_call_stale";
+/** Terminal resolution for a reaction or delete the sub-account has not turned on — never posted to GHL. */
+export const EVENT_SUPPRESSED_RESOLUTION = "event_suppressed";
 
 export interface DrainGhlInboundRepliesResult {
   /** Unprocessed GHL-tenant rows this pass looked at (capped at `DRAIN_BATCH_CAP`) — `0` whenever `blockedUnconfigured` is `true`, since the list is never even read in that case. */
@@ -327,6 +331,8 @@ export interface DrainGhlInboundRepliesResult {
   groupNotEnabled: number;
   /** Missed calls older than `MISSED_CALL_STALE_MS` — `resolution: 'missed_call_stale'`, never posted. */
   staleMissedCalls: number;
+  /** Reactions and deletes the sub-account has not turned on — `resolution: 'event_suppressed'`, never posted. */
+  eventsSuppressed: number;
   /** Rows this pass whose text was a STOP-type keyword and recorded an opt-out (idempotent, so a retried row can count again). */
   optedOut: number;
   /** Rows this pass whose text was a START-type keyword and cleared an opt-out. */
@@ -389,6 +395,7 @@ export async function drainGhlInboundReplies(
     claimLost: 0,
     groupNotEnabled: 0,
     staleMissedCalls: 0,
+    eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: false,
@@ -468,8 +475,9 @@ export async function applyOptOutKeyword(
   ghlContactId: string | null
 ): Promise<"opt_out" | "opt_in" | null> {
   if (row.groupJid != null) return null;
-  // A missed-call event is not text the contact typed.
-  if (row.eventKind === "missed_call") return null;
+  // Only plain messages and edits (their new text) are text the contact typed
+  // as a keyword; a missed call, reaction or delete never is.
+  if (row.eventKind && row.eventKind !== "edit") return null;
   const decision = classifyOptOutMessage(row.body);
   if (!decision) return null;
   if (decision.kind === "opt_out") {
@@ -574,6 +582,20 @@ async function processGhlInboundRow(
     return;
   }
 
+  // Reactions and deletes are posted only when the sub-account turned them
+  // on (they land as new messages and can trigger "Customer replied"
+  // workflows). Resolved without a GHL call, so the breaker is untouched.
+  if ((row.eventKind === "reaction" && !account.showReactions) || (row.eventKind === "delete" && !account.showDeletes)) {
+    const claimed = await repo.claimWhatsappInboundMessage(row.id);
+    if (!claimed) {
+      result.claimLost++;
+      return;
+    }
+    await repo.resolveGhlInboundMessage(row.id, { resolution: EVENT_SUPPRESSED_RESOLUTION, pushError: null });
+    result.eventsSuppressed++;
+    return;
+  }
+
   const accessToken = await resolveGhlAccessToken(repo, deps, account);
   if (!accessToken) {
     await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: REASON_NO_ACCESS_TOKEN, unclaim: false });
@@ -656,6 +678,14 @@ async function processGhlInboundRow(
     }
   }
 
+  // A reaction to one of the contact's own messages quotes it: read PRE-claim,
+  // like the upsert, so a failure throws with the row un-claimed and is retried.
+  // `null` (expired or gone) renders "reacted to a message".
+  const originalBody =
+    row.eventKind === "reaction" && row.targetFromMe !== true && row.targetWaMessageId
+      ? await repo.getInboundBodyByWaMessageId(row.coachId, row.targetWaMessageId)
+      : null;
+
   // Step 3 — atomic claim, reused verbatim from the coach drain (see this
   // file's header's CLAIM-VS-NO-CLAIM ASYMMETRY note).
   const claimed = await repo.claimWhatsappInboundMessage(row.id);
@@ -675,6 +705,8 @@ async function processGhlInboundRow(
   const { body, attachments } =
     row.eventKind === "missed_call"
       ? { body: describeMissedCall(row.messageType), attachments: undefined }
+      : row.eventKind === "edit" || row.eventKind === "reaction" || row.eventKind === "delete"
+        ? { body: renderInboundEvent(row, originalBody), attachments: undefined }
       : row.body !== null
         ? { body: row.body, attachments: undefined }
         : await resolveMediaAttachment(repo, row);

@@ -544,6 +544,14 @@ export interface GhlRepository {
   getUnprocessedGhlInboundMessages(limit?: number): Promise<WhatsappInboundMessage[]>;
 
   /**
+   * Message events — the stored body of one inbound message, by
+   * `(tenantId, waMessageId)` (the unique pair, 0001), so a reaction can
+   * quote what it reacted to. `null` when the row is gone (inbound rows keep
+   * 90 days) or has no text body.
+   */
+  getInboundBodyByWaMessageId(tenantId: string, waMessageId: string): Promise<string | null>;
+
+  /**
    * Atomic claim — flips ONE row's `processed_at` from `null` to `now()`
    * (`update ... where id = ? and processed_at is null`) and reports whether
    * THIS call actually won that flip. Mirrors `claimAutomationSequenceRun`'s
