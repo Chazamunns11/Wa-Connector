@@ -93,6 +93,7 @@ const METHODS = [
   "isRememberedNotOnWhatsapp",
   "forgetNotOnWhatsapp",
   "setSessionTriggerState",
+  "stampSessionTriggerPhone",
   "listSessionsForTriggers",
 ] as const;
 

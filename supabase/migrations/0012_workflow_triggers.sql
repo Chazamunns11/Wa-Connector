@@ -51,6 +51,14 @@ alter table public.whatsapp_sessions
   add column if not exists trigger_last_fired text
     check (trigger_last_fired is null or trigger_last_fired in ('down', 'up'));
 
+-- trigger_phone: the number's E.164, stamped by the portal whenever it sees
+-- phone_number set. The bridge's credential wipe (logged out / banned) nulls
+-- phone_number but never this column, so the disconnect alert still has the
+-- number.
+alter table public.whatsapp_sessions
+  add column if not exists trigger_phone text
+    check (trigger_phone is null or trigger_phone ~ '^\+[1-9][0-9]{6,14}$');
+
 -- ---------------------------------------------------------------------------
 -- ghl_not_on_whatsapp
 -- ---------------------------------------------------------------------------

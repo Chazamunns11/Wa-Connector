@@ -1172,6 +1172,7 @@ export class SessionManager {
         const rawId = sock.user?.id ?? "";
         const number = rawId.split(":")[0]?.split("@")[0] ?? "";
         session.phoneNumber = number ? `+${number}` : null;
+        let persisted: Promise<void>;
         if (this.config.warmupEnabled && session.phoneNumber) {
           // Warm-up (src/pacing.ts): assume brand new until the ledger says
           // otherwise, so the window before the read lands is stricter, never
@@ -1179,12 +1180,12 @@ export class SessionManager {
           // runs before the status write replaces it.
           session.pacer.setLinkedAt(Date.now());
           const phoneNumber = session.phoneNumber;
-          void (async () => {
+          persisted = (async () => {
             await this.safely(session.coachId, async () => session.pacer.setLinkedAt(await this.store.markPhoneLinked(session.coachId, phoneNumber)));
             await this.persistStatus(session, "connected", { phoneNumber, touchLastConnected: true, disconnectReason: null });
           })();
         } else {
-          void this.persistStatus(session, "connected", { phoneNumber: session.phoneNumber, touchLastConnected: true, disconnectReason: null });
+          persisted = this.persistStatus(session, "connected", { phoneNumber: session.phoneNumber, touchLastConnected: true, disconnectReason: null });
         }
         // Opt-in groups (src/groups.ts): re-read the enabled set on every
         // open, so a toggle made while the socket was down still lands.
@@ -1193,7 +1194,8 @@ export class SessionManager {
         void this.loadEnabledGroups(session);
         void this.drainQueue(session);
         clearDownPoke(session);
-        recordReconnected(this.outboundPoke);
+        // Poke only after the "connected" status is written, so the portal never reads a stale "down".
+        void persisted.catch(() => {}).finally(() => recordReconnected(this.outboundPoke));
       }
 
       if (connection === "close") {

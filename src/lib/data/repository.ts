@@ -837,8 +837,18 @@ export interface GhlRepository {
   isRememberedNotOnWhatsapp(locationId: string, phoneE164: string, nowIso: string): Promise<boolean>;
   /** Clears the not-on-WhatsApp memory for (location, phone); a no-op when absent. */
   forgetNotOnWhatsapp(locationId: string, phoneE164: string): Promise<void>;
-  /** Sets the connection-trigger state of a number's session. */
-  setSessionTriggerState(tenantId: string, state: { downSince: string | null; lastFired: "down" | "up" | null }): Promise<void>;
+  /**
+   * Compare-and-set of a number's connection-trigger state: applies only while the
+   * stored `lastFired` still equals `expectedLastFired` (null-safe). Returns whether
+   * this call won, so overlapping passes fire at most once.
+   */
+  setSessionTriggerState(
+    tenantId: string,
+    state: { downSince: string | null; lastFired: "down" | "up" | null },
+    expectedLastFired: "down" | "up" | null
+  ): Promise<boolean>;
+  /** Remembers the number's E.164 for the connection triggers (survives the credential wipe). */
+  stampSessionTriggerPhone(tenantId: string, phoneE164: string): Promise<void>;
   /** Sessions (with slot and label) of the given locations' numbers, for the connection watcher. */
   listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]>;
   /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */

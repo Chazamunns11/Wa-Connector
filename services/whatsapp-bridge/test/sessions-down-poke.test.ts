@@ -70,5 +70,5 @@ test("the timer is unref'd and shutdown clears it", async () => {
 test("sessions.ts wires close -> recordClosed and open -> clearDownPoke", () => {
   const src = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/sessions.ts"), "utf8");
   assert.match(src, /recordClosed\(session, this\.outboundPoke\)/);
-  assert.match(src, /clearDownPoke\(session\);\s*recordReconnected\(this\.outboundPoke\)/);
+  assert.match(src, /clearDownPoke\(session\);[\s\S]*?persisted\.catch\(\(\) => \{\}\)\.finally\(\(\) => recordReconnected\(this\.outboundPoke\)\)/);
 });

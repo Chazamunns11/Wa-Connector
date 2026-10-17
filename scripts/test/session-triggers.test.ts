@@ -34,6 +34,7 @@ function row(over: Partial<TriggerSessionRow> = {}): TriggerSessionRow {
     downSince: null,
     lastFired: null,
     lastConnectedAt: iso(NOW - 60 * MIN),
+    triggerPhone: null,
     ...over,
   };
 }
@@ -42,6 +43,7 @@ function setup(rows: TriggerSessionRow[], opts: { enabled?: boolean; held?: numb
   const state = new Map(rows.map((r) => [r.tenantId, { ...r }]));
   const log: string[] = [];
   const reads: string[][] = [];
+  const stamps: string[] = [];
   const posts: { key: string; payload: Record<string, unknown> }[] = [];
   const repo = {
     async listLocationsWithTriggerKeys(keys: string[]) {
@@ -52,9 +54,16 @@ function setup(rows: TriggerSessionRow[], opts: { enabled?: boolean; held?: numb
       log.push(`list:${ids.join(",")}`);
       return [...state.values()].map((r) => ({ ...r }));
     },
-    async setSessionTriggerState(tenantId: string, s: { downSince: string | null; lastFired: "down" | "up" | null }) {
+    async setSessionTriggerState(tenantId: string, s: { downSince: string | null; lastFired: "down" | "up" | null }, expected: "down" | "up" | null) {
+      const cur = state.get(tenantId)!;
+      if (cur.lastFired !== expected) return false;
       log.push(`set:${s.lastFired}`);
-      Object.assign(state.get(tenantId)!, s);
+      Object.assign(cur, s);
+      return true;
+    },
+    async stampSessionTriggerPhone(tenantId: string, phone: string) {
+      stamps.push(phone);
+      state.get(tenantId)!.triggerPhone = phone;
     },
     async countHeldByTenant() {
       return new Map([["t-1", opts.held ?? 0]]);
@@ -87,7 +96,7 @@ function setup(rows: TriggerSessionRow[], opts: { enabled?: boolean; held?: numb
       return `https://app.example/connect/tok-slot-${slot}`;
     },
   } as unknown as SessionTriggerDeps;
-  return { repo, deps, state, log, posts, reads, urls };
+  return { repo, deps, state, log, posts, reads, urls, stamps };
 }
 
 test("blip under 5 minutes fires nothing", async () => {
@@ -186,4 +195,55 @@ test("a hanging trigger endpoint never holds the drain past the cap", async () =
   const started = Date.now();
   await drainSessionTriggers(s.repo, s.deps, NOW);
   assert.ok(Date.now() - started < 10_000);
+});
+
+test("banned with phone wiped: the stamped trigger_phone is the number", async () => {
+  const s = setup([row({ status: "banned", phone: null, triggerPhone: "+447700900111" })]);
+  const r = await drainSessionTriggers(s.repo, s.deps, NOW);
+  assert.equal(r.fired, 1);
+  assert.equal(s.posts[0].payload.number, "+447700900111");
+});
+
+test("phone seen on the session is stamped for later", async () => {
+  const s = setup([row({ status: "connected" })]);
+  await drainSessionTriggers(s.repo, s.deps, NOW);
+  assert.deepEqual(s.stamps, ["+447700900000"]);
+});
+
+test("both phones null: state is marked but nothing is fired", async () => {
+  const s = setup([row({ status: "banned", phone: null, triggerPhone: null })]);
+  const r = await drainSessionTriggers(s.repo, s.deps, NOW);
+  assert.equal(r.fired, 0);
+  assert.equal(s.posts.length, 0);
+  assert.equal(s.state.get("t-1")!.lastFired, "down");
+});
+
+test("two overlapping passes fire once", async () => {
+  const s = setup([row({ status: "banned" })]);
+  const [a, b] = await Promise.all([drainSessionTriggers(s.repo, s.deps, NOW), drainSessionTriggers(s.repo, s.deps, NOW)]);
+  assert.equal(a.fired + b.fired, 1);
+  assert.equal(s.posts.length, 1);
+});
+
+test("a previously connected number in waiting_qr or disconnected for 5+ minutes fires connection_lost", async () => {
+  for (const status of ["waiting_qr", "disconnected"] as const) {
+    const s = setup([row({ status, downSince: iso(NOW - 6 * MIN) })]);
+    const r = await drainSessionTriggers(s.repo, s.deps, NOW);
+    assert.equal(r.fired, 1, status);
+    assert.equal(s.posts[0].payload.reason, "connection_lost");
+  }
+});
+
+test("one location's failing endpoint doesn't drop another location's alert", async () => {
+  const s = setup([row({ status: "banned" }), row({ tenantId: "t-2", locationId: "loc-2", status: "banned", phone: "+447700900222" })]);
+  let calls = 0;
+  (s.deps as { postTriggerEvent: unknown }).postTriggerEvent = async (_u: string, _t: string, payload: object) => {
+    calls++;
+    if (calls === 1) return { ok: false, status: 500 };
+    s.posts.push({ key: "", payload: payload as Record<string, unknown> });
+    return { ok: true, status: 200 };
+  };
+  const r = await drainSessionTriggers(s.repo, s.deps, NOW);
+  assert.equal(r.fired, 1);
+  assert.equal(s.posts[0].payload.number, "+447700900222");
 });

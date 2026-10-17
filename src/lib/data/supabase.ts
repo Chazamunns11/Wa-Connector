@@ -2185,12 +2185,25 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (error) throw error;
   }
 
-  async setSessionTriggerState(tenantId: string, state: { downSince: string | null; lastFired: "down" | "up" | null }) {
+  async setSessionTriggerState(
+    tenantId: string,
+    state: { downSince: string | null; lastFired: "down" | "up" | null },
+    expectedLastFired: "down" | "up" | null
+  ) {
     const supabase = getServiceClient();
-    const { error } = await supabase
+    let query = supabase
       .from("whatsapp_sessions")
       .update({ trigger_down_since: state.downSince, trigger_last_fired: state.lastFired })
       .eq("coach_id", tenantId);
+    query = expectedLastFired === null ? query.is("trigger_last_fired", null) : query.eq("trigger_last_fired", expectedLastFired);
+    const { data, error } = await query.select("coach_id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async stampSessionTriggerPhone(tenantId: string, phoneE164: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("whatsapp_sessions").update({ trigger_phone: phoneE164 }).eq("coach_id", tenantId);
     if (error) throw error;
   }
 
@@ -2206,7 +2219,7 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (numbers.length === 0) return [];
     const { data: sessionData, error: sessionError } = await supabase
       .from("whatsapp_sessions")
-      .select("coach_id, status, phone_number, last_connected_at, trigger_down_since, trigger_last_fired")
+      .select("coach_id, status, phone_number, last_connected_at, trigger_down_since, trigger_last_fired, trigger_phone")
       .in(
         "coach_id",
         numbers.map((n) => n.tenant_id)
@@ -2221,6 +2234,7 @@ export class SupabaseGhlRepository implements GhlRepository {
           last_connected_at: string | null;
           trigger_down_since: string | null;
           trigger_last_fired: "down" | "up" | null;
+          trigger_phone: string | null;
         }[]
       ).map((r) => [r.coach_id, r])
     );
@@ -2238,6 +2252,7 @@ export class SupabaseGhlRepository implements GhlRepository {
         downSince: s.trigger_down_since,
         lastFired: s.trigger_last_fired,
         lastConnectedAt: s.last_connected_at,
+        triggerPhone: s.trigger_phone,
       });
     }
     return rows;

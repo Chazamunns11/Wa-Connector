@@ -697,4 +697,6 @@ export interface TriggerSessionRow {
   /** The last connection trigger fired for this number. */
   lastFired: "down" | "up" | null;
   lastConnectedAt: string | null;
+  /** The number's E.164 kept by the portal; survives the bridge's credential wipe (which nulls `phone`). */
+  triggerPhone: string | null;
 }
