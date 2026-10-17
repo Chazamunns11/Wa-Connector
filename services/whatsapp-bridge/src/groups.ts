@@ -24,6 +24,7 @@
  */
 import { jidNormalizedUser } from "@whiskeysockets/baileys";
 import { isBoom } from "@hapi/boom";
+import { isE164 } from "./phone.js";
 
 /** The one group-JID shape this bridge accepts — byte-identical to whatsapp_groups.group_jid's CHECK (0007) and whatsapp_messages.group_jid's (0008). */
 export const GROUP_JID_RE = /^[0-9]+(-[0-9]+)?@g\.us$/;
@@ -47,6 +48,54 @@ export const NOT_IN_GROUP_REASON = "This WhatsApp number is no longer in that gr
 /** Fixed refusal (global constraint, verbatim): the owner switched the group off after the send was accepted. */
 export const GROUP_SYNC_OFF_REASON = "WhatsApp group sync is turned off for this group";
 
+// Group management (src/group-management.ts) — fixed refusals, shown in GHL
+// as-is (global constraints, verbatim).
+
+/** Fixed refusal: WhatsApp would not create an empty group and no contact qualifies as its first member. */
+export const GROUP_NEEDS_MEMBER_REASON = "Add at least one person who has messaged this number before, then invite the rest by link.";
+
+/** Fixed refusal: the day's creates (WA_GROUP_CREATE_DAILY) are spent. Reads verbatim at the default 3. */
+export function groupCreateLimitReason(createDaily: number): string {
+  return `This number has created its ${createDaily} groups for today. Try again tomorrow.`;
+}
+
+/** Fixed refusal: the day's direct adds (WA_GROUP_ADD_DAILY) are spent. */
+export const GROUP_ADD_LIMIT_REASON = "This number has reached today's limit for adding people. Invite the rest by link.";
+
+/** Fixed refusal: the number is in its warm-up window (WA_WARMUP_ENABLED). */
+export const GROUP_WARMUP_REASON = "New numbers can't create groups during their first 14 days.";
+
+/** Fixed refusal: our number is not an admin of the group. */
+export const GROUP_NOT_ADMIN_REASON = "This number isn't an admin of that group.";
+
+/** Fixed refusal: the change would leave the group with no admin. */
+export const GROUP_LAST_ADMIN_REASON = "You can't remove the group's last admin.";
+
+/** Fixed refusal: removing our own number is Leave, never Remove. */
+export const GROUP_SELF_REMOVAL_REASON = "You can't remove this WhatsApp number from the group. Use Leave instead.";
+
+/** A group member's WhatsApp id as group details return it: a phone-number JID or a LID, no device part. */
+export const MEMBER_ID_RE = /^[0-9]{5,20}@(s\.whatsapp\.net|lid)$/;
+
+/** One member as group details show it. `memberId` addresses remove/promote/demote; `phone` is null for a LID-only member. */
+export interface MemberView {
+  memberId: string;
+  phone: string | null;
+  admin: "admin" | "superadmin" | null;
+  isUs: boolean;
+}
+
+/** What `GET /sessions/:id/groups/:jid` returns. Shown to the owner only; never stored or logged by the bridge. */
+export interface GroupDetail {
+  jid: string;
+  name: string;
+  description: string | null;
+  announcement: boolean;
+  approval: boolean;
+  weAreAdmin: boolean;
+  members: MemberView[];
+}
+
 /** What `GET /sessions/:id/groups` returns per group. Shown to the owner only; never stored by the bridge. */
 export interface GroupListEntry {
   jid: string;
@@ -59,6 +108,7 @@ export interface ParticipantLike {
   id: string;
   lid?: string;
   phoneNumber?: string;
+  admin?: "admin" | "superadmin" | null;
 }
 
 /** The parts of Baileys' `GroupMetadata` this module reads. */
@@ -114,6 +164,24 @@ export function isOwnNumberAParticipant(participants: readonly ParticipantLike[]
     const user = normalisedUser(jid);
     return user !== null && mine.has(user);
   }));
+}
+
+/** E.164 for a phone-number JID (`447…@s.whatsapp.net`, device part ignored), else null. */
+function phoneFromJid(jid: string | undefined): string | null {
+  const user = normalisedUser(jid);
+  if (!user || !user.endsWith("@s.whatsapp.net")) return null;
+  const phone = `+${user.slice(0, -"@s.whatsapp.net".length)}`;
+  return isE164(phone) ? phone : null;
+}
+
+/** Maps one Baileys participant to the group-details view. The phone comes from the PN id or Baileys' `phoneNumber`, when it knows one. */
+export function toMemberView(participant: ParticipantLike, me: OwnIdentity | undefined): MemberView {
+  return {
+    memberId: participant.id,
+    phone: phoneFromJid(participant.id) ?? phoneFromJid(participant.phoneNumber),
+    admin: participant.admin === "admin" || participant.admin === "superadmin" ? participant.admin : null,
+    isUs: isOwnNumberAParticipant([participant], me),
+  };
 }
 
 /** The one socket surface the participant check needs — narrow so tests fake it without a Baileys socket. */

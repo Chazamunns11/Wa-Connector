@@ -60,9 +60,10 @@ export class GroupActionLimits {
    * Reserves up to `wanted` direct adds to `groupJid` for today. Grants what
    * is left of WA_GROUP_ADD_DAILY (at most 50 per call, the largest count one
    * action row may hold); `granted: 0` writes nothing. The caller sends the
-   * rest an invite link.
+   * rest an invite link. `groupJid` is null for the one fallback member of
+   * a create, whose group does not exist yet.
    */
-  reserveAdds(tenantId: string, wanted: number, groupJid: string): Promise<{ granted: number } | { unavailable: true }> {
+  reserveAdds(tenantId: string, wanted: number, groupJid: string | null): Promise<{ granted: number } | { unavailable: true }> {
     return this.serialise(tenantId, async () => {
       const counts = await this.seeded(tenantId);
       if (!counts) return { unavailable: true as const };

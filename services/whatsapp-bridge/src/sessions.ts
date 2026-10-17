@@ -125,9 +125,27 @@ import {
   checkGroupMembership,
   isGroupJid,
   toGroupList,
+  type GroupDetail,
   type GroupListEntry,
   type GroupMetadataLike,
 } from "./groups.js";
+import { GroupActionLimits } from "./group-limits.js";
+import {
+  CreateRequestCache,
+  createGroup as createManagedGroup,
+  getGroupDetail as getManagedGroupDetail,
+  getGroupInviteLink as getManagedGroupInviteLink,
+  leaveGroup as leaveManagedGroup,
+  updateGroup as updateManagedGroup,
+  updateGroupParticipants as updateManagedGroupParticipants,
+  type CreateGroupInput,
+  type CreatedGroup,
+  type GroupOpContext,
+  type GroupOpOutcome,
+  type GroupPatch,
+  type ParticipantResult,
+  type ParticipantsRequest,
+} from "./group-management.js";
 import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
 import { runMediaCapture } from "./media-capture.js";
@@ -256,6 +274,15 @@ interface Session {
    * (docs/MEDIA-PLAN.md §2 rule 4/§8).
    */
   mediaAbuseGate: MediaAbuseGate;
+  /**
+   * Daily group create/add limits (src/group-limits.ts), built once per
+   * session beside `mediaAbuseGate` and seeded lazily from
+   * `whatsapp_group_actions`, so a socket bounce or restart keeps the day's
+   * spend.
+   */
+  groupLimits: GroupActionLimits;
+  /** Create `requestId`s seen in the last 10 minutes (src/group-management.ts) — a retried create replays, never makes a second group. */
+  groupCreateRequests: CreateRequestCache;
   /**
    * The group JIDs this number's owner has enabled (src/groups.ts) — the
    * ONLY groups inbound accepts and outbound sends to. Starts EMPTY (fail
@@ -829,6 +856,8 @@ export class SessionManager {
         countSenderToday: (tenantId, senderPhone) => this.store.countInboundMediaAttemptsForSenderToday(tenantId, senderPhone),
         countTenantToday: (tenantId) => this.store.countInboundMediaAttemptsForTenantToday(tenantId),
       }),
+      groupLimits: new GroupActionLimits(this.store, { createDaily: this.config.groupCreateDaily, addDaily: this.config.groupAddDaily }),
+      groupCreateRequests: new CreateRequestCache(),
       enabledGroups: new Set(),
       enabledGroupsLoad: 0,
       inFlightUnits: 0,
@@ -1681,6 +1710,70 @@ export class SessionManager {
       this.log.error({ coachId, err: (err as Error).name }, "group list fetch failed");
       return { kind: "list_failed" };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Group management — the rules and Baileys calls live in
+  // src/group-management.ts; these only resolve the session and delegate.
+  // Connected sessions only.
+  // -------------------------------------------------------------------------
+
+  private groupOpContext(coachId: string): GroupOpContext | null {
+    const session = this.sessions.get(coachId);
+    if (!session || session.status !== "connected" || !session.sock) return null;
+    return {
+      coachId,
+      sock: session.sock,
+      groups: session,
+      limits: session.groupLimits,
+      createDaily: this.config.groupCreateDaily,
+      inWarmup: () => session.pacer.isInWarmup(),
+      store: this.store,
+      createRequests: session.groupCreateRequests,
+      log: this.log,
+    };
+  }
+
+  /** POST /sessions/:coachId/groups — creates a group, empty if WhatsApp allows, and adds it to the enabled set. */
+  async createGroup(coachId: string, input: CreateGroupInput): Promise<GroupOpOutcome<CreatedGroup>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? createManagedGroup(ctx, input) : { kind: "session_not_connected" };
+  }
+
+  /** GET /sessions/:coachId/groups/:jid — an enabled group's settings and members. */
+  async getGroupDetail(coachId: string, jid: string): Promise<GroupOpOutcome<GroupDetail>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? getManagedGroupDetail(ctx, jid) : { kind: "session_not_connected" };
+  }
+
+  /** PATCH /sessions/:coachId/groups/:jid — name, description, admins-only messages, join approval. Admins only. */
+  async updateGroup(coachId: string, jid: string, patch: GroupPatch): Promise<GroupOpOutcome<null>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? updateManagedGroup(ctx, jid, patch) : { kind: "session_not_connected" };
+  }
+
+  /** POST /sessions/:coachId/groups/:jid/participants — add by phone; remove/promote/demote by member id. Admins only. */
+  async updateGroupParticipants(coachId: string, jid: string, req: ParticipantsRequest): Promise<GroupOpOutcome<ParticipantResult[]>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? updateManagedGroupParticipants(ctx, jid, req) : { kind: "session_not_connected" };
+  }
+
+  /** GET /sessions/:coachId/groups/:jid/invite — the group's current invite link. Admins only. */
+  async getGroupInviteLink(coachId: string, jid: string): Promise<GroupOpOutcome<{ link: string }>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? getManagedGroupInviteLink(ctx, jid) : { kind: "session_not_connected" };
+  }
+
+  /** POST /sessions/:coachId/groups/:jid/invite/reset — revokes the link and returns the new one. Admins only. */
+  async resetGroupInviteLink(coachId: string, jid: string): Promise<GroupOpOutcome<{ link: string }>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? getManagedGroupInviteLink(ctx, jid, true) : { kind: "session_not_connected" };
+  }
+
+  /** POST /sessions/:coachId/groups/:jid/leave — our number leaves; the group drops out of the enabled set. */
+  async leaveGroup(coachId: string, jid: string): Promise<GroupOpOutcome<null>> {
+    const ctx = this.groupOpContext(coachId);
+    return ctx ? leaveManagedGroup(ctx, jid) : { kind: "session_not_connected" };
   }
 
   /**

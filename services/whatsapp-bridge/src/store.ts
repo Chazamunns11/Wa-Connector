@@ -37,6 +37,9 @@ export type GroupActionKind = "create" | "add" | "remove" | "promote" | "demote"
 /** The largest `count` one `whatsapp_group_actions` row may carry (0009's CHECK: between 1 and 50). */
 export const GROUP_ACTION_MAX_COUNT = 50;
 
+/** How far back an inbound 1:1 message makes a contact eligible for a direct group add — the inbound table's retention (0001). */
+export const INBOUND_ELIGIBILITY_DAYS = 90;
+
 export type MessageStatus = "accepted" | "sending" | "sent" | "failed" | "not_on_whatsapp";
 
 export interface MessageRecord {
@@ -655,15 +658,19 @@ export class BridgeStore {
    * True when this phone has sent this tenant at least one 1:1 message
    * (a non-group inbound row). Gates direct adds: only someone who has
    * messaged the number before is added directly; everyone else gets an
-   * invite link. Bounded by the inbound table's 90-day retention.
+   * invite link. "Before" means within the inbound table's 90-day
+   * retention (`received_at`), filtered here too so a row the purge has not
+   * reached yet cannot make an older contact eligible.
    */
-  async hasInboundFromPhone(tenantId: string, phoneE164: string): Promise<boolean> {
+  async hasInboundFromPhone(tenantId: string, phoneE164: string, now: number = Date.now()): Promise<boolean> {
+    const since = new Date(now - INBOUND_ELIGIBILITY_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const { data, error } = await this.supabase
       .from("whatsapp_inbound_messages")
       .select("id")
       .eq("coach_id", tenantId)
       .eq("from_phone", phoneE164)
       .is("group_jid", null)
+      .gte("received_at", since)
       .limit(1);
     if (error) throw error;
     return (data ?? []).length > 0;
