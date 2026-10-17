@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { requestIdAfterCreateAttempt } from "./create-request-id";
 
 /** The embed's authenticated call helper, as `CrmEmbedClient` passes it down. */
 export type CallEmbedApi = (path: string, method: "POST" | "DELETE" | "PATCH", body: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -379,9 +380,10 @@ const TEMPLATE_UNSAVED = "Your invite message changes aren't saved — save them
 const MAY_EXIST_SUFFIX = "Check the group list before trying again.";
 
 /**
- * Create a WhatsApp group on one number. One `requestId` per open form: a
+ * Create a WhatsApp group on one number. One `requestId` per attempt: a
  * network-level failure keeps it (so a second press can't make a second
- * group); a 502 `mayExist` mints a fresh one for the next deliberate attempt.
+ * group); any answer from the route, including a refusal, drops it so the
+ * next deliberate attempt mints a fresh one (`requestIdAfterCreateAttempt`).
  */
 export function CreateGroupForm({
   slot,
@@ -436,6 +438,7 @@ export function CreateGroupForm({
     };
     try {
       const json = await callEmbedApi(MANAGE_PATH, "POST", body);
+      requestId.current = requestIdAfterCreateAttempt(requestId.current, "answered");
       if (json.ok === true) {
         const group = json.group as { name?: unknown } | undefined;
         setCreated({
@@ -443,17 +446,16 @@ export function CreateGroupForm({
           invites: inviteResultFrom(json) ?? EMPTY_RESULT,
         });
         if (json.replayed === true) setNotice(REPLAYED_MESSAGE);
-        requestId.current = null;
         onCreated();
       } else if (json.mayExist === true) {
         setError(`${messageOf(json)} ${MAY_EXIST_SUFFIX}`);
-        requestId.current = null;
         onCreated();
       } else {
         setError(messageOf(json));
       }
     } catch (err) {
       // The request may or may not have arrived: keep the same requestId so a second press is safe.
+      requestId.current = requestIdAfterCreateAttempt(requestId.current, "threw");
       setError(errorText(err));
     }
     inFlight.current = false;

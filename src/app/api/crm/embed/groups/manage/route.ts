@@ -33,6 +33,9 @@ import { decideGroupManageRequest, manageSlotFromBody, type GroupManageDeps } fr
 
 export const dynamic = "force-dynamic";
 
+/** Same explicit budget as the drain cron: a create can wait up to 75 s on the bridge, then send up to 100 invites (each a bridge call plus a GHL post). */
+export const maxDuration = 300;
+
 const MAX_MANAGE_BODY_BYTES = 16 * 1024;
 
 const INTERNAL = { ok: false, code: "internal", message: "Something went wrong. Please try again." };

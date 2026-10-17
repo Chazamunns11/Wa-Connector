@@ -148,7 +148,7 @@ All need the bearer secret, like every route except `/health`.
 | `GET /sessions/:id/groups` | Lists the number's groups live from WhatsApp (`{ ok: true, groups: [{ jid, name, size }] }`). 409 `session_not_connected` if the session is down, 502 `groups_unavailable` if WhatsApp will not answer. Nothing is stored or logged. |
 | `POST /sessions/:id/groups/refresh` | Reloads the enabled-group set from `whatsapp_groups`. The app calls it after the owner changes a group. 502 `groups_refresh_failed` if the load fails. |
 | `POST /sessions/:id/send` with `groupJid` | Sends to an enabled group. Give exactly one of `to` or `groupJid` (both is 400 `invalid_body`). A `groupJid` that is not in the enabled set is 400 `group_not_enabled`. |
-| `POST /sessions/:id/groups` | Creates a group. Body `{ requestId, name, description?, participants }` (`participants` are E.164 fallback members, up to 50). 200 `{ ok, jid, name, addedPhone, path }`. |
+| `POST /sessions/:id/groups` | Creates a group. Body `{ requestId, name, description?, participants }` (`participants` are E.164 fallback members, up to 50). 200 `{ ok, jid, name, addedPhone, path, replayed? }` (`replayed: true` when a repeated `requestId` was served from the cache). |
 | `GET /sessions/:id/groups/:jid` | Group details: `{ ok, group }`. `:jid` is URL-encoded. |
 | `PATCH /sessions/:id/groups/:jid` | Body with at least one of `name` (1-100 characters), `description` (up to 512), `announcement`, `approval`. 200 `{ ok }`. |
 | `POST /sessions/:id/groups/:jid/participants` | Body `{ action: "add", phones }` or `{ action: "remove" \| "promote" \| "demote", memberIds }` (1-50, never both lists). 200 `{ ok, results }`. |
@@ -171,7 +171,10 @@ Errors for the management routes: 400 `invalid_body`, `invalid_group_jid`, `grou
   eligible member (someone who messaged the number in the last 90 days). With
   nobody eligible it refuses with `needs_member`.
 - A repeated create with the same `requestId` within 10 minutes returns the same
-  result and does not create a second group.
+  result, marked `replayed: true`, and does not create a second group. Only a
+  success, or a failure after WhatsApp's create was reached (the group may
+  exist), is remembered. A refusal is never remembered: none made a group, so
+  the same `requestId` runs the create again.
 - Direct adds need the person to have messaged the number in the last 90 days.
   Warm-up refusals follow `WA_WARMUP_ENABLED` (off by default).
 - Members are managed by `memberId` (from the group details). Phone numbers are

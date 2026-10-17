@@ -79,6 +79,8 @@ export interface CreatedGroup {
   name: string;
   addedPhone: string | null;
   path: "empty" | "with_member";
+  /** Set when CreateRequestCache served an existing entry for this requestId: the first call already made (or is making) the group, so the caller must not record it or send invites again. */
+  replayed?: true;
 }
 
 export interface GroupPatch {
@@ -143,9 +145,13 @@ const CREATE_REPLAY_MS = 10 * 60 * 1000;
  * Remembers each create `requestId` for 10 minutes so a double click or a
  * retried request (the embed timed out after WhatsApp had made the group)
  * gets the first call's outcome instead of a second group. A concurrent
- * duplicate shares the in-flight call. An outcome that never reached
- * WhatsApp's create (a refusal, or a failure before it) is forgotten, so
- * the same form can try again after fixing the cause.
+ * duplicate shares the in-flight call. A served entry's ok outcome carries
+ * `replayed: true`, so the caller knows the first call owns the follow-up.
+ *
+ * Only two outcomes are kept: a success, and a failure after WhatsApp's
+ * create was reached (the group may exist). A refusal is never kept: every
+ * refusal means no group was made, so the same form can try again after
+ * fixing the cause.
  */
 export class CreateRequestCache {
   private readonly entries = new Map<string, { at: number; outcome: Promise<GroupOpOutcome<CreatedGroup>> }>();
@@ -156,14 +162,17 @@ export class CreateRequestCache {
     const now = this.now();
     for (const [id, entry] of this.entries) if (now - entry.at >= CREATE_REPLAY_MS) this.entries.delete(id);
     const existing = this.entries.get(requestId);
-    if (existing) return existing.outcome;
+    if (existing) {
+      return existing.outcome.then((result): GroupOpOutcome<CreatedGroup> => (result.kind === "ok" ? { kind: "ok", value: { ...result.value, replayed: true } } : result));
+    }
     let reached = false;
     const outcome = fn(() => (reached = true));
     const entry = { at: now, outcome };
     this.entries.set(requestId, entry);
     void outcome.then(
       (result) => {
-        if (result.kind !== "ok" && !reached && this.entries.get(requestId) === entry) this.entries.delete(requestId);
+        const keep = result.kind === "ok" || (result.kind !== "refused" && reached);
+        if (!keep && this.entries.get(requestId) === entry) this.entries.delete(requestId);
       },
       () => {
         if (this.entries.get(requestId) === entry) this.entries.delete(requestId);
@@ -333,8 +342,9 @@ async function doCreateGroup(ctx: GroupOpContext, input: CreateGroupInput, markR
   if (reservation === "limit") return refused("create_limit", groupCreateLimitReason(ctx.createDaily));
   if (reservation === "unavailable") return refused("limits_unavailable", GROUP_LIMITS_UNAVAILABLE_REASON);
 
-  // From here a group may exist on WhatsApp, so this requestId replays
-  // whatever happens next — a retry must never make a second group.
+  // From here a group may exist on WhatsApp, so a failure from here on is
+  // replayed — a retry must never make a second group. (Refusals below are
+  // still forgotten: each means WhatsApp made nothing.)
   markReached();
   let created: CreateResult | null = null;
   let addedPhone: string | null = null;

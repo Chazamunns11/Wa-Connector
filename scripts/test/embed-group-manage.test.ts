@@ -285,10 +285,10 @@ test("create: offline is 409 with the fixed string; an unknown failure is 502 wi
     const result = await decideGroupManageRequest(repo, deps, CTX, createBody());
     assert.deepEqual(result, { status: 409, body: { ok: false, code: "session_not_connected", message: MSG_OFFLINE } });
   }
-  {
-    const { repo, deps } = fakes({ createGroup: async () => refusal("timeout", "bridge text") });
+  for (const code of ["unreachable", "timeout", "group_action_failed", "internal"]) {
+    const { repo, deps } = fakes({ createGroup: async () => refusal(code, "bridge text") });
     const result = await decideGroupManageRequest(repo, deps, CTX, createBody());
-    assert.deepEqual(result, { status: 502, body: { ok: false, code: "bridge_unavailable", message: MSG_NO_RESPONSE, mayExist: true } });
+    assert.deepEqual(result, { status: 502, body: { ok: false, code: "bridge_unavailable", message: MSG_NO_RESPONSE, mayExist: true } }, code);
   }
   {
     const { repo, deps } = fakes({ createGroup: async () => refusal("too_many", "bridge text") });
@@ -327,6 +327,60 @@ test("create: a replayed create (same requestId, same jid from the bridge) never
     },
   });
   assertNoTenantId(second, "replayed create");
+});
+
+test("create: unconfigured or an auth/body error is 502 without mayExist (no group can have been made)", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  for (const code of ["unconfigured", "unauthorized", "invalid_body"]) {
+    const { repo, deps } = fakes({ createGroup: async () => refusal(code, "bridge text") });
+    const result = await decideGroupManageRequest(repo, deps, CTX, createBody());
+    assert.deepEqual(result, { status: 502, body: { ok: false, code: "bridge_unavailable", message: MSG_NO_RESPONSE } }, code);
+  }
+});
+
+const REPLAY_BODY = {
+  ok: true,
+  group: { jid: GROUP, name: "Spring Cohort" },
+  invites: { added: [], alreadyMember: [], sent: [], held: [], refused: [], skipped: [], truncated: false },
+  replayed: true,
+};
+
+test("create: the bridge's replayed flag alone skips record, reload, invites and GHL posts — no DB read needed", async () => {
+  let sends = 0;
+  const { repo, deps, calls, posts } = fakes({
+    groups: [row(OTHER_TENANT, OTHER_GROUP)],
+    createGroup: async () => ({ ok: true, jid: GROUP, name: "Spring Cohort", addedPhone: null, path: "empty", replayed: true }),
+    sendInvites: async () => {
+      sends += 1;
+      return { ...NO_SEND, sent: 1, delivered: [{ contactId: "c-b", text: "t", outcome: "accepted" }] };
+    },
+  });
+  const result = await decideGroupManageRequest(repo, deps, CTX, createBody({ contactIds: ["c-a", "c-b"] }));
+  assert.deepEqual(result, { status: 200, body: REPLAY_BODY });
+  assert.equal(sends, 0);
+  assert.equal(posts.length, 0);
+  assert.equal(calls.filter((c) => c.startsWith("record:") || c.startsWith("refresh:") || c.startsWith("list:")).length, 0);
+});
+
+test("create: if the groups read fails, fail safe — ok with the group, no invites, replayed: true", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
+  let sends = 0;
+  const { repo, deps, calls, posts } = fakes({
+    sendInvites: async () => {
+      sends += 1;
+      return NO_SEND;
+    },
+  });
+  repo.listWhatsappGroups = async () => {
+    throw new Error("db down");
+  };
+  const result = await decideGroupManageRequest(repo, deps, CTX, createBody({ contactIds: ["c-a", "c-b"] }));
+  assert.deepEqual(result, { status: 200, body: REPLAY_BODY });
+  assert.equal(sends, 0);
+  assert.equal(posts.length, 0);
+  assert.equal(calls.filter((c) => c.startsWith("record:") || c.startsWith("refresh:")).length, 0);
+  assert.equal(errors.mock.callCount(), 1);
+  assert.ok(!JSON.stringify(errors.mock.calls[0].arguments).includes(GROUP));
 });
 
 test("create: a group created on WhatsApp but not recorded still answers ok with the group", async (t) => {

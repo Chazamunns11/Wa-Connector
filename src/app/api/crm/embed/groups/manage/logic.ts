@@ -146,7 +146,16 @@ const PASS_THROUGH_STATUS: Readonly<Record<string, number>> = {
   limits_unavailable: 503,
 };
 
-/** Maps a bridge failure to the response. `forCreate` marks the unknown-outcome case `mayExist: true`. */
+/**
+ * Create failures whose outcome is unknown: the bridge was unreachable or
+ * timed out (`unreachable`; `timeout` too, should a caller ever name it), WhatsApp's create errored ambiguously
+ * (`group_action_failed`), or the bridge answered something malformed or
+ * crashed mid-call (`internal`). Anything else (`unconfigured`, a refusal, an
+ * auth or body error) made no group.
+ */
+const CREATE_MAY_EXIST_CODES: ReadonlySet<string> = new Set(["unreachable", "timeout", "group_action_failed", "internal"]);
+
+/** Maps a bridge failure to the response. `forCreate` marks an unknown-outcome create failure `mayExist: true`. */
 function bridgeFailure(failure: { code: string; message: string }, forCreate = false): GroupManageResult {
   const passStatus = PASS_THROUGH_STATUS[failure.code];
   if (passStatus !== undefined) return fail(passStatus, failure.code, failure.message);
@@ -155,7 +164,7 @@ function bridgeFailure(failure: { code: string; message: string }, forCreate = f
   if (failure.code === "group_not_enabled") return unknownGroup();
   console.warn(`${LOG} bridge call failed with code ${failure.code}`);
   const body: Record<string, unknown> = { ok: false, code: "bridge_unavailable", message: MSG_NO_RESPONSE };
-  if (forCreate) body.mayExist = true;
+  if (forCreate && CREATE_MAY_EXIST_CODES.has(failure.code)) body.mayExist = true;
   return { status: 502, body };
 }
 
@@ -314,15 +323,21 @@ async function handleCreate(repo: GroupManageRepo, deps: GroupManageDeps, ctx: G
   const group = { jid: created.jid, name: created.name };
 
   // A replay: the bridge answers a repeated requestId with the first outcome,
-  // and that first request already recorded the group and sent its invites.
-  // Never invite twice; the coach uses Invite to add anyone missed.
-  let alreadyRecorded = false;
-  try {
-    alreadyRecorded = (await repo.listWhatsappGroups(ctx.tenantId)).some((g) => g.groupJid === group.jid && g.createdByUs);
-  } catch (err) {
-    console.error(`${LOG} couldn't check for a replayed create:`, errName(err));
+  // and that first request owns the record and the invites. Never invite
+  // twice; the coach uses Invite more to add anyone missed. The bridge's own
+  // `replayed` flag decides first, so this never depends on the DB; the
+  // createdByUs row is a second check. If the row can't be read, fail safe:
+  // treat it as a replay rather than risk inviting everyone twice.
+  let replayed = created.replayed === true;
+  if (!replayed) {
+    try {
+      replayed = (await repo.listWhatsappGroups(ctx.tenantId)).some((g) => g.groupJid === group.jid && g.createdByUs);
+    } catch (err) {
+      console.error(`${LOG} couldn't check for a replayed create (treated as a replay):`, errName(err));
+      replayed = true;
+    }
   }
-  if (alreadyRecorded) {
+  if (replayed) {
     return {
       status: 200,
       body: { ok: true, group: { jid: group.jid, name: group.name }, invites: invitesView(EMPTY_SEND, [], [], false, []), replayed: true },

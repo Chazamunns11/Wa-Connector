@@ -124,6 +124,14 @@ test("create: boundary values pass (100 code points, 512 description) and the re
   });
 });
 
+test("create: a replayed outcome says so in the response", async () => {
+  await withServer({ kind: "ok", value: { jid: JID, name: "n", addedPhone: null, path: "empty", replayed: true } }, async (base) => {
+    const res = await post(base, { requestId: "req-1", name: "Team", participants: [] });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true, jid: JID, name: "n", addedPhone: null, path: "empty", replayed: true });
+  });
+});
+
 test("participants: body validation", async () => {
   await withServer(OK, async (base, calls) => {
     const url = `${base}/${encodeURIComponent(JID)}/participants`;

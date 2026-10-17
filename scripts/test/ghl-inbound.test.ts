@@ -973,7 +973,7 @@ test("drainGhlInboundReplies: with one number, the GHL body is never prefixed (e
 const GROUP_JID = "120363012345678901@g.us";
 
 function makeGroup(overrides: Partial<WhatsappGroup> = {}): WhatsappGroup {
-  return { tenantId: TENANT_ID, groupJid: GROUP_JID, name: "Run Club", enabled: true, ghlContactId: null, leftAt: null, ...overrides };
+  return { tenantId: TENANT_ID, groupJid: GROUP_JID, name: "Run Club", enabled: true, ghlContactId: null, leftAt: null, createdByUs: false, ...overrides };
 }
 
 function makeGroupRow(overrides: Partial<WhatsappInboundMessage> = {}): WhatsappInboundMessage {

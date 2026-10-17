@@ -61,6 +61,52 @@ test("isValidInviteLink: only https://chat.whatsapp.com/<code>", () => {
   assert.equal(isValidInviteLink(undefined), false);
 });
 
+test("isValidInviteLink: mirrors the bridge's code pattern [A-Za-z0-9_-]{6,64} exactly", () => {
+  const link = (code: string) => `https://chat.whatsapp.com/${code}`;
+  assert.equal(isValidInviteLink(link("Ab_c-1")), true, "6 characters with _ and - (the bridge accepts these)");
+  assert.equal(isValidInviteLink(link("A".repeat(64))), true, "64 characters");
+  assert.equal(isValidInviteLink(link("Ab_c-")), false, "5 characters");
+  assert.equal(isValidInviteLink(link("A".repeat(65))), false, "65 characters");
+  assert.equal(isValidInviteLink(link("AbCdEf+Gh")), false);
+  assert.equal(isValidInviteLink(link("AbCdEfGh\n")), false);
+});
+
+/** Runs `fn` while recording every setTimeout delay, so the per-call bridge timeout can be checked. */
+async function recordTimeouts<T>(fn: () => Promise<T>): Promise<number[]> {
+  const delays: number[] = [];
+  const original = globalThis.setTimeout;
+  globalThis.setTimeout = ((handler: () => void, ms?: number, ...rest: unknown[]) => {
+    delays.push(ms ?? 0);
+    return original(handler, ms, ...rest);
+  }) as typeof setTimeout;
+  try {
+    await fn();
+  } finally {
+    globalThis.setTimeout = original;
+  }
+  return delays;
+}
+
+test("bridge timeouts: 75 s for a create, 30 s for participants, the 5 s default for the rest", async () => {
+  const ok = () => json(200, { ok: true, jid: JID, name: "Run Club", addedPhone: null, path: "empty", results: [], group: detail, link: LINK });
+  const create = await recordTimeouts(() => withBridge(ok, () => createWhatsappGroup(COACH, { requestId: "r", name: "x", participants: [] })));
+  assert.deepEqual(create, [75_000]);
+  const participants = await recordTimeouts(() => withBridge(ok, () => updateWhatsappGroupParticipants(COACH, JID, { action: "add", phones: ["+447700900123"] })));
+  assert.deepEqual(participants, [30_000]);
+  const detailCall = await recordTimeouts(() => withBridge(ok, () => getWhatsappGroupDetail(COACH, JID)));
+  assert.deepEqual(detailCall, [5_000]);
+  const invite = await recordTimeouts(() => withBridge(ok, () => getWhatsappGroupInvite(COACH, JID)));
+  assert.deepEqual(invite, [5_000]);
+});
+
+test("createWhatsappGroup: passes replayed: true through; rejects any other replayed value", async () => {
+  const body = { ok: true, jid: JID, name: "Run Club", addedPhone: null, path: "empty" };
+  const replayed = await withBridge(() => json(200, { ...body, replayed: true }), () => createWhatsappGroup(COACH, { requestId: "r", name: "x", participants: [] }));
+  assert.deepEqual(replayed.result, { ...body, replayed: true });
+  const weird = await withBridge(() => json(200, { ...body, replayed: "yes" }), () => createWhatsappGroup(COACH, { requestId: "r", name: "x", participants: [] }));
+  assert.equal(weird.result.ok === false && weird.result.code, "internal");
+});
+
 test("createWhatsappGroup: POSTs the input; ok body is returned flat", async () => {
   const input = { requestId: "req-1", name: "Run Club", participants: ["+447700900123"] };
   const { result, requests } = await withBridge(() => json(200, { ok: true, jid: JID, name: "Run Club", addedPhone: null, path: "empty" }), () => createWhatsappGroup(COACH, input));

@@ -147,7 +147,7 @@ export async function handleGroupManagementRoute(req: IncomingMessage, res: Serv
     const input = parseCreate(body);
     if (typeof input === "string") return invalidBody(res, input), true;
     const ok = unwrap(res, await manager.createGroup(coachId, input));
-    if (ok) sendJson(res, 200, { ok: true, jid: ok.value.jid, name: ok.value.name, addedPhone: ok.value.addedPhone, path: ok.value.path });
+    if (ok) sendJson(res, 200, { ok: true, jid: ok.value.jid, name: ok.value.name, addedPhone: ok.value.addedPhone, path: ok.value.path, ...(ok.value.replayed ? { replayed: true } : {}) });
     return true;
   }
 

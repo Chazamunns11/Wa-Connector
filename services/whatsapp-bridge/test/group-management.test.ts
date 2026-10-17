@@ -289,8 +289,10 @@ test("create: the same requestId twice makes one group", async () => {
   const [first, second] = await Promise.all([h.manager.createGroup(TENANT, input), h.manager.createGroup(TENANT, input)]);
   const third = await h.manager.createGroup(TENANT, input);
   assert.equal(h.called("groupCreate").length, 1);
-  assert.deepEqual(first, second);
-  assert.deepEqual(first, third);
+  assert.deepEqual(first, { kind: "ok", value: { jid: NEW_GROUP_JID, name: GROUP_NAME, addedPhone: null, path: "empty" } }, "the first call is not a replay");
+  const replay = { kind: "ok", value: { jid: NEW_GROUP_JID, name: GROUP_NAME, addedPhone: null, path: "empty", replayed: true } };
+  assert.deepEqual(second, replay, "the concurrent duplicate shares the call and says it is a replay");
+  assert.deepEqual(third, replay);
   assert.equal(h.actions.filter((a) => a.action === "create").length, 1, "one of the day's creates, not two");
 });
 
@@ -303,12 +305,34 @@ test("create: a refusal before WhatsApp is reached is not replayed — the same 
   assert.equal((await h.manager.createGroup(TENANT, input)).kind, "ok");
 });
 
-test("create: once the empty create was sent, even a needs_member refusal is replayed", async () => {
+test("create: a needs_member refusal is not cached — the same requestId re-runs the create", async () => {
   const h = makeHarness({ createThrows: 1, inbound: [] });
   const input = { requestId: "req-00012", name: GROUP_NAME, participants: [PHONE_A] };
   assert.equal((await h.manager.createGroup(TENANT, input)).kind, "refused");
-  assert.equal((await h.manager.createGroup(TENANT, input)).kind, "refused");
-  assert.equal(h.called("groupCreate").length, 1);
+  const second = await h.manager.createGroup(TENANT, input);
+  assert.equal(h.called("groupCreate").length, 2, "the retry reaches WhatsApp again: the refusal made no group");
+  assert.deepEqual(second, { kind: "ok", value: { jid: NEW_GROUP_JID, name: GROUP_NAME, addedPhone: null, path: "empty" } }, "a re-run is not a replay");
+});
+
+test("CreateRequestCache: a refusal after WhatsApp was reached is still forgotten; a failure is kept", async () => {
+  const cache = new CreateRequestCache(() => 0);
+  let runs = 0;
+  const refuse = async (mark: () => void) => {
+    runs += 1;
+    mark();
+    return { kind: "refused" as const, code: "add_limit" as const, message: "m" };
+  };
+  await cache.run("a", refuse);
+  await cache.run("a", refuse);
+  assert.equal(runs, 2);
+  const fail = async (mark: () => void) => {
+    runs += 1;
+    mark();
+    return { kind: "failed" as const };
+  };
+  await cache.run("b", fail);
+  assert.deepEqual(await cache.run("b", fail), { kind: "failed" }, "a failure is replayed as-is, without a replayed flag");
+  assert.equal(runs, 3);
 });
 
 const timeout = () => new Boom("Timed Out", { statusCode: 408, data: { stack: "x" } });
