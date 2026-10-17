@@ -36,6 +36,13 @@
  *   GET  /sessions/:coachId/messages/:idempotencyKey
  *   GET  /sessions/:coachId/groups                      -> { groups: {jid, name, size}[] }
  *   POST /sessions/:coachId/groups/refresh              reload the enabled-group set
+ *   POST   /sessions/:coachId/groups                    create a group (src/group-routes.ts)
+ *   GET    /sessions/:coachId/groups/:jid               group details
+ *   PATCH  /sessions/:coachId/groups/:jid               name / description / announcement / approval
+ *   POST   /sessions/:coachId/groups/:jid/participants  {action, phones | memberIds}
+ *   GET    /sessions/:coachId/groups/:jid/invite        invite link
+ *   POST   /sessions/:coachId/groups/:jid/invite/reset  new invite link
+ *   POST   /sessions/:coachId/groups/:jid/leave
  *
  * GROUPS (opt-in — src/groups.ts): `/send` takes EXACTLY ONE of `to`
  * (E.164, as before) or `groupJid` (both -> 400 invalid_body). A `groupJid`
@@ -51,6 +58,8 @@ import type { BridgeStore } from "./store.js";
 import { LeaseUnavailableError, ShuttingDownError, type SessionManager } from "./sessions.js";
 import { isE164 } from "./phone.js";
 import { isGroupJid } from "./groups.js";
+import { handleGroupManagementRoute } from "./group-routes.js";
+import { readJsonBody, sendError, sendJson, type Json } from "./http-helpers.js";
 
 /** Mirrors src/app/api/cron/reminders/route.ts's `constantTimeEqualStr` — length check first, then timingSafeEqual. */
 export function constantTimeEqualStr(a: string, b: string): boolean {
@@ -64,40 +73,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const IDEMPOTENCY_KEY_RE = /^[A-Za-z0-9_-]{1,128}$/;
 /** WhatsApp's own text limit is 65536; sequences send short follow-ups. Bounded so a runaway template cannot become a megabyte POST. */
 const MAX_TEXT_LENGTH = 4096;
-const MAX_BODY_BYTES = 64 * 1024;
 /** Media plan (docs/MEDIA-PLAN.md §5.3) — attachment URL length bound; the URL itself is never persisted (0046's no-bodies rule extends to this). */
 const MAX_ATTACHMENT_URL_LENGTH = 2048;
 /** Media plan (docs/MEDIA-PLAN.md §5.3) — display name for documents. */
 const MAX_ATTACHMENT_FILENAME_LENGTH = 128;
-
-type Json = Record<string, unknown>;
-
-function sendJson(res: ServerResponse, status: number, body: Json): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(payload) });
-  res.end(payload);
-}
-
-function sendError(res: ServerResponse, status: number, code: string, message: string): void {
-  sendJson(res, status, { ok: false, error: { code, message } });
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Json | null> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    total += (chunk as Buffer).length;
-    if (total > MAX_BODY_BYTES) return null;
-    chunks.push(chunk as Buffer);
-  }
-  if (total === 0) return {};
-  try {
-    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Json) : null;
-  } catch {
-    return null;
-  }
-}
 
 export interface ServerDeps {
   manager: SessionManager;
@@ -437,6 +416,8 @@ export function createBridgeServer(deps: ServerDeps): Server {
       sendJson(res, 200, { ok: true });
       return;
     }
+
+    if (parts[2] === "groups" && (await handleGroupManagementRoute(req, res, parts, manager))) return;
 
     sendError(res, 404, "not_found", "unknown route");
   }
