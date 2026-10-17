@@ -2,7 +2,7 @@
  * The data-access contract for the standalone GHL WhatsApp provider.
  *
  * Copied from PortalHub's `Repository`/`WebhookRepository` (src/lib/data/index.ts),
- * reduced to the 27 methods the provider slice uses. There is exactly one
+ * reduced to the 27 original methods (plus the location-number methods) the provider slice uses. There is exactly one
  * implementation (service-role Supabase, `SupabaseGhlRepository`) and no
  * user-session repo: every method here is service-role by design.
  */
@@ -19,6 +19,7 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  LocationNumber,
   Scope,
   WhatsappInboundMessage,
   WhatsappSessionSummary,
@@ -52,13 +53,66 @@ export interface GhlRepository {
   // -------------------------------------------------------------------------
 
   /**
-   * ONE location, TOKENS INCLUDED, keyed by `whatsapp_tenants.id` rather than
-   * `location_id` — `ghl_accounts.tenant_id` is `unique`, so this is exactly
-   * as safe a lookup as `getGhlAccountByLocationId`, just keyed the other
-   * direction. Never call this from a page, a server action's caller, or any
-   * client component — same rule as `getGhlAccountByLocationId`.
+   * ONE location, TOKENS INCLUDED, keyed by ANY of the location's numbers'
+   * `whatsapp_tenants.id` (resolved through `ghl_location_numbers`, any slot),
+   * so an inbound row from any number finds its location. The returned
+   * `GhlAccount.tenantId` is still `ghl_accounts.tenant_id` (the DEFAULT
+   * number); callers that need the specific number use the inbound row's own
+   * tenant id. `ghl_location_numbers.tenant_id` is its primary key, so this is
+   * exactly as safe a lookup as `getGhlAccountByLocationId`. Never call this
+   * from a page, a server action's caller, or any client component — same rule
+   * as `getGhlAccountByLocationId`.
    */
   getGhlAccountByTenantId(tenantId: string): Promise<GhlAccount | null>;
+
+  // -------------------------------------------------------------------------
+  // Several WhatsApp numbers per location (migration 0003): up to 3
+  // `ghl_location_numbers` rows per location, one `whatsapp_tenants` row each,
+  // plus sticky per-contact routing (`ghl_contact_numbers`). All service-role;
+  // `LocationNumber` carries a tenant id and must never reach a browser.
+  // -------------------------------------------------------------------------
+
+  /** The location's numbers, ordered by slot. */
+  listLocationNumbers(locationId: string): Promise<LocationNumber[]>;
+
+  /** One number by its slot, or null. */
+  getLocationNumberBySlot(locationId: string, slot: number): Promise<LocationNumber | null>;
+
+  /**
+   * Mint a `whatsapp_tenants` row (kind `ghl_location`) and attach it at the
+   * lowest free slot. `limit` when all three slots are taken (a unique-violation
+   * race is retried once). The first number of a location becomes the default.
+   */
+  addLocationNumber(
+    locationId: string,
+    label: string | null
+  ): Promise<{ ok: true; number: LocationNumber } | { ok: false; reason: "limit" }>;
+
+  /**
+   * Delete a number's `ghl_contact_numbers` and `ghl_location_numbers` rows
+   * (FIRST: the number row has no ON DELETE on its tenant), promoting the
+   * lowest remaining slot to default when the default is removed. Does NOT
+   * delete the `whatsapp_tenants` row: the caller logs the bridge session out
+   * of `removedTenantId` first.
+   */
+  removeLocationNumber(
+    locationId: string,
+    slot: number
+  ): Promise<{ ok: true; removedTenantId: string } | { ok: false; reason: "last_number" | "not_found" }>;
+
+  /** Make `slot` the location's default (and mirror it to `ghl_accounts.tenant_id`). False when the slot does not exist. */
+  setDefaultLocationNumber(locationId: string, slot: number): Promise<boolean>;
+
+  /** The tenant a contact most recently messaged on, or null (fall back to the default number). */
+  getStickyTenant(locationId: string, ghlContactId: string): Promise<string | null>;
+
+  /** Upsert the contact's sticky number, overwriting only when `receivedAtIso` is strictly newer. */
+  recordInboundForStickiness(
+    locationId: string,
+    ghlContactId: string,
+    tenantId: string,
+    receivedAtIso: string
+  ): Promise<void>;
 
   // -------------------------------------------------------------------------
   // GHL custom conversation provider, Phase 1 (WAGHL replacement —

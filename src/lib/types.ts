@@ -167,6 +167,19 @@ export interface GhlAccount {
   brandAccentColor: string | null;
 }
 
+/**
+ * One WhatsApp number of a GHL location (`ghl_location_numbers`, 0003).
+ * SERVER-ONLY: it carries the number's `tenantId`, which never leaves the
+ * server. NEVER serialise this to a browser; browser-facing surfaces address a
+ * number by `slot` (and show `label`) only.
+ */
+export interface LocationNumber {
+  tenantId: string;
+  slot: 1 | 2 | 3;
+  isDefault: boolean;
+  label: string | null;
+}
+
 /** The redacted projection every UI surface gets — structurally unable to carry a token, same argument as `CalendarConnectionSummary`. Backs the owner setup-links "GHL WhatsApp numbers" panel. Carries the two branding fields (unlike the token/tenant internals) because `GhlAccountsPanel.tsx`'s branding editor renders directly off this summary — see `GhlAccount.brandLogoPath`/`brandAccentColor`'s own JSDoc. */
 export interface GhlAccountSummary {
   locationId: string;

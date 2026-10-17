@@ -21,6 +21,7 @@ import type {
   GhlOutboundMessageDraft,
   GhlOutboundReportedStatus,
   GhlOutboundSendState,
+  LocationNumber,
   Scope,
   WhatsappInboundMessage,
   WhatsappSessionStatus,
@@ -38,6 +39,7 @@ import {
   type GhlOutboundHealthRow,
   type GhlWaitingHealthRow,
 } from "@/lib/ghl-health";
+import { nextFreeSlot, promoteAfterRemoval, shouldReplaceSticky } from "@/lib/location-numbers";
 import type { GhlRepository } from "./repository";
 
 /**
@@ -409,6 +411,46 @@ async function getWhatsappSentTodayByCoach(supabase: SupabaseClient, coachIds: s
   return counts;
 }
 
+interface LocationNumberRow {
+  tenant_id: string;
+  slot: number;
+  is_default: boolean;
+  label: string | null;
+}
+
+const LOCATION_NUMBER_COLUMNS = "tenant_id, slot, is_default, label";
+
+function mapLocationNumber(row: LocationNumberRow): LocationNumber {
+  return { tenantId: row.tenant_id, slot: row.slot as LocationNumber["slot"], isDefault: row.is_default, label: row.label };
+}
+
+/** Postgres unique_violation. */
+function isUniqueViolation(error: { code?: string } | null): boolean {
+  return error?.code === "23505";
+}
+/** Make `number` the location's one default, and mirror its tenant to `ghl_accounts.tenant_id`. */
+async function markDefault(locationId: string, number: LocationNumber) {
+  const supabase = getServiceClient();
+  // The partial unique index allows one default per location: clear, then set.
+  const { error: clearError } = await supabase
+    .from("ghl_location_numbers")
+    .update({ is_default: false })
+    .eq("location_id", locationId)
+    .eq("is_default", true);
+  if (clearError) throw clearError;
+  const { error: setError } = await supabase
+    .from("ghl_location_numbers")
+    .update({ is_default: true })
+    .eq("location_id", locationId)
+    .eq("slot", number.slot);
+  if (setError) throw setError;
+  const { error: mirrorError } = await supabase
+    .from("ghl_accounts")
+    .update({ tenant_id: number.tenantId })
+    .eq("location_id", locationId);
+  if (mirrorError) throw mirrorError;
+}
+
 export class SupabaseGhlRepository implements GhlRepository {
   async getGhlAccountByLocationId(locationId: string) {
     const supabase = getServiceClient();
@@ -419,9 +461,159 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async getGhlAccountByTenantId(tenantId: string) {
     const supabase = getServiceClient();
+    const { data: numberRow, error: numberError } = await supabase
+      .from("ghl_location_numbers")
+      .select("location_id")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (numberError) throw numberError;
+    if (numberRow) return this.getGhlAccountByLocationId((numberRow as { location_id: string }).location_id);
+    // A location installed before it has any ghl_location_numbers row (its
+    // tenant is still only on ghl_accounts) keeps resolving by the default tenant.
     const { data, error } = await supabase.from("ghl_accounts").select("*").eq("tenant_id", tenantId).maybeSingle();
     if (error) throw error;
     return data ? mapGhlAccount(data as GhlAccountRow) : null;
+  }
+
+  async listLocationNumbers(locationId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_location_numbers")
+      .select(LOCATION_NUMBER_COLUMNS)
+      .eq("location_id", locationId)
+      .order("slot", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as LocationNumberRow[]).map(mapLocationNumber);
+  }
+
+  async getLocationNumberBySlot(locationId: string, slot: number) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_location_numbers")
+      .select(LOCATION_NUMBER_COLUMNS)
+      .eq("location_id", locationId)
+      .eq("slot", slot)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapLocationNumber(data as LocationNumberRow) : null;
+  }
+
+  async addLocationNumber(locationId: string, label: string | null) {
+    const supabase = getServiceClient();
+    let tenantId: string | null = null;
+    const releaseTenant = async () => {
+      // Nothing references the tenant yet, so an unused one can go.
+      if (tenantId) await supabase.from("whatsapp_tenants").delete().eq("id", tenantId);
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const existing = await this.listLocationNumbers(locationId);
+      const slot = nextFreeSlot(existing.map((n) => n.slot));
+      if (slot === null) {
+        await releaseTenant();
+        return { ok: false as const, reason: "limit" as const };
+      }
+      tenantId ??= await this.createGhlTenant();
+      const row = { tenant_id: tenantId, location_id: locationId, slot, is_default: existing.length === 0, label };
+      const { error } = await supabase.from("ghl_location_numbers").insert(row);
+      if (!error) {
+        return { ok: true as const, number: { tenantId, slot, isDefault: row.is_default, label } };
+      }
+      if (!isUniqueViolation(error)) {
+        await releaseTenant();
+        throw error;
+      }
+      // Lost a race for the slot (or for the first/default row): re-read and retry once.
+    }
+    await releaseTenant();
+    return { ok: false as const, reason: "limit" as const };
+  }
+
+  async removeLocationNumber(locationId: string, slot: number) {
+    const supabase = getServiceClient();
+    const numbers = await this.listLocationNumbers(locationId);
+    const target = numbers.find((n) => n.slot === slot);
+    if (!target) return { ok: false as const, reason: "not_found" as const };
+    if (numbers.length <= 1) return { ok: false as const, reason: "last_number" as const };
+    const promoteSlot = promoteAfterRemoval(numbers, slot);
+
+    // Number row FIRST: ghl_location_numbers.tenant_id has no ON DELETE, so it
+    // must go before anything that touches the tenant. Sticky rows follow.
+    const { error: deleteError } = await supabase
+      .from("ghl_location_numbers")
+      .delete()
+      .eq("location_id", locationId)
+      .eq("slot", slot);
+    if (deleteError) throw deleteError;
+    const { error: stickyError } = await supabase
+      .from("ghl_contact_numbers")
+      .delete()
+      .eq("location_id", locationId)
+      .eq("tenant_id", target.tenantId);
+    if (stickyError) throw stickyError;
+
+    if (promoteSlot !== null) {
+      const promoted = numbers.find((n) => n.slot === promoteSlot)!;
+      await markDefault(locationId, promoted);
+    }
+    return { ok: true as const, removedTenantId: target.tenantId };
+  }
+
+  async setDefaultLocationNumber(locationId: string, slot: number) {
+    const target = await this.getLocationNumberBySlot(locationId, slot);
+    if (!target) return false;
+    if (target.isDefault) return true;
+    await markDefault(locationId, target);
+    return true;
+  }
+
+  async getStickyTenant(locationId: string, ghlContactId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_contact_numbers")
+      .select("tenant_id")
+      .eq("location_id", locationId)
+      .eq("ghl_contact_id", ghlContactId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? (data as { tenant_id: string }).tenant_id : null;
+  }
+
+  async recordInboundForStickiness(locationId: string, ghlContactId: string, tenantId: string, receivedAtIso: string) {
+    const supabase = getServiceClient();
+    const readExisting = async () => {
+      const { data, error } = await supabase
+        .from("ghl_contact_numbers")
+        .select("last_inbound_at")
+        .eq("location_id", locationId)
+        .eq("ghl_contact_id", ghlContactId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? (data as { last_inbound_at: string }).last_inbound_at : null;
+    };
+    let existing = await readExisting();
+    if (existing === null) {
+      const { error } = await supabase.from("ghl_contact_numbers").insert({
+        location_id: locationId,
+        ghl_contact_id: ghlContactId,
+        tenant_id: tenantId,
+        last_inbound_at: receivedAtIso,
+      });
+      if (!error) return;
+      if (!isUniqueViolation(error)) throw error;
+      // Another drain inserted first: fall through and compare against its row.
+      existing = await readExisting();
+      if (existing === null) return;
+    }
+    if (!shouldReplaceSticky(existing, receivedAtIso)) return;
+    // The .lt guard makes the write itself conditional, so a concurrent newer
+    // update between our read and write is never overwritten.
+    const { error } = await supabase
+      .from("ghl_contact_numbers")
+      .update({ tenant_id: tenantId, last_inbound_at: receivedAtIso })
+      .eq("location_id", locationId)
+      .eq("ghl_contact_id", ghlContactId)
+      .lt("last_inbound_at", receivedAtIso);
+    if (error) throw error;
   }
 
   async getGhlAccounts() {
