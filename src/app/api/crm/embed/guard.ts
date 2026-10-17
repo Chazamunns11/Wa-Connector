@@ -68,14 +68,42 @@
  * claimed "never throws" — `runBridgePanelGuard`'s own single try/catch is
  * what actually enforces that now (see `src/lib/bridge-panel-guard.ts`'s
  * header), same guarantee, new location.
+ *
+ * A FIFTH CHECK, LAST: WHICH NUMBER (several WhatsApp numbers per location,
+ * Task 4 — see `src/lib/bridge-panel-guard.ts`'s header, step 3). The route
+ * reads an optional `{ slot }` from the request body (`requestedSlotFromBody`
+ * below; missing means slot 1, so the pre-slot client keeps working
+ * untouched) and this guard resolves it with `getLocationNumberBySlot`
+ * against the `locationId` the VERIFIED token carries — never against
+ * anything else in the request. Not exactly 1, 2 or 3 is 400 `invalid_slot`;
+ * a slot that location has no number in is 404 `unknown_number`. Both are
+ * checked only after the four checks above pass, in their original order.
+ * `account.tenantId` is now that slot's tenant (`ghl_location_numbers`),
+ * which is still always a `'ghl_location'`-kind `whatsapp_tenants` row
+ * belonging to THIS location — the kind-pinning argument above holds per
+ * number, since every number row is minted by `addLocationNumber` as a GHL
+ * tenant and keyed to its location.
+ *
+ * `authorizeGhlEmbedLocationRequest` is the same four checks WITHOUT the
+ * fifth, for the numbers route (`src/app/api/crm/embed/numbers/route.ts`):
+ * adding a number acts on the location, and its result carries no tenant id
+ * at all.
  */
 import type { GhlRepository } from "@/lib/data";
 import { isGhlEmbedConfigured, verifyGhlEmbedToken } from "@/lib/ghl-embed";
 import type { BridgeFailure, BridgeSessionResult, BridgeSessionSnapshot } from "@/lib/whatsapp-bridge";
-import { runBridgePanelGuard, redactBridgeSessionResult as sharedRedactBridgeSessionResult, type PanelGuardAccount } from "@/lib/bridge-panel-guard";
+import {
+  runBridgePanelGuard,
+  runBridgePanelLocationGuard,
+  redactBridgeSessionResult as sharedRedactBridgeSessionResult,
+  type PanelGuardAccount,
+  type PanelGuardLocation,
+  type PanelLocationGuardOptions,
+} from "@/lib/bridge-panel-guard";
+import { parseSlotParam, type SlotParseResult } from "@/lib/location-numbers";
 
 /** The narrow repo slice this guard touches — every embed WhatsApp route drives this via `webhookRepo` (no user session exists on these routes; the token IS the session). */
-export type GhlEmbedGuardRepo = Pick<GhlRepository, "getGhlAccountByLocationId">;
+export type GhlEmbedGuardRepo = Pick<GhlRepository, "getGhlAccountByLocationId" | "getLocationNumberBySlot">;
 
 /**
  * What a successful guard result hands the route (adversarial review lens 4,
@@ -94,12 +122,56 @@ export type GhlEmbedGuardRepo = Pick<GhlRepository, "getGhlAccountByLocationId">
  */
 export type GhlEmbedAccount = PanelGuardAccount;
 
-export type GhlEmbedGuardResult =
-  | { ok: true; account: GhlEmbedAccount }
+export type GhlEmbedLocationGuardResult =
+  | { ok: true; location: PanelGuardLocation }
   | { ok: false; status: 401; error: "missing_token" | "invalid_token" }
   | { ok: false; status: 403; error: "unknown_location" | "account_disabled" }
   | { ok: false; status: 503; error: "embed_not_configured" }
   | { ok: false; status: 500; error: "internal" };
+
+export type GhlEmbedGuardResult =
+  | { ok: true; account: GhlEmbedAccount }
+  | Exclude<GhlEmbedLocationGuardResult, { ok: true }>
+  | { ok: false; status: 400; error: "invalid_slot" }
+  | { ok: false; status: 404; error: "unknown_number" };
+
+/** Slot 1 — what a request that names no slot means (see this file's header, the fifth check). */
+const DEFAULT_SLOT: SlotParseResult = { ok: true, slot: 1 };
+
+/**
+ * The slot a request body names: `body.slot` through `parseSlotParam`
+ * (strict 1-3, missing means 1). `null` — what `readSmallJsonBody` returns
+ * for an oversized or malformed body — is refused as an invalid slot rather
+ * than silently treated as slot 1: a client that sent SOMETHING meant a
+ * specific number, and guessing which would be worse than saying no.
+ */
+export function requestedSlotFromBody(body: Record<string, unknown> | null): SlotParseResult {
+  if (body === null) return { ok: false };
+  return parseSlotParam(body.slot);
+}
+
+/** Checks 0-2, shared verbatim by both guards below. */
+function embedLocationGuardOptions(
+  repo: GhlEmbedGuardRepo
+): PanelLocationGuardOptions<{ locationId: string }, "embed_not_configured", "missing_token" | "invalid_token", "unknown_location" | "account_disabled"> {
+  return {
+    // Check 0 — see this file's header, "THE KILL-SWITCH GAP". Cheapest
+    // checks first, same order `POST /api/crm/embed/session` already uses.
+    gates: [
+      { ok: isGhlEmbedConfigured, error: "embed_not_configured" },
+    ],
+    verifyToken: verifyGhlEmbedToken,
+    missingTokenError: "missing_token",
+    invalidTokenError: "invalid_token",
+    resolveAccount: async (verified) => {
+      const account = await repo.getGhlAccountByLocationId(verified.locationId);
+      if (!account) return { ok: false, status: 403, error: "unknown_location" };
+      if (account.status === "disabled") return { ok: false, status: 403, error: "account_disabled" };
+      return { ok: true, location: { locationId: account.locationId, label: account.label, status: account.status } };
+    },
+    logPrefix: "[api/crm/embed/guard] authorizeGhlEmbedRequest",
+  };
+}
 
 /**
  * Run every check. Never throws — see `runBridgePanelGuard`'s own header,
@@ -108,27 +180,29 @@ export type GhlEmbedGuardResult =
  * one of the typed failure variants above, which `guardFailureResponseBody`
  * below maps to a fixed-string JSON error response (never a stack trace).
  */
-export async function authorizeGhlEmbedRequest(repo: GhlEmbedGuardRepo, authorizationHeader: string | null): Promise<GhlEmbedGuardResult> {
-  return runBridgePanelGuard<{ locationId: string }, "embed_not_configured", "missing_token" | "invalid_token", "unknown_location" | "account_disabled">(
-    authorizationHeader,
-    {
-      // Check 0 — see this file's header, "THE KILL-SWITCH GAP". Cheapest
-      // checks first, same order `POST /api/crm/embed/session` already uses.
-      gates: [
-        { ok: isGhlEmbedConfigured, error: "embed_not_configured" },
-      ],
-      verifyToken: verifyGhlEmbedToken,
-      missingTokenError: "missing_token",
-      invalidTokenError: "invalid_token",
-      resolveAccount: async (verified) => {
-        const account = await repo.getGhlAccountByLocationId(verified.locationId);
-        if (!account) return { ok: false, status: 403, error: "unknown_location" };
-        if (account.status === "disabled") return { ok: false, status: 403, error: "account_disabled" };
-        return { ok: true, account: { tenantId: account.tenantId, label: account.label, status: account.status } };
-      },
-      logPrefix: "[api/crm/embed/guard] authorizeGhlEmbedRequest",
-    }
-  );
+export async function authorizeGhlEmbedRequest(
+  repo: GhlEmbedGuardRepo,
+  authorizationHeader: string | null,
+  /** The slot the request names — `requestedSlotFromBody(await readSmallJsonBody(request))` in every route. Defaults to slot 1. */
+  slot: SlotParseResult = DEFAULT_SLOT
+): Promise<GhlEmbedGuardResult> {
+  return runBridgePanelGuard(authorizationHeader, {
+    ...embedLocationGuardOptions(repo),
+    // The fifth check — see this file's header. The slot comes from the
+    // request; the location it is looked up in comes ONLY from the verified
+    // token (step 2 above), never from the request.
+    resolveSlot: () => slot,
+    lookupNumber: (locationId, s) => repo.getLocationNumberBySlot(locationId, s),
+  });
+}
+
+/**
+ * Checks 0-2 only: the location, no number, no tenant id. See this file's
+ * header — used by the numbers route, whose add-a-number call has no number
+ * to name yet. Never throws, same as `authorizeGhlEmbedRequest`.
+ */
+export async function authorizeGhlEmbedLocationRequest(repo: GhlEmbedGuardRepo, authorizationHeader: string | null): Promise<GhlEmbedLocationGuardResult> {
+  return runBridgePanelLocationGuard(authorizationHeader, embedLocationGuardOptions(repo));
 }
 
 /**
@@ -152,6 +226,13 @@ export function guardFailureResponseBody(result: Exclude<GhlEmbedGuardResult, { 
       return { ok: false, code: result.error, message: "This linking session is no longer valid — reload this page inside HighLevel to reconnect." };
     case "embed_not_configured":
       return { ok: false, code: result.error, message: "WhatsApp linking from inside HighLevel isn't available on this deployment right now." };
+    // The fifth check (Task 4). Safe to name specifically: the caller has
+    // already proved a valid token for an active location, and which of ITS
+    // OWN slots exist is nothing it couldn't learn from the session route.
+    case "invalid_slot":
+      return { ok: false, code: result.error, message: "That WhatsApp number isn't valid." };
+    case "unknown_number":
+      return { ok: false, code: result.error, message: "That WhatsApp number isn't set up on this sub-account." };
     case "internal":
       return { ok: false, code: result.error, message: "Something went wrong. Please try again." };
   }

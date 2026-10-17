@@ -15,6 +15,7 @@ const METHODS = [
   "addLocationNumber",
   "removeLocationNumber",
   "setDefaultLocationNumber",
+  "setLocationNumberLabel",
   "getStickyTenant",
   "recordInboundForStickiness",
   "getGhlAccounts",
@@ -44,15 +45,15 @@ const METHODS = [
   "getGhlHealthSnapshot",
 ] as const;
 
-test("SupabaseGhlRepository implements all 34 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 34);
-  assert.equal(new Set(METHODS).size, 34);
+test("SupabaseGhlRepository implements all 35 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 35);
+  assert.equal(new Set(METHODS).size, 35);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 34", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 35", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });

@@ -103,6 +103,9 @@ export interface GhlRepository {
   /** Make `slot` the location's default (and mirror it to `ghl_accounts.tenant_id`). False when the slot does not exist. */
   setDefaultLocationNumber(locationId: string, slot: number): Promise<boolean>;
 
+  /** Set (or clear, with `null`) one number's label — already trimmed and at most 40 characters (0003's CHECK). False when the slot does not exist. */
+  setLocationNumberLabel(locationId: string, slot: number, label: string | null): Promise<boolean>;
+
   /** The tenant a contact most recently messaged on, or null (fall back to the default number). */
   getStickyTenant(locationId: string, ghlContactId: string): Promise<string | null>;
 

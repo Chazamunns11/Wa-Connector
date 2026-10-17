@@ -21,13 +21,16 @@
  * string passed through untouched, which made the invariant above only
  * accidentally true (see `scrubTenantIdFromFailure`'s own JSDoc,
  * src/app/api/connect/guard.ts, for what was verified and why it's now
- * enforced rather than just documented).
+ * enforced rather than just documented). *
+ * WHICH NUMBER (Task 4): the one the SIGNED session token's slot names —
+ * never a request body field (see `src/app/api/connect/guard.ts`'s header,
+ * check 8). A slot whose number has been removed is 404 `unknown_number`.
  */
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { connectWhatsappSession } from "@/lib/whatsapp-bridge";
-import { redactBridgeSessionResult } from "@/lib/bridge-panel-guard";
-import { authorizeConnectRequest, guardFailureResponseBody, scrubTenantIdFromFailure } from "@/app/api/connect/guard";
+import { toPanelBridgeResponse } from "@/lib/bridge-panel-guard";
+import { authorizeConnectRequest, guardFailureResponseBody } from "@/app/api/connect/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -38,8 +41,8 @@ export async function POST(request: Request) {
       return NextResponse.json(guardFailureResponseBody(auth), { status: auth.status });
     }
     const result = await connectWhatsappSession(auth.account.tenantId);
-    const redacted = redactBridgeSessionResult(result);
-    return NextResponse.json(redacted.ok ? redacted : scrubTenantIdFromFailure(redacted, auth.account.tenantId));
+    // Redact `session.coachId` and scrub a failure message — one tested choke point.
+    return NextResponse.json(toPanelBridgeResponse(result, auth.account.tenantId));
   } catch (err) {
     // Same "genuinely total, not just documented as such" backstop as the
     // guard itself. Never echoes `err` into the response.

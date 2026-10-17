@@ -597,6 +597,18 @@ export class SupabaseGhlRepository implements GhlRepository {
     return true;
   }
 
+  async setLocationNumberLabel(locationId: string, slot: number, label: string | null) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_location_numbers")
+      .update({ label })
+      .eq("location_id", locationId)
+      .eq("slot", slot)
+      .select("slot");
+    if (error) throw error;
+    return ((data ?? []) as unknown[]).length > 0;
+  }
+
   async getStickyTenant(locationId: string, ghlContactId: string) {
     const supabase = getServiceClient();
     const { data, error } = await supabase

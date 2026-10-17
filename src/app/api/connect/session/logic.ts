@@ -47,8 +47,18 @@
  *     header for why both checks exist). Mapping a `ConnectSessionDecision`
  *     to an HTTP status/JSON body also stays in `route.ts`, mirroring
  *     `guardFailureResponseBody`'s identical split for the guard.
+ *
+ * ONE NUMBER PER LINK (several WhatsApp numbers per location, Task 4). The
+ * link token names a slot (`s`, see `src/lib/ghl-connect-link.ts`'s header;
+ * absent means slot 1). After every older check passes, step 9 resolves that
+ * slot within the token's location (`getLocationNumberBySlot`); a slot whose
+ * number has since been removed decides `unknown_number`. The session token
+ * is minted with the SAME slot, the summary is THAT number's, and the
+ * decision carries `number: { slot, label, isDefault }` so the page can say
+ * which number it is connecting. Never the tenant id.
  */
-import type { GhlAccountStatus, GhlEmbedWhatsappSummary, WhatsappSessionSummary } from "@/lib/types";
+import type { GhlAccountStatus, GhlEmbedWhatsappSummary, LocationNumber, WhatsappSessionSummary } from "@/lib/types";
+import type { LocationSlot } from "@/lib/location-numbers";
 import { isConnectLinkConfigured, mintConnectSessionToken, verifyConnectLinkToken } from "@/lib/ghl-connect-link";
 import { getWhatsappBridgeHealth, isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
 import { checkConnectSessionThrottle, type ConnectThrottleDecision } from "@/lib/connect-throttle";
@@ -66,6 +76,8 @@ export interface ConnectSessionRepo {
     connectLinkVersion: number | null;
   } | null>;
   getWhatsappSessionSummary(tenantId: string): Promise<WhatsappSessionSummary | null>;
+  /** Step 9 — the link's slot to its number, within the token's location. */
+  getLocationNumberBySlot(locationId: string, slot: number): Promise<LocationNumber | null>;
 }
 
 /** Every external dependency `decideConnectSession` touches, injected so tests can fake every one of them independently — see `defaultConnectSessionDeps` for what production actually wires in. */
@@ -120,7 +132,17 @@ export type ConnectSessionDecision =
   | { kind: "invalid_link" }
   | { kind: "revoked" }
   | { kind: "disabled" }
-  | { kind: "ok"; token: string; label: string; summary: GhlEmbedWhatsappSummary | null; bridgeReachable: boolean };
+  /** Step 9 — the link's number was removed after it was minted. Safe to say: the link already proved it was genuine and current. */
+  | { kind: "unknown_number" }
+  | {
+      kind: "ok";
+      token: string;
+      label: string;
+      summary: GhlEmbedWhatsappSummary | null;
+      bridgeReachable: boolean;
+      /** Which number this link connects — slot and label only, never the tenant id. */
+      number: { slot: LocationSlot; label: string | null; isDefault: boolean };
+    };
 
 /** Same "enumerate, never spread" discipline as `toEmbedSummary` in `src/app/api/crm/embed/session/route.ts` — a future field added to `WhatsappSessionSummary` must never ride along by default. */
 function toConnectSummary(summary: WhatsappSessionSummary | null): GhlEmbedWhatsappSummary | null {
@@ -215,9 +237,17 @@ export async function decideConnectSession(
     return { kind: "disabled" };
   }
 
-  // Step 8.
-  const sessionToken = deps.mintConnectSessionToken(account.locationId, account.connectLinkVersion);
-  const summary = await repo.getWhatsappSessionSummary(account.tenantId);
+  // Step 9 (Task 4) — which number. See this file's header. Looked up in the
+  // TOKEN's location, never anything from the request body.
+  const number = await repo.getLocationNumberBySlot(account.locationId, verified.slot);
+  if (!number) {
+    return { kind: "unknown_number" };
+  }
+
+  // Step 8 — the session token carries the link's own slot, and the summary
+  // is that number's (one read).
+  const sessionToken = deps.mintConnectSessionToken(account.locationId, account.connectLinkVersion, verified.slot);
+  const summary = await repo.getWhatsappSessionSummary(number.tenantId);
   const bridgeReachable = (await deps.getBridgeHealth()).ok;
 
   return {
@@ -226,5 +256,7 @@ export async function decideConnectSession(
     label: account.label,
     summary: toConnectSummary(summary),
     bridgeReachable,
+    // Enumerated, never spread — `number` carries the tenant id.
+    number: { slot: verified.slot, label: number.label, isDefault: number.isDefault },
   };
 }

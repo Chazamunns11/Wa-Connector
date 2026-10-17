@@ -80,6 +80,11 @@
  *      `summary` reuses `GhlEmbedWhatsappSummary` (src/lib/types.ts) —
  *      NEVER `coachId`/tenant id, built by ENUMERATING fields exactly like
  *      `toEmbedSummary` in the embed session route, never a spread.
+ *   9. (Task 4, checked just before step 8's mint.) The link token's slot
+ *      (`s`, absent means 1) must name a number this location still has —
+ *      otherwise 404 `{ code: "unknown_number" }`. The session token carries
+ *      the same slot, `summary` is that number's, and the response adds
+ *      `number: { slot, label, isDefault }` — never the tenant id.
  *
  * NEVER A STACK TRACE, NEVER THE TOKEN ECHOED BACK. The whole handler runs
  * inside one try/catch — same "genuinely total" discipline as every other
@@ -144,6 +149,9 @@ export async function POST(request: Request) {
         return fail(403, "link_revoked", "This link has been revoked — ask for a fresh one.");
       case "disabled":
         return NextResponse.json({ ok: true, state: "disabled" });
+      case "unknown_number":
+        // Task 4 — the link's number was removed after the link was minted.
+        return fail(404, "unknown_number", "That WhatsApp number isn't set up on this sub-account.");
       case "ok":
         return NextResponse.json({
           ok: true,
@@ -152,6 +160,8 @@ export async function POST(request: Request) {
           label: decision.label,
           summary: decision.summary,
           bridgeReachable: decision.bridgeReachable,
+          // Task 4 — which number this link connects: slot, label, isDefault only.
+          number: decision.number,
         });
     }
   } catch (err) {

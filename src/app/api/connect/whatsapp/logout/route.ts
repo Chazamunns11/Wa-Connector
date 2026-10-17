@@ -13,7 +13,10 @@
  * (src/app/api/connect/guard.ts): "no coachId to redact" was never the same
  * claim as "no tenant id could ever appear in this response", and
  * `BridgeOkResult`'s failure variant is the exact same free-form-`message`
- * `BridgeFailure` shape `connect`/`status` share.
+ * `BridgeFailure` shape `connect`/`status` share. *
+ * WHICH NUMBER (Task 4): the one the SIGNED session token's slot names —
+ * never a request body field (see `src/app/api/connect/guard.ts`'s header,
+ * check 8). A slot whose number has been removed is 404 `unknown_number`.
  */
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";

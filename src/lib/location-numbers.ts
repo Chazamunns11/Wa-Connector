@@ -9,6 +9,43 @@ export type LocationSlot = 1 | 2 | 3;
 
 const SLOTS: readonly LocationSlot[] = [1, 2, 3];
 
+/** `ghl_location_numbers.label`'s CHECK limit (0003). */
+export const MAX_NUMBER_LABEL_LENGTH = 40;
+
+export type SlotParseResult = { ok: true; slot: LocationSlot } | { ok: false };
+
+/**
+ * A browser-supplied slot (Task 4: every browser-facing surface addresses a
+ * number by slot, never by tenant id). Strict on purpose: only the JS
+ * numbers 1, 2 and 3 pass. The STRING "1" is refused rather than coerced, so
+ * there is exactly one spelling of each slot on the wire and nothing a
+ * permissive parse could be tricked into. `undefined` (the field is absent)
+ * means slot 1, which keeps every pre-slot client working; pass
+ * `required: true` where defaulting would be dangerous (removing a number
+ * must always say which one).
+ */
+export function parseSlotParam(value: unknown, opts: { required?: boolean } = {}): SlotParseResult {
+  if (value === undefined) return opts.required ? { ok: false } : { ok: true, slot: 1 };
+  if (typeof value === "number" && (SLOTS as readonly number[]).includes(value)) return { ok: true, slot: value as LocationSlot };
+  return { ok: false };
+}
+
+export type LabelParseResult = { ok: true; label: string | null } | { ok: false };
+
+/**
+ * A browser-supplied number label: trimmed, empty becomes `null` (no label),
+ * at most `MAX_NUMBER_LABEL_LENGTH` characters. `undefined`/`null` mean "no
+ * label". Anything that is not a string is refused.
+ */
+export function parseLabelInput(value: unknown): LabelParseResult {
+  if (value === undefined || value === null) return { ok: true, label: null };
+  if (typeof value !== "string") return { ok: false };
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return { ok: true, label: null };
+  if (trimmed.length > MAX_NUMBER_LABEL_LENGTH) return { ok: false };
+  return { ok: true, label: trimmed };
+}
+
 /** The lowest unused slot (1 to 3), or `null` when the location already has three numbers. */
 export function nextFreeSlot(usedSlots: number[]): LocationSlot | null {
   for (const slot of SLOTS) {

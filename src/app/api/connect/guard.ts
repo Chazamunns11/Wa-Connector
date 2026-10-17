@@ -10,7 +10,7 @@
  * call" revocation lever, ONE extra config gate and ONE extra 403 check this
  * feature needs that the embed guard does not (see below).
  *
- * SEVEN CHECKS, IN ORDER, ON EVERY CALL — never trust that
+ * EIGHT CHECKS (SEVEN BEFORE TASK 4), IN ORDER, ON EVERY CALL — never trust that
  * `/connect/[token]`'s server component already checked any of these; a
  * stale browser tab, a re-shared session token, or an env that drifted
  * mid-session must all be caught HERE, not assumed from an earlier render:
@@ -56,18 +56,31 @@
  *      confirming "the link this came from has since been revoked" tells an
  *      attacker nothing they did not already have to prove first.
  *
+ *   8. WHICH NUMBER (several WhatsApp numbers per location, Task 4 — see
+ *      `src/lib/bridge-panel-guard.ts`'s header, step 3). A connect link is
+ *      for ONE number: the slot travels inside the SIGNED session token
+ *      (`s`, copied from the link token by `POST /api/connect/session`; a
+ *      token without `s` means slot 1, so every pre-slot link keeps
+ *      working). Nothing in the request body can change it — a connect link
+ *      must never reach a sibling number, let alone add or remove one (the
+ *      numbers route is embed-only). `getLocationNumberBySlot` resolves it
+ *      within the token's own location; no such number (it was removed after
+ *      the link was minted) is 404 `unknown_number`. Runs last, so checks
+ *      1-7 and their order are unchanged.
+ *
  * NEVER RETURNS THE FULL `GhlAccount` — same `PanelGuardAccount` narrowing
- * the embed guard already uses (`tenantId`/`label`/`status` only), for the
- * identical reason (`GhlAccount`'s own JSDoc: never return this from a
+ * the embed guard already uses (`tenantId`/`slot`/`label`/`status` only), for
+ * the identical reason (`GhlAccount`'s own JSDoc: never return this from a
  * route).
  */
 import type { GhlRepository } from "@/lib/data";
 import { isConnectLinkConfigured, verifyConnectSessionToken } from "@/lib/ghl-connect-link";
 import { isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
-import { runBridgePanelGuard, type PanelGuardAccount } from "@/lib/bridge-panel-guard";
+import { runBridgePanelGuard, scrubTenantIdFromFailure as sharedScrubTenantIdFromFailure, type PanelGuardAccount } from "@/lib/bridge-panel-guard";
+import type { LocationSlot } from "@/lib/location-numbers";
 
 /** The narrow repo slice this guard touches — every connect WhatsApp route drives this via `webhookRepo` (no user session exists on these routes; the session token IS the session). */
-export type ConnectGuardRepo = Pick<GhlRepository, "getGhlAccountByLocationId">;
+export type ConnectGuardRepo = Pick<GhlRepository, "getGhlAccountByLocationId" | "getLocationNumberBySlot">;
 
 /** Structurally identical to the embed guard's `GhlEmbedAccount` — see `PanelGuardAccount`'s own JSDoc (src/lib/bridge-panel-guard.ts). */
 export type ConnectGuardAccount = PanelGuardAccount;
@@ -77,7 +90,12 @@ export type ConnectGuardResult =
   | { ok: false; status: 401; error: "missing_token" | "invalid_token" }
   | { ok: false; status: 403; error: "unknown_location" | "account_disabled" | "link_revoked" }
   | { ok: false; status: 503; error: "connect_not_configured" | "bridge_not_configured" }
-  | { ok: false; status: 500; error: "internal" };
+  | { ok: false; status: 500; error: "internal" }
+  // `invalid_slot` is unreachable in practice (the verify step already
+  // refuses a token whose `s` isn't 1-3) but is part of the shared core's
+  // result type, so it is mapped like any other code.
+  | { ok: false; status: 400; error: "invalid_slot" }
+  | { ok: false; status: 404; error: "unknown_number" };
 
 /**
  * Run every check. Never throws — see `runBridgePanelGuard`'s own header,
@@ -89,7 +107,7 @@ export type ConnectGuardResult =
  */
 export async function authorizeConnectRequest(repo: ConnectGuardRepo, authorizationHeader: string | null): Promise<ConnectGuardResult> {
   return runBridgePanelGuard<
-    { locationId: string; v: number },
+    { locationId: string; v: number; slot: LocationSlot },
     "connect_not_configured" | "bridge_not_configured",
     "missing_token" | "invalid_token",
     "unknown_location" | "account_disabled" | "link_revoked"
@@ -100,7 +118,7 @@ export async function authorizeConnectRequest(repo: ConnectGuardRepo, authorizat
     ],
     verifyToken: (token) => {
       const result = verifyConnectSessionToken(token);
-      return result.ok ? { locationId: result.locationId, v: result.v } : null;
+      return result.ok ? { locationId: result.locationId, v: result.v, slot: result.slot } : null;
     },
     missingTokenError: "missing_token",
     invalidTokenError: "invalid_token",
@@ -115,8 +133,11 @@ export async function authorizeConnectRequest(repo: ConnectGuardRepo, authorizat
       if (account.connectLinkVersion === null || verified.v !== account.connectLinkVersion) {
         return { ok: false, status: 403, error: "link_revoked" };
       }
-      return { ok: true, account: { tenantId: account.tenantId, label: account.label, status: account.status } };
+      return { ok: true, location: { locationId: account.locationId, label: account.label, status: account.status } };
     },
+    // Check 8 — see this file's header. The slot is the SIGNED token's, never the request's.
+    resolveSlot: (verified) => ({ ok: true, slot: verified.slot }),
+    lookupNumber: (locationId, slot) => repo.getLocationNumberBySlot(locationId, slot),
     logPrefix: "[api/connect/guard] authorizeConnectRequest",
   });
 }
@@ -144,6 +165,11 @@ export function guardFailureResponseBody(result: Exclude<ConnectGuardResult, { o
       return { ok: false, code: result.error, message: "WhatsApp linking by link isn't available on this deployment right now." };
     case "internal":
       return { ok: false, code: result.error, message: "Something went wrong. Please try again." };
+    // Check 8 — same fixed strings as the embed guard's.
+    case "invalid_slot":
+      return { ok: false, code: result.error, message: "That WhatsApp number isn't valid." };
+    case "unknown_number":
+      return { ok: false, code: result.error, message: "That WhatsApp number isn't set up on this sub-account." };
   }
 }
 
@@ -177,6 +203,8 @@ export function guardFailureResponseBody(result: Exclude<ConnectGuardResult, { o
  * means this can never itself become a source of a subtler bug.
  */
 export function scrubTenantIdFromFailure<T extends { ok: false; message: string }>(failure: T, tenantId: string): T {
-  if (!tenantId || !failure.message.includes(tenantId)) return failure;
-  return { ...failure, message: failure.message.split(tenantId).join("[redacted]") };
+  // MOVED (Task 4) to `src/lib/bridge-panel-guard.ts` unchanged, so the
+  // embed's routes share it now that they address several numbers too.
+  // Re-exported here so every existing import keeps compiling.
+  return sharedScrubTenantIdFromFailure(failure, tenantId);
 }

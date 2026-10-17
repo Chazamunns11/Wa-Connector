@@ -18,13 +18,16 @@
  * `connect` — including that route's finding-8 fix (`scrubTenantIdFromFailure`,
  * src/app/api/connect/guard.ts): a `BridgeFailure`'s own `message` is
  * defensively scrubbed of `auth.account.tenantId` too, not just a success
- * result's `session.coachId`.
+ * result's `session.coachId`. *
+ * WHICH NUMBER (Task 4): the one the SIGNED session token's slot names —
+ * never a request body field (see `src/app/api/connect/guard.ts`'s header,
+ * check 8). A slot whose number has been removed is 404 `unknown_number`.
  */
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { getWhatsappBridgeSession } from "@/lib/whatsapp-bridge";
-import { redactBridgeSessionResult } from "@/lib/bridge-panel-guard";
-import { authorizeConnectRequest, guardFailureResponseBody, scrubTenantIdFromFailure } from "@/app/api/connect/guard";
+import { toPanelBridgeResponse } from "@/lib/bridge-panel-guard";
+import { authorizeConnectRequest, guardFailureResponseBody } from "@/app/api/connect/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -35,8 +38,8 @@ export async function POST(request: Request) {
       return NextResponse.json(guardFailureResponseBody(auth), { status: auth.status });
     }
     const result = await getWhatsappBridgeSession(auth.account.tenantId);
-    const redacted = redactBridgeSessionResult(result);
-    return NextResponse.json(redacted.ok ? redacted : scrubTenantIdFromFailure(redacted, auth.account.tenantId));
+    // Redact `session.coachId` and scrub a failure message — one tested choke point.
+    return NextResponse.json(toPanelBridgeResponse(result, auth.account.tenantId));
   } catch (err) {
     console.error("[api/connect/whatsapp/status] POST failed unexpectedly:", err);
     return NextResponse.json({ ok: false, code: "internal", message: "Something went wrong. Please try again." }, { status: 500 });
