@@ -26,6 +26,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { BridgeConfig } from "./config.js";
 import { createCredsCipher, whatsappCredsAad, whatsappKeyAad, type CredsCipher } from "./crypto.js";
 import { isValidWaMessageId } from "./media.js";
+import type { AddJobResult } from "./groups.js";
 
 /** Mirrors the portal's `WhatsappSessionStatus` (src/lib/types.ts) and the 0046 CHECK constraint — keep all three in lockstep. */
 export type SessionStatus = "disconnected" | "waiting_qr" | "connected" | "logged_out" | "banned";
@@ -85,6 +86,87 @@ function mapMessage(row: MessageRow): MessageRecord {
     createdAt: row.created_at,
     sentAt: row.sent_at,
     kind: row.kind ?? "text",
+  };
+}
+
+export type GroupJobStatus = "queued" | "running" | "done" | "interrupted";
+
+export interface GroupJobRecord {
+  id: string;
+  coachId: string;
+  groupJid: string;
+  status: GroupJobStatus;
+  requestedCount: number;
+  results: AddJobResult[];
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface GroupPostRecord {
+  id: string;
+  coachId: string;
+  groupJid: string;
+  idempotencyKey: string;
+  status: "accepted" | "sending" | "sent" | "failed";
+  waMessageId: string | null;
+  error: string | null;
+  dispatchAttempted: boolean;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+interface GroupJobRow {
+  id: string;
+  coach_id: string;
+  group_jid: string;
+  status: GroupJobStatus;
+  requested_count: number;
+  results: AddJobResult[] | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+interface GroupPostRow {
+  id: string;
+  coach_id: string;
+  group_jid: string;
+  idempotency_key: string;
+  status: GroupPostRecord["status"];
+  wa_message_id: string | null;
+  error: string | null;
+  dispatch_attempted: boolean;
+  created_at: string;
+  sent_at: string | null;
+}
+
+function mapGroupJob(row: GroupJobRow): GroupJobRecord {
+  return {
+    id: row.id,
+    coachId: row.coach_id,
+    groupJid: row.group_jid,
+    status: row.status,
+    requestedCount: row.requested_count,
+    results: row.results ?? [],
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function mapGroupPost(row: GroupPostRow): GroupPostRecord {
+  return {
+    id: row.id,
+    coachId: row.coach_id,
+    groupJid: row.group_jid,
+    idempotencyKey: row.idempotency_key,
+    status: row.status,
+    waMessageId: row.wa_message_id,
+    error: row.error,
+    dispatchAttempted: row.dispatch_attempted,
+    createdAt: row.created_at,
+    sentAt: row.sent_at,
   };
 }
 
@@ -402,6 +484,14 @@ export class BridgeStore {
       .gte("created_at", midnightUtc.toISOString());
     if (error) throw error;
     const rows = (data ?? []) as { status: MessageStatus; dispatch_attempted: boolean; sent_at: string | null; created_at: string }[];
+    // Group posts share the same pacer slot and daily budget (one WhatsApp frame = one slot).
+    const { data: groupData, error: groupError } = await this.supabase
+      .from("whatsapp_group_posts")
+      .select("status, dispatch_attempted, sent_at, created_at")
+      .eq("coach_id", coachId)
+      .gte("created_at", midnightUtc.toISOString());
+    if (groupError) throw groupError;
+    rows.push(...((groupData ?? []) as typeof rows));
     let attemptCount = 0;
     let lastAttemptAt: string | null = null;
     for (const row of rows) {
@@ -460,6 +550,143 @@ export class BridgeStore {
       .order("created_at", { ascending: true });
     if (error) throw error;
     return ((data ?? []) as MessageRow[]).map(mapMessage);
+  }
+
+  // -------------------------------------------------------------------------
+  // whatsapp_group_jobs / whatsapp_group_posts (0005) — bridge-owned group ledgers.
+  // Jobs hold per-phone results (needed by the portal to reconcile); posts hold
+  // NO message body, same posture as whatsapp_messages.
+  // -------------------------------------------------------------------------
+
+  /** A `create` row is inserted already `done` with the creation's participant results (one query then gives both daily counts). */
+  async createGroupJob(
+    coachId: string,
+    groupJid: string,
+    requestedCount: number,
+    kind: "add" | "create" = "add",
+    initial?: { results: AddJobResult[]; status: "done" }
+  ): Promise<GroupJobRecord> {
+    const row: Record<string, unknown> = { coach_id: coachId, group_jid: groupJid, kind, requested_count: requestedCount };
+    if (initial) {
+      row.status = initial.status;
+      row.results = initial.results;
+      row.finished_at = new Date().toISOString();
+    }
+    const { data, error } = await this.supabase.from("whatsapp_group_jobs").insert(row).select("*").maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error("[store] group job insert returned no row");
+    return mapGroupJob(data as GroupJobRow);
+  }
+
+  /** queued -> running; the row count says who won. */
+  async markGroupJobRunning(id: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_group_jobs")
+      .update({ status: "running", started_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("status", "queued")
+      .select("id");
+    if (error) throw error;
+    return (data?.length ?? 0) > 0;
+  }
+
+  async finishGroupJob(id: string, results: AddJobResult[], status: "done" | "interrupted"): Promise<void> {
+    const { error } = await this.supabase
+      .from("whatsapp_group_jobs")
+      .update({ status, results, finished_at: new Date().toISOString() })
+      .eq("id", id)
+      .in("status", ["queued", "running"]);
+    if (error) throw error;
+  }
+
+  async getGroupJob(coachId: string, id: string): Promise<GroupJobRecord | null> {
+    const { data, error } = await this.supabase.from("whatsapp_group_jobs").select("*").eq("coach_id", coachId).eq("id", id).maybeSingle();
+    if (error) throw error;
+    return data ? mapGroupJob(data as GroupJobRow) : null;
+  }
+
+  /** Boot sweep: a job still running (or queued) belongs to a dead process. It is marked interrupted and never resumed. */
+  async sweepInterruptedGroupJobs(coachId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from("whatsapp_group_jobs")
+      .update({ status: "interrupted", finished_at: new Date().toISOString() })
+      .eq("coach_id", coachId)
+      .in("status", ["running", "queued"]);
+    if (error) throw error;
+  }
+
+  /** Seeds GroupLimiter at session start: adds = sum of requested phones in today's add jobs, creates = today's create rows. */
+  async countGroupActivityToday(coachId: string): Promise<{ addsToday: number; createsToday: number }> {
+    const midnightUtc = new Date();
+    midnightUtc.setUTCHours(0, 0, 0, 0);
+    const { data, error } = await this.supabase
+      .from("whatsapp_group_jobs")
+      .select("kind, requested_count")
+      .eq("coach_id", coachId)
+      .gte("created_at", midnightUtc.toISOString());
+    if (error) throw error;
+    let addsToday = 0;
+    let createsToday = 0;
+    for (const row of (data ?? []) as { kind: "add" | "create"; requested_count: number }[]) {
+      if (row.kind === "add") addsToday += row.requested_count;
+      else createsToday += 1;
+    }
+    return { addsToday, createsToday };
+  }
+
+  async acceptGroupPost(coachId: string, idempotencyKey: string, groupJid: string): Promise<{ record: GroupPostRecord; fresh: boolean }> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_group_posts")
+      .insert({ coach_id: coachId, idempotency_key: idempotencyKey, group_jid: groupJid })
+      .select("*")
+      .maybeSingle();
+    if (!error && data) return { record: mapGroupPost(data as GroupPostRow), fresh: true };
+    if (error && error.code !== "23505") throw error;
+    const existing = await this.getGroupPost(coachId, idempotencyKey);
+    if (!existing) throw new Error("[store] group post idempotency conflict but existing row not found — should be impossible");
+    return { record: existing, fresh: false };
+  }
+
+  async getGroupPost(coachId: string, idempotencyKey: string): Promise<GroupPostRecord | null> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_group_posts")
+      .select("*")
+      .eq("coach_id", coachId)
+      .eq("idempotency_key", idempotencyKey)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapGroupPost(data as GroupPostRow) : null;
+  }
+
+  /** accepted -> sending: the only gate to an actual group send. */
+  async claimGroupPost(id: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_group_posts")
+      .update({ status: "sending" })
+      .eq("id", id)
+      .eq("status", "accepted")
+      .select("id");
+    if (error) throw error;
+    return (data?.length ?? 0) > 0;
+  }
+
+  async markGroupPostSent(id: string, waMessageId: string | null): Promise<void> {
+    const { error } = await this.supabase
+      .from("whatsapp_group_posts")
+      .update({ status: "sent", wa_message_id: waMessageId, dispatch_attempted: true, sent_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("status", "sending");
+    if (error) throw error;
+  }
+
+  /** `error` is a FIXED reason string only, never upstream text. */
+  async markGroupPostFailed(id: string, errorMessage: string, dispatchAttempted: boolean): Promise<void> {
+    const { error } = await this.supabase
+      .from("whatsapp_group_posts")
+      .update({ status: "failed", error: errorMessage, dispatch_attempted: dispatchAttempted })
+      .eq("id", id)
+      .in("status", ["accepted", "sending"]);
+    if (error) throw error;
   }
 
   // -------------------------------------------------------------------------
