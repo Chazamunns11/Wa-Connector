@@ -68,6 +68,10 @@ session lease (`src/lock.ts`) makes an accidental second replica harmless
 Deploy order for the first live run: apply `supabase/migrations/0001_init.sql`
 → deploy bridge → set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
 
+Groups: apply `0005_groups.sql` (the order is 0001 to 0005) → set
+`WA_GROUPS_ENABLED=true` on the bridge → set `GROUPS_ENABLED=true` on the portal
+→ turn on the site flag. See "Groups first light" in `docs/GO-LIVE-FOUNDATION.md`.
+
 ## Key rotation (`WA_CREDS_KEY`)
 
 1. Generate a new key; set `WA_CREDS_KEY` to it and move the old value to
