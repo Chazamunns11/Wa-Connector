@@ -52,14 +52,15 @@ test("W38: the research line, its component and its data are gone", () => {
   assert.ok(!/Why we made it/.test(read("src/lib/site/sales-copy.ts")));
 });
 
-test("W38: the 85%+ note lives inside 'Read this before you sign up' and the hero footnote points at it", () => {
+test("the 85%+ note lives inside 'Why use us' and the hero footnote points at it", () => {
   const page = read("src/app/(site)/page.tsx");
-  const disclosure = page.slice(page.indexOf("copy.disclosure.heading"));
-  assert.ok(disclosure.includes('id="own-result"'));
-  assert.ok(disclosure.includes("result.note"));
-  assert.ok(page.indexOf('href="#own-result"') < page.indexOf("copy.disclosure.heading"));
-  assert.ok(page.indexOf("copy.disclosure.heading") < page.indexOf("copy.faqHeading"));
-  assert.ok(page.indexOf("<FeatureList") < page.indexOf("copy.disclosure.heading"));
+  const why = page.slice(page.indexOf("copy.reasons.heading"));
+  assert.ok(why.includes('id="own-result"'));
+  assert.ok(why.includes("result.note"));
+  assert.ok(page.indexOf('href="#own-result"') < page.indexOf("copy.reasons.heading"));
+  assert.ok(page.indexOf("copy.reasons.heading") < page.indexOf("copy.faqHeading"));
+  assert.ok(page.indexOf("<FeatureList") < page.indexOf("copy.reasons.heading"));
+  assert.ok(!/copy\.disclosure/.test(page), "the disclosure block is gone");
 });
 
 test("owner's own average: figures, honest framing, and nothing banned (Rulings W25/W27)", async () => {

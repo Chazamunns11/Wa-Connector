@@ -55,11 +55,12 @@ test("daily-cap, stop and white-label answers state the real behaviour", () => {
 });
 
 // Task 13: salesCopy is the home page's voice: setup steps moved under `setup`, hook and keepWorkflows are gone.
-test("salesCopy has 3 setup steps, the three safety items and the disclosure block", () => {
+test("salesCopy has 3 setup steps, the three safety items and the Why use us reasons", () => {
   const c = salesCopy(brand);
   assert.equal(c.setup.steps.length, 3);
   assert.equal(c.safety.length, 3);
-  assert.equal(c.disclosure.paragraphs.length, 3);
+  assert.equal(c.reasons.items.length, 6);
+  assert.ok(!("disclosure" in c), "the disclosure block is gone (owner, 2026-10-17)");
   assert.ok(!("why" in c), "Why we made it is gone (W38)");
   const titles = c.safety.map((s) => s.title.toLowerCase()).join("|");
   assert.match(titles, /pac/);
@@ -87,9 +88,9 @@ test("sales copy has no staccato fragments", () => {
   }
 });
 
-test("the disclosure block says the uncomfortable things once, plainly", () => {
-  const d = salesCopy(brand).disclosure.paragraphs.join(" ");
-  assert.match(d, /linked device/);
+test("the home FAQ says the uncomfortable things plainly now the disclosure block has gone", () => {
+  const home = faqEntries(brand).filter((e) => (HOME_FAQ_IDS as readonly string[]).includes(e.id));
+  const d = home.map((e) => e.answer).join(" ");
   assert.match(d, /not the official WhatsApp Business API/);
   assert.match(d, /restrict or ban/);
   assert.match(d, /can't promise/);
@@ -99,11 +100,20 @@ test("the disclosure block says the uncomfortable things once, plainly", () => {
   assert.ok(!/from your account/.test(stop));
 });
 
-test("home FAQ ids are a subset of the twelve and leave out what the disclosure block says", () => {
+test("Why use us: one footnoted claim, no per-message fee, prices left to the pricing strip", () => {
+  const r = salesCopy(brand).reasons;
+  assert.match(r.heading, /^Why use /);
+  assert.equal(r.items.filter((i) => i.footnote).length, 1);
+  const text = r.items.map((i) => i.body).join(" ");
+  assert.ok(!/£/.test(text), "prices live in PricingSummary");
+  assert.match(text, /charge per message/);
+});
+
+test("home FAQ ids are a subset of the twelve and include the linked-device and ban-risk answers", () => {
   for (const id of HOME_FAQ_IDS) assert.ok((FAQ_IDS as readonly string[]).includes(id), id);
-  assert.ok(!(HOME_FAQ_IDS as readonly string[]).includes("ban-risk"));
-  assert.ok(!(HOME_FAQ_IDS as readonly string[]).includes("official-api"));
-  assert.equal(HOME_FAQ_IDS.length, 7);
+  assert.ok((HOME_FAQ_IDS as readonly string[]).includes("ban-risk"));
+  assert.ok((HOME_FAQ_IDS as readonly string[]).includes("official-api"));
+  assert.equal(HOME_FAQ_IDS.length, 9);
 });
 
 test("copy says GoHighLevel, not GHL, in customer-facing strings", () => {

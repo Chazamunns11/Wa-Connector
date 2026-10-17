@@ -99,7 +99,7 @@ test("14B home page: grounds run dark, white features, coral, slab, mist, coral"
   assert.match(heroSection, /surface-dark/);
   const h1 = p.slice(p.indexOf("<h1"), p.indexOf("</h1>"));
   assert.match(h1, /copy\.heroH1/);
-  assert.ok(p.indexOf('id="own-result"') > p.indexOf("copy.disclosure.heading"), "footnote target sits inside the disclosure block");
+  assert.ok(p.indexOf('id="own-result"') > p.indexOf("copy.reasons.heading"), "footnote target sits inside the Why use us block");
   assert.match(p, /<HowItWorks steps=\{copy\.setup\.steps\} \/>/);
   assert.ok(!/aside=/.test(p));
   assert.match(p, /<CustomerResults/);

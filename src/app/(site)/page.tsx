@@ -79,17 +79,27 @@ export default function HomePage() {
 
       <CustomerResults headingClass={H2} />
 
-      <section className={BAND}>
+      <section id="why" className={`${BAND} scroll-mt-4`}>
         <Container>
-          <div className="slab slab-lift grid gap-[clamp(24px,4vw,64px)] p-[clamp(24px,5vw,56px)] min-[901px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-            <h2 className={`${H2} max-w-[11ch]`}>{copy.disclosure.heading}</h2>
-            <div className="grid gap-[18px]">
-              {copy.disclosure.paragraphs.map((p) => (
-                <p key={p} className="max-w-[58ch]">
-                  {p}
-                </p>
-              ))}
-              <p id="own-result" className="max-w-[58ch] scroll-mt-6 small border-t-2 border-rule pt-4">
+          <div className="slab slab-lift grid gap-[clamp(24px,4vw,64px)] p-[clamp(24px,5vw,56px)] min-[901px]:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+            <h2 className={`${H2} max-w-[9ch]`}>{copy.reasons.heading}</h2>
+            <div>
+              <ul className="grid list-none gap-x-10 gap-y-7 p-0 min-[641px]:grid-cols-2">
+                {copy.reasons.items.map((r) => (
+                  <li key={r.title} className="border-t-2 border-rule pt-4">
+                    <h3 className="h-item font-display">{r.title}</h3>
+                    <p className="mt-2 max-w-[48ch]">
+                      {r.body}
+                      {r.footnote ? (
+                        <a href="#own-result" aria-label="Footnote 1" className="ml-0.5 font-bold underline underline-offset-2">
+                          <sup>1</sup>
+                        </a>
+                      ) : null}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              <p id="own-result" className="mt-8 max-w-[62ch] scroll-mt-6 small">
                 <span aria-hidden="true">1 </span>
                 {result.note}
               </p>
