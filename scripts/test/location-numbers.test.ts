@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { nextFreeSlot, promoteAfterRemoval, shouldReplaceSticky } from "@/lib/location-numbers";
+import { locationTenantIds, nextFreeSlot, promoteAfterRemoval, shouldReplaceSticky } from "@/lib/location-numbers";
 
 test("nextFreeSlot returns the lowest free slot, or null when full", () => {
   assert.equal(nextFreeSlot([]), 1);
@@ -52,4 +52,28 @@ test("shouldReplaceSticky only replaces with a strictly newer inbound", () => {
   assert.equal(shouldReplaceSticky("2026-10-17T11:00:00.000Z", "2026-10-17T10:00:00.000Z"), false);
   // Postgres returns +00:00 offsets; compare instants, not strings.
   assert.equal(shouldReplaceSticky("2026-10-17T10:00:00+00:00", "2026-10-17T10:00:00.000Z"), false);
+});
+
+test("locationTenantIds lists every number of each account's location, plus the account tenant", () => {
+  const accounts = [
+    { locationId: "loc-1", tenantId: "t-default-1" },
+    { locationId: "loc-2", tenantId: "t-only-2" },
+  ];
+  const numbers = [
+    { locationId: "loc-1", tenantId: "t-default-1" },
+    { locationId: "loc-1", tenantId: "t-slot2-1" },
+    { locationId: "loc-1", tenantId: "t-old-default-1" },
+    // A number of a location not in `accounts` (e.g. an inactive one) is left out.
+    { locationId: "loc-3", tenantId: "t-inactive-3" },
+  ];
+  const result = locationTenantIds(accounts, numbers);
+  assert.deepEqual([...result.keys()], ["loc-1", "loc-2"]);
+  assert.deepEqual(result.get("loc-1"), ["t-default-1", "t-slot2-1", "t-old-default-1"]);
+  // No number rows yet: the account tenant alone (pre-0003 install).
+  assert.deepEqual(result.get("loc-2"), ["t-only-2"]);
+});
+
+test("locationTenantIds keeps the account tenant even when the number rows have moved on", () => {
+  const result = locationTenantIds([{ locationId: "loc-1", tenantId: "t-a" }], [{ locationId: "loc-1", tenantId: "t-b" }]);
+  assert.deepEqual(result.get("loc-1"), ["t-a", "t-b"]);
 });

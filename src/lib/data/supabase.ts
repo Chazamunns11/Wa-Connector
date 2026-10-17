@@ -40,7 +40,7 @@ import {
   type GhlOutboundHealthRow,
   type GhlWaitingHealthRow,
 } from "@/lib/ghl-health";
-import { nextFreeSlot, promoteAfterRemoval, shouldReplaceSticky } from "@/lib/location-numbers";
+import { locationTenantIds, nextFreeSlot, promoteAfterRemoval, shouldReplaceSticky } from "@/lib/location-numbers";
 import { isWhatsappGroupJid } from "@/lib/whatsapp-bridge";
 import type { GhlRepository } from "./repository";
 
@@ -475,6 +475,18 @@ async function ensureDefaultNumberRow(locationId: string, tenantId: string) {
     .from("ghl_location_numbers")
     .insert({ tenant_id: tenantId, location_id: locationId, slot: 1, is_default: true });
   if (error && !isUniqueViolation(error)) throw error;
+}
+
+/**
+ * The `ghl_location_numbers` (location, tenant) pairs of the given locations.
+ * Bounded: at most three rows per location.
+ */
+async function listAllLocationNumberTenants(locationIds: string[]): Promise<{ locationId: string; tenantId: string }[]> {
+  if (locationIds.length === 0) return [];
+  const supabase = getServiceClient();
+  const { data, error } = await supabase.from("ghl_location_numbers").select("location_id, tenant_id").in("location_id", locationIds);
+  if (error) throw error;
+  return ((data ?? []) as { location_id: string; tenant_id: string }[]).map((r) => ({ locationId: r.location_id, tenantId: r.tenant_id }));
 }
 
 /** Make `number` the location's one default, and mirror its tenant to `ghl_accounts.tenant_id`. */
@@ -1152,16 +1164,27 @@ export class SupabaseGhlRepository implements GhlRepository {
    * to `ghl_accounts` (unlike `ghl_outbound_messages.location_id`), so this
    * is the same two-query equivalent `getUnprocessedWhatsappInboundMessages`
    * already uses for its coach-kind fence — read every ACTIVE GHL location's
-   * tenant id (bounded — one row per installed location), then `.in()`
-   * against it. See `Repository.getUnprocessedGhlInboundMessages`'s JSDoc for
+   * tenant ids (each of its numbers plus the account's own tenant; bounded —
+   * at most three numbers per installed location), then `.in()` against them. See `Repository.getUnprocessedGhlInboundMessages`'s JSDoc for
    * why `push_attempts` is deliberately NOT filtered here.
    */
   async getUnprocessedGhlInboundMessages(limit = 50) {
     const supabase = getServiceClient();
-    const { data: activeAccounts, error: accountsError } = await supabase.from("ghl_accounts").select("tenant_id").eq("status", "active");
+    const { data: activeAccounts, error: accountsError } = await supabase
+      .from("ghl_accounts")
+      .select("location_id, tenant_id")
+      .eq("status", "active");
     if (accountsError) throw accountsError;
-    const activeTenantIds = ((activeAccounts ?? []) as { tenant_id: string }[]).map((a) => a.tenant_id);
-    if (activeTenantIds.length === 0) return [];
+    const accounts = ((activeAccounts ?? []) as { location_id: string; tenant_id: string }[]).map((a) => ({
+      locationId: a.location_id,
+      tenantId: a.tenant_id,
+    }));
+    if (accounts.length === 0) return [];
+    // Every number of every active location, not just the default
+    // (`ghl_accounts.tenant_id`): replies to a non-default number, or to a
+    // number that was the default before "Make default", must drain too.
+    const numbers = await listAllLocationNumberTenants(accounts.map((a) => a.locationId));
+    const activeTenantIds = [...locationTenantIds(accounts, numbers).values()].flat();
     // Media plan (docs/MEDIA-PLAN.md §6.1/§6.5) — over-fetch by `limit` extra
     // rows before applying the fresh-pending exclusion in JS (PostgREST has
     // no clean "exclude rows matching BOTH of these two column conditions

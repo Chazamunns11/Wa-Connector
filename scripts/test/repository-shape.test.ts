@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { GhlRepository } from "@/lib/data/repository";
 import { SupabaseGhlRepository } from "@/lib/data/supabase";
 
@@ -91,4 +92,20 @@ test("getWhatsappSessionSummaries: non-owner scope resolves to [] without queryi
     if (saved.url !== undefined) process.env.NEXT_PUBLIC_SUPABASE_URL = saved.url;
     if (saved.key !== undefined) process.env.SUPABASE_SERVICE_ROLE_KEY = saved.key;
   }
+});
+
+/** The body of one `async name(` method of SupabaseGhlRepository, up to the next method. */
+function methodSource(name: string): string {
+  const source = readFileSync(new URL("../../src/lib/data/supabase.ts", import.meta.url), "utf8");
+  const start = source.indexOf(`  async ${name}(`);
+  assert.ok(start >= 0, `method ${name} not found`);
+  const next = source.indexOf("\n  async ", start + 1);
+  return source.slice(start, next < 0 ? undefined : next);
+}
+
+test("the GHL inbound drain fences on every number of each active location, not only the default", () => {
+  const body = methodSource("getUnprocessedGhlInboundMessages");
+  assert.match(body, /listAllLocationNumberTenants\(/);
+  assert.match(body, /locationTenantIds\(/);
+  assert.match(body, /\.in\("coach_id", activeTenantIds\)/);
 });

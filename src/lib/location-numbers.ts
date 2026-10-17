@@ -83,3 +83,21 @@ export function shouldReplaceSticky(existingIso: string | null, incomingIso: str
   if (existingIso === null) return true;
   return Date.parse(incomingIso) > Date.parse(existingIso);
 }
+
+/**
+ * Every tenant (WhatsApp number) of each given account's location, keyed by
+ * location id: the account's own tenant (`ghl_accounts.tenant_id`, which
+ * mirrors the default, and is the only one for a location with no
+ * `ghl_location_numbers` rows yet) first, then each number row's tenant.
+ * Number rows for a location not in `accounts` are left out, so passing only
+ * the active accounts fences out inactive locations' numbers.
+ */
+export function locationTenantIds(
+  accounts: { locationId: string; tenantId: string }[],
+  numbers: { locationId: string; tenantId: string }[]
+): Map<string, string[]> {
+  const byLocation = new Map<string, Set<string>>();
+  for (const account of accounts) byLocation.set(account.locationId, new Set([account.tenantId]));
+  for (const number of numbers) byLocation.get(number.locationId)?.add(number.tenantId);
+  return new Map([...byLocation].map(([locationId, tenantIds]) => [locationId, [...tenantIds]]));
+}
