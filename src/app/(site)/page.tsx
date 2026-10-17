@@ -24,7 +24,7 @@ export function generateMetadata(): Metadata {
   };
 }
 
-const H2 = "h2-b font-display font-extrabold";
+const H2 = "h-page font-display";
 const BAND = "band";
 const GAP = "gap-[clamp(24px,5vw,80px)]";
 
@@ -32,7 +32,7 @@ function Sample({ caption, children }: { caption: string; children: ReactNode })
   return (
     <figure className="m-0">
       {children}
-      <figcaption className="mt-3 text-[0.95rem] font-medium">{caption}</figcaption>
+      <figcaption className="mt-3 small font-medium">{caption}</figcaption>
     </figure>
   );
 }
@@ -44,21 +44,21 @@ export default function HomePage() {
   const home = faqEntries(brand).filter((e) => (HOME_FAQ_IDS as readonly string[]).includes(e.id));
   return (
     <>
-      <section className="surface-coral pb-0">
+      <section className="surface-dark pb-0">
         <Container>
           <div className="hero-grid">
             <div>
-              <h1 className="hero-h1 font-display font-extrabold">
+              <h1 className="hero-h1 h-hero font-display">
                 {result.headingLead} {result.headingTail} <span className="hero-big">{result.after}</span>
               </h1>
-              <p className="mt-1.5 text-[0.95rem] font-semibold">
+              <p className="small mt-1.5 font-semibold">
                 <a href="#own-result" aria-label="Our own average, footnote 1" className="inline-flex min-h-6 items-center underline underline-offset-2">
                   Our own average<sup aria-hidden="true" className="ml-0.5 text-xs font-bold">1</sup>
                 </a>
               </p>
               <p className="mt-7 max-w-[46ch] text-[clamp(1.1rem,1.6vw,1.3rem)] font-medium leading-[1.45]">{copy.heroSub}</p>
               <div className="mt-7">
-                <Cta onCoral label={copy.ctaLabel} secondary={{ href: SITE_ROUTES.setup, label: "Read the setup guide" }} note={copy.ctaNote} />
+                <Cta ground="dark" label={copy.ctaLabel} secondary={{ href: SITE_ROUTES.setup, label: "Read the setup guide" }} note={copy.ctaNote} />
               </div>
             </div>
             <div className="relative z-[3] max-[900px]:mt-6">
@@ -68,7 +68,7 @@ export default function HomePage() {
         </Container>
       </section>
 
-      <section id="how-it-works" className={`hang-pad surface-dark ${BAND} scroll-mt-4`}>
+      <section id="how-it-works" className={`hang-pad surface-coral ${BAND} scroll-mt-4`}>
         <Container>
           <h2 className={`${H2} max-w-[14ch]`}>{copy.setup.heading}</h2>
           <p className="mt-4 max-w-[52ch] text-xl text-ink-dim">{copy.setup.lead}</p>
@@ -92,7 +92,7 @@ export default function HomePage() {
 
       <CustomerResults headingClass={H2} />
 
-      <section className={`surface-coral ${BAND}`}>
+      <section className={BAND}>
         <Container>
           <div className={`grid ${GAP} min-[901px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]`}>
             <h2 className={`${H2} max-w-[10ch]`}>{copy.safetyHeading}</h2>
@@ -104,14 +104,14 @@ export default function HomePage() {
       <section className={BAND}>
         <Container>
           <div className="slab slab-lift grid gap-[clamp(24px,4vw,64px)] p-[clamp(24px,5vw,56px)] min-[901px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-            <h2 className="font-display text-[clamp(1.9rem,4vw,3rem)] font-extrabold leading-[0.98] tracking-[-0.025em] max-w-[11ch]">{copy.disclosure.heading}</h2>
+            <h2 className={`${H2} max-w-[11ch]`}>{copy.disclosure.heading}</h2>
             <div className="grid gap-[18px]">
               {copy.disclosure.paragraphs.map((p) => (
                 <p key={p} className="max-w-[58ch]">
                   {p}
                 </p>
               ))}
-              <p id="own-result" className="max-w-[58ch] scroll-mt-6 border-t-2 border-rule pt-4 text-[0.95rem]">
+              <p id="own-result" className="max-w-[58ch] scroll-mt-6 small border-t-2 border-rule pt-4">
                 <span aria-hidden="true">1 </span>
                 {result.note}
               </p>
@@ -136,7 +136,7 @@ export default function HomePage() {
         </Container>
       </section>
 
-      <section className="surface-coral py-[clamp(40px,6vw,72px)]">
+      <section className="surface-coral band-tight">
         <Container>
           <PricingSummary ctaLabel={copy.ctaLabel} terms={copy.priceStrip.terms} />
         </Container>

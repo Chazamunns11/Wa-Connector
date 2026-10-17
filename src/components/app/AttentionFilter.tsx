@@ -25,7 +25,7 @@ export function AttentionFilter({
             key={i.id}
             href={dashboardHref({ filter: i.id })}
             aria-current={current ? "page" : undefined}
-            className={`${LINK} ${current ? "border-accent bg-accent text-accent-ink" : "border-border-strong text-ink hover:bg-raised"}`}
+            className={`${LINK} ${current ? "border-accent bg-accent text-accent-ink" : "border-outline text-ink hover:bg-raised"}`}
           >
             {i.label} ({i.n})
           </Link>

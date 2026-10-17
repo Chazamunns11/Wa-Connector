@@ -1,39 +1,24 @@
 @import "tailwindcss";
 
-/* PINGWREN THEME. Cream is the default ground; Ink sections opt in with
-   `.surface-dark`. Token NAMES are the old ones on purpose (bg, card, raised,
+/* PINGWREN THEME, one token system in three scopes.
+   Light (the page default, White ground), `.surface-dark` (Ink: the header, the
+   first band of every page, the footer) and `.surface-coral` (Coral: at most two
+   bands per page). Token NAMES are the old ones on purpose (bg, card, raised,
    well, ink = the TEXT colour, accent...), so call sites repaint without
    per-component hexes. Brand swatches (public/brand/README.md):
-   Ink #1B1F2A, Wren #7A4E2D, Tan #D9A47A, Cream #F6F1EA, Coral #FF5A36.
-   Every text pairing below is >= 4.5:1; borders that mark a control are
-   >= 3:1 (docs/design/website/README.md, "PingWren brand applied"). */
+   Ink #1B1F2A, Tan #D9A47A, Coral #FF5A36. Cream and Wren are retired.
+   Every text pairing is >= 4.5:1; the table is docs/design/website/SITE-PASS.md
+   section 1. White on Coral is never used (3.1:1): Coral carries Ink text.
+
+   Borders are information, three weights with one job each:
+     3px  --color-outline  the edge of an object you could pick up
+     2px  --color-rule     a rule between items in a list
+     1px  --color-border   a hairline inside a sample screen or an app table
+   Radius: 4 chips, 8 inputs, 12 notes and alerts, 20 slabs/boards/panels,
+   24 .slab-lift only, 999 pills. */
+
+/* Shared by every scope: fonts, easing, status colours, message-bubble paper. */
 :root {
-  /* Grounds: Cream page, white panels, a deeper sand for raised bands. */
-  --color-bg: #FFFFFF;
-  --color-card: #FFFFFF;
-  --color-raised: #EEF0F4;
-  --color-well: #FFFFFF;
-
-  /* Hairlines (decorative panel edges) and the stronger edge that marks a
-     control (inputs, secondary buttons, tabs): 3.3:1 on Cream. */
-  --color-border: rgba(27, 31, 42, 0.14);
-  --color-divider: rgba(27, 31, 42, 0.09);
-  --color-border-strong: #8C8478;
-
-  /* Text: Ink body, a softer Ink for secondary copy, a muted Ink for meta. */
-  --color-ink: #1B1F2A;
-  --color-ink-dim: #454A57;
-  --color-ink-faint: #5F6270;
-
-  /* Accent: Coral fills (buttons, step rules, the one diagram highlight) always
-     carry Ink text (5.3:1); white on Coral is 3.1:1 and is not used. Coral is
-     not readable as small text on Cream, so accent TEXT and links are Wren
-     (6.3:1). The dark scope swaps Wren for Tan. */
-  --color-accent: #FF5A36;
-  --color-accent-ink: #1B1F2A;
-  --color-accent-text: #1B1F2A;
-  --color-focus: #1B1F2A;
-
   /* Status: deep, distinct hues on solid tints, text >= 5.9:1. Win is a forest
      green, nowhere near WhatsApp's. A word always accompanies the colour. */
   --color-win: #17663F;
@@ -46,9 +31,10 @@
   --color-info-soft: #E2ECF7;
   --color-accent-soft: #FFE6DE;
 
-  /* Message bubbles are Paper with Ink text on every ground (Cream or Ink). */
+  /* Message bubbles are Paper with Ink text on every ground. */
   --color-paper: #FFFFFF;
   --color-paper-ink: #1B1F2A;
+  --color-sms: #EEF0F4;
 
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
@@ -57,24 +43,48 @@
   --font-mono: var(--font-jetbrains-mono);
 }
 
-/**
- * Ink scope: header, hero, feature bands, footer. Same token names, flipped to
- * the dark half of the palette: Cream text, Tan links (the kit's "wren on
- * dark"), Coral accent. The logo on these sections is the reverse artwork.
- */
+/* Light scope: White ground, Mist for the FAQ band and wells. */
+:root {
+  --color-bg: #FFFFFF;
+  --color-card: #FFFFFF;
+  --color-raised: #EEF0F4;
+  --color-well: #EEF0F4;
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #4A5162;
+  --color-ink-faint: #4A5162;
+  --color-accent: #FF5A36;
+  --color-accent-ink: #1B1F2A;
+  --color-accent-text: #1B1F2A;
+  --color-rule: #1B1F2A;
+  --color-outline: #1B1F2A;
+  --color-border: #D5D9E1;
+  --color-divider: #D5D9E1;
+  --color-border-strong: #1B1F2A;
+  --color-chip: #EEF0F4;
+  --color-chip-ink: #1B1F2A;
+  --color-focus: #1B1F2A;
+}
+
+/* Ink scope: the header, the first band, the footer. Same token names, flipped
+   to the dark half of the palette: white text, Coral rules and fills. The logo
+   on these sections is the reverse artwork. */
 .surface-dark {
   --color-bg: #1B1F2A;
   --color-card: #242938;
   --color-raised: #2D3345;
   --color-well: #151823;
-  --color-border: rgba(246, 241, 234, 0.16);
-  --color-divider: rgba(246, 241, 234, 0.1);
-  --color-border-strong: #7E8290;
   --color-ink: #FFFFFF;
-  --color-ink-dim: #D3CCC0;
-  --color-ink-faint: #A8A296;
-  --color-accent-text: #D9A47A;
-  --color-focus: #D9A47A;
+  --color-ink-dim: #E4E7EE;
+  --color-ink-faint: #C3C7D1;
+  --color-accent-text: #FFFFFF;
+  --color-rule: #FF5A36;
+  --color-outline: #FFFFFF;
+  --color-border: rgba(255, 255, 255, 0.18);
+  --color-divider: rgba(255, 255, 255, 0.12);
+  --color-border-strong: #FFFFFF;
+  --color-chip: #FF5A36;
+  --color-chip-ink: #1B1F2A;
+  --color-focus: #FFFFFF;
   --color-win: #6FD0A0;
   --color-loss: #FF8F86;
   --color-warn: #F2B23E;
@@ -88,9 +98,27 @@
   color: var(--color-ink);
 }
 
-/* Legacy alias: docs and legal wrappers still say `surface-light`; it is now
-   simply the default Cream theme restated. */
-.surface-light {
+/* Coral scope: every text token is Ink because nothing lighter passes on Coral
+   (#4A5162 is 2.9:1). The primary button here is an Ink pill. */
+.surface-coral {
+  --color-bg: #FF5A36;
+  --color-card: #FFFFFF;
+  --color-raised: #FFFFFF;
+  --color-well: #FFFFFF;
+  --color-ink: #1B1F2A;
+  --color-ink-dim: #1B1F2A;
+  --color-ink-faint: #1B1F2A;
+  --color-accent: #1B1F2A;
+  --color-accent-ink: #FFFFFF;
+  --color-accent-text: #1B1F2A;
+  --color-rule: #1B1F2A;
+  --color-outline: #1B1F2A;
+  --color-border: rgba(27, 31, 42, 0.35);
+  --color-divider: rgba(27, 31, 42, 0.25);
+  --color-border-strong: #1B1F2A;
+  --color-chip: #1B1F2A;
+  --color-chip-ink: #FFFFFF;
+  --color-focus: #1B1F2A;
   background-color: var(--color-bg);
   color: var(--color-ink);
 }
@@ -103,6 +131,11 @@
   --color-border: var(--color-border);
   --color-divider: var(--color-divider);
   --color-border-strong: var(--color-border-strong);
+  --color-outline: var(--color-outline);
+  --color-chip: var(--color-chip);
+  --color-chip-ink: var(--color-chip-ink);
+  --color-rule: var(--color-rule);
+  --color-sms: var(--color-sms);
 
   --color-ink: var(--color-ink);
   --color-ink-dim: var(--color-ink-dim);
@@ -132,6 +165,7 @@
     border-color: var(--color-border);
   }
 }
+
 
 html,
 body {
@@ -347,66 +381,10 @@ h2 {
 
 }
 
-/* ---- Task 13: Paper ground ----
-   A second :root block, appended so the earlier one stays untouched. Paper
-   (white) is the page ground; Cream becomes the one note band per page; Wren
-   (--color-rule) draws the 2px section rules. */
-:root {
-  --color-bg: #FFFFFF;
-  --color-raised: #EEF0F4;
-  --color-well: #EEF0F4;
-  --color-rule: #1B1F2A;
-  --color-sms: #E9E9EB;
-}
-
-.surface-dark {
-  --color-rule: #D9A47A;
-}
-
-@theme inline {
-  --color-rule: var(--color-rule);
-  --color-sms: var(--color-sms);
-}
-
 /* Marketing body copy: 17px on the printed-feeling Paper ground. */
 .site-body {
   font-size: 17px;
   line-height: 1.55;
-}
-
-/* The one section device: a 2px Wren rule the width of the column, 24px above
-   the heading. */
-.section-rule::before {
-  content: "";
-  display: block;
-  height: 2px;
-  width: 100%;
-  margin-bottom: 24px;
-  background: var(--color-rule);
-}
-
-/* Phone for the sample messages: device proportions (bezel, island, status
-   bar, composer, home bar) so it reads as a phone, not a card. A phone is a
-   light object even on an Ink section, so it restates the light-scope tokens
-   it needs. 13B reshaped this block from 13A's small card. */
-.phone {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  max-width: 272px;
-  padding: 9px;
-  border-radius: 40px;
-  --color-ink: #1B1F2A;
-  --color-ink-dim: #454A57;
-  --color-ink-faint: #5F6270;
-  --color-border: rgba(27, 31, 42, 0.14);
-  --color-well: #EEF0F4;
-  background: #0E1118;
-  color: var(--color-ink);
-  box-shadow:
-    0 0 0 1.5px #4A5163,
-    0 32px 56px -28px rgba(0, 0, 0, 0.7);
 }
 
 .phone-island {
@@ -588,70 +566,10 @@ h2 {
 
 /* Browser-ish chrome around a sample app screen. */
 .sample-chrome {
-  border: 3px solid var(--color-ink);
+  border: 3px solid var(--color-outline);
   border-radius: 20px;
   overflow: hidden;
   background: var(--color-card);
-  color: var(--color-ink);
-}
-
-/* ---- Task 14: Direction B (coral field) ----
-   Coral is a GROUND with Ink text only (white on Coral fails AA, W22/W36).
-   White and Ink sections, Mist for the FAQ and wells; no cream anywhere. */
-:root {
-  --color-bg: #FFFFFF;
-  --color-card: #FFFFFF;
-  --color-raised: #EEF0F4;
-  --color-well: #EEF0F4;
-  --color-border: #D5D9E1;
-  --color-divider: #D5D9E1;
-  --color-border-strong: #1B1F2A;
-  --color-ink: #1B1F2A;
-  --color-ink-dim: #4A5162;
-  --color-ink-faint: #4A5162;
-  --color-accent: #FF5A36;
-  --color-accent-ink: #1B1F2A;
-  --color-accent-text: #1B1F2A;
-  --color-rule: #1B1F2A;
-  --color-focus: #1B1F2A;
-  --color-sms: #EEF0F4;
-}
-
-.surface-dark {
-  --color-bg: #1B1F2A;
-  --color-card: #242938;
-  --color-raised: #2D3345;
-  --color-well: #151823;
-  --color-ink: #FFFFFF;
-  --color-ink-dim: #E4E7EE;
-  --color-ink-faint: #C3C7D1;
-  --color-accent-text: #FFFFFF;
-  --color-rule: #FF5A36;
-  --color-focus: #FFFFFF;
-  --color-border: rgba(255, 255, 255, 0.18);
-  --color-divider: rgba(255, 255, 255, 0.12);
-  --color-border-strong: #FFFFFF;
-}
-
-/* Coral scope: every text token is Ink because nothing lighter passes on Coral
-   (#4A5162 is 2.9:1). The primary button here is an Ink pill. */
-.surface-coral {
-  --color-bg: #FF5A36;
-  --color-card: #FFFFFF;
-  --color-raised: #FFFFFF;
-  --color-well: #FFFFFF;
-  --color-ink: #1B1F2A;
-  --color-ink-dim: #1B1F2A;
-  --color-ink-faint: #1B1F2A;
-  --color-accent: #1B1F2A;
-  --color-accent-ink: #FFFFFF;
-  --color-accent-text: #1B1F2A;
-  --color-rule: #1B1F2A;
-  --color-focus: #1B1F2A;
-  --color-border: rgba(27, 31, 42, 0.35);
-  --color-divider: rgba(27, 31, 42, 0.25);
-  --color-border-strong: #1B1F2A;
-  background-color: var(--color-bg);
   color: var(--color-ink);
 }
 
@@ -667,11 +585,62 @@ h3 {
   letter-spacing: -0.015em;
 }
 
-.h-display {
+/* ---- one heading scale, one small-text size, two band paddings ----
+   Four heading classes and the app's own. No inline clamp() on headings. */
+.h-hero {
+  font-size: clamp(2.3rem, 4.8vw, 4.25rem);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  font-weight: 800;
+}
+
+.h-page {
   font-size: clamp(2.1rem, 5.2vw, 4rem);
   line-height: 0.98;
   letter-spacing: -0.025em;
+  font-weight: 800;
 }
+
+.h-section {
+  font-size: clamp(1.5rem, 3vw, 2.2rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-weight: 800;
+}
+
+.h-item {
+  font-size: 1.35rem;
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+  font-weight: 800;
+}
+
+.h-app {
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  line-height: 1.15;
+  font-weight: 800;
+}
+
+/* Price and hero number. */
+.num-display {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  font-size: clamp(3.5rem, 8vw, 6rem);
+  font-weight: 800;
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small text: captions, footnotes, notes. 14px (text-sm) stays inside the app and the phone mock-ups only. */
+.small {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.band-tight {
+  padding-block: clamp(40px, 6vw, 72px);
+}
+
 
 .band {
   padding-block: clamp(64px, 9vw, 120px);
@@ -736,6 +705,15 @@ h3 {
   background: #FF7455;
 }
 
+/* On Ink the Coral pill needs no white keyline. */
+.surface-dark .btn-coral {
+  border-color: #FF5A36;
+}
+
+.surface-dark .btn-coral:hover {
+  border-color: #FF7455;
+}
+
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
   .btn:hover {
     transform: translateY(-2px);
@@ -761,7 +739,7 @@ h3 {
 
 /* ---- slab ---- */
 .slab {
-  border: 3px solid var(--color-ink);
+  border: 3px solid var(--color-outline);
   border-radius: 20px;
   background: var(--color-card);
   color: var(--color-ink);
@@ -794,11 +772,11 @@ h3 {
   grid-template-columns: auto 1fr;
   gap: 20px;
   padding: 22px 0;
-  border-top: 3px solid var(--color-rule);
+  border-top: 2px solid var(--color-rule);
 }
 
 .rules > li:last-child {
-  border-bottom: 3px solid var(--color-rule);
+  border-bottom: 2px solid var(--color-rule);
 }
 
 .rules > li > b {
@@ -869,7 +847,7 @@ h3 {
 /* ---- dashboard board ---- */
 .board {
   overflow: hidden;
-  border: 3px solid var(--color-ink);
+  border: 3px solid var(--color-outline);
   border-radius: 20px;
   background: var(--color-card);
   color: var(--color-ink);
@@ -938,8 +916,8 @@ h3 {
   margin-top: 12px;
   padding: 6px 10px;
   border-radius: 8px;
-  background: #FF5A36;
-  color: #1B1F2A;
+  background: var(--color-chip);
+  color: var(--color-chip-ink);
   font-size: 0.92rem;
   font-weight: 600;
   line-height: 1.35;
@@ -948,7 +926,7 @@ h3 {
 .step-num {
   display: block;
   margin-bottom: 18px;
-  color: #FF5A36;
+  color: var(--color-rule);
   font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
   font-size: clamp(4.5rem, 9vw, 8rem);
   font-weight: 800;
@@ -960,10 +938,16 @@ h3 {
    Both full height at every width (the SMS crop rules are gone, Task 14B).
    Hard offset shadow, no soft blur. */
 .phone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   width: clamp(158px, 22vw, 300px);
   max-width: none;
   height: auto;
+  padding: 9px;
   border-radius: 34px;
+  background: #0E1118;
+  color: var(--color-ink);
   --color-ink: #1B1F2A;
   --color-ink-dim: #4A5162;
   --color-ink-faint: #4A5162;
@@ -1038,11 +1022,9 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
+/* Size comes from .h-hero; this only sets the measure. */
 .hero-h1 {
   max-width: 15ch;
-  font-size: clamp(2.1rem, 4.6vw, 4.1rem);
-  line-height: 0.98;
-  letter-spacing: -0.03em;
 }
 
 
@@ -1055,12 +1037,6 @@ h3 {
 
 .hang-pad {
   padding-top: clamp(180px, 25vw, 340px);
-}
-
-.h2-b {
-  font-size: clamp(2.1rem, 5.2vw, 4rem);
-  line-height: 0.98;
-  letter-spacing: -0.025em;
 }
 
 .price-h2 {
@@ -1225,7 +1201,13 @@ h3 {
     display: none !important;
   }
 
-  .site-body > header,
+  /* The header is Ink with the reverse logo: keep it Ink in print so the logo stays legible. */
+  .site-body > header {
+    background: #1B1F2A !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
   .connect-sheet,
   .connect-sheet * {
     background: #fff !important;

@@ -81,10 +81,10 @@ export function AudienceTabs({
               tabIndex={enhanced && !selected ? -1 : 0}
               onClick={(e) => onClick(e, a)}
               onKeyDown={(e) => onKeyDown(e, a)}
-              className={`inline-flex min-h-11 items-center rounded border px-5 font-semibold ${
+              className={`inline-flex min-h-11 items-center rounded-[4px] border-2 px-5 font-semibold ${
                 selected
-                  ? "border-ink bg-ink text-bg"
-                  : "border-ink-faint text-ink-dim hover:border-ink hover:text-ink"
+                  ? "border-outline bg-ink text-bg"
+                  : "border-outline text-ink-dim hover:text-ink"
               }`}
             >
               {AUDIENCE_LABELS[a]}

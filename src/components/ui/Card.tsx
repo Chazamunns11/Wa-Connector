@@ -5,7 +5,7 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
   padded?: boolean;
 }
 
-/** Base panel: 8px radius, hairline border, no shadow. White on Cream, a lifted slate on Ink. */
+/** Base panel: 20px radius, 2px outline, no shadow. White on Cream, a lifted slate on Ink. */
 export function Card({
   children,
   padded = true,
@@ -14,7 +14,7 @@ export function Card({
 }: CardProps) {
   return (
     <div
-      className={`rounded-lg border bg-card ${
+      className={`rounded-[20px] border-2 border-outline bg-card ${
         padded ? "p-6" : ""
       } ${className}`}
       {...rest}

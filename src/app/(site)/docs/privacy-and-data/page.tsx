@@ -15,7 +15,7 @@ export function generateMetadata(): Metadata {
 
 export default function PrivacyAndDataPage() {
   const { name } = brandConfig();
-  const h2 = "mt-12 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em] first:mt-0";
+  const h2 = "mt-12 h-section font-display first:mt-0";
   const ul = "mt-3 grid max-w-[62ch] list-disc gap-2 pl-5 text-ink-dim marker:text-ink-faint";
   return (
     <>
@@ -28,7 +28,7 @@ export default function PrivacyAndDataPage() {
         .
       </p>
     </PageTop>
-    <section className="pb-12 pt-4 md:pb-20">
+    <section className="band">
       <Container>
         <div className="max-w-[760px]">
           <h2 className={h2}>What we store</h2>

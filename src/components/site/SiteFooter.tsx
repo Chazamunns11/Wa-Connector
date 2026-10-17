@@ -10,7 +10,7 @@ export function SiteFooter() {
   const { name, supportEmail, supportWhatsApp } = brandConfig();
   const waDigits = supportWhatsApp?.replace(/\D/g, "");
   return (
-    <footer className="surface-dark pb-10 pt-12 text-[.95rem] text-ink-dim">
+    <footer className="surface-dark pb-10 pt-12 small text-ink-dim">
       <Container className="flex flex-wrap justify-between gap-x-6 gap-y-6">
         <div className="grid max-w-[70ch] gap-4">
           <BrandMark surface="dark" size={40} />

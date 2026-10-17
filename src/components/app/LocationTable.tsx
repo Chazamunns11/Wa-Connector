@@ -38,7 +38,7 @@ export interface RowExtras {
 
 export function LocationTable({ rows, filter, connectLink, qr }: { rows: LocationRow[]; filter: string } & RowExtras) {
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
+    <div className="overflow-hidden rounded-[20px] border-2 border-outline bg-card">
       <div
         aria-hidden
         className={`hidden border-b bg-raised px-6 py-3 text-sm text-ink-faint md:grid md:grid-cols-[minmax(0,1.5fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1.6fr)] md:gap-4`}

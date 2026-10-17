@@ -13,7 +13,7 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   primary:
     "bg-accent text-accent-ink hover:brightness-105 active:brightness-95",
   secondary:
-    "border border-border-strong bg-transparent text-ink hover:bg-raised",
+    "border-2 border-outline bg-transparent text-ink hover:bg-raised",
   ghost: "bg-transparent text-ink-dim hover:text-ink hover:bg-raised",
   danger: "bg-loss-soft text-loss border border-loss/30 hover:bg-loss/20",
 };
@@ -36,7 +36,7 @@ const SIZE_CLASSES: Record<Size, string> = {
  * which is the part that would otherwise drift.
  */
 export function buttonClasses(variant: Variant = "primary", size: Size = "md", className = ""): string {
-  return `inline-flex items-center justify-center gap-2 rounded font-semibold transition-[color,background-color,border-color,filter,transform] duration-[120ms] active:scale-[.975] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`;
+  return `inline-flex items-center justify-center gap-2 rounded-full font-semibold transition-[color,background-color,border-color,filter,transform] duration-[120ms] active:scale-[.975] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`;
 }
 
 export function Button({

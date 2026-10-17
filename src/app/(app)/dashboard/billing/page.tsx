@@ -51,15 +51,15 @@ export default async function BillingPage({
   return (
     <Container className="py-8 md:py-12">
       <div className="mx-auto max-w-2xl">
-        <h1 className="font-display text-[clamp(28px,5vw,40px)] leading-[1.15]">Billing</h1>
+        <h1 className="h-app font-display">Billing</h1>
         {status.banner ? (
-          <div role="alert" className="mt-4 rounded-lg border border-loss/30 bg-loss-soft p-4 font-medium text-ink">
+          <div role="alert" className="mt-4 rounded-[12px] border-2 border-loss bg-loss-soft p-4 font-medium text-ink">
             {status.banner}
           </div>
         ) : null}
 
         {message ? (
-          <p role="status" className="mt-4 rounded-lg border border-info/30 bg-info-soft p-3 font-medium text-ink">
+          <p role="status" className="mt-4 rounded-[12px] border-2 border-info bg-info-soft p-3 font-medium text-ink">
             {message}
           </p>
         ) : null}

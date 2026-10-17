@@ -23,10 +23,10 @@ export function PlanHeader({
 }) {
   return (
     <header>
-      <h1 className="font-display text-[clamp(28px,5vw,40px)] leading-[1.15]">Dashboard</h1>
+      <h1 className="h-app font-display">Dashboard</h1>
       <p className="mt-2 text-ink-dim">{accountName}</p>
       {status.banner ? (
-        <div role="alert" className="mt-4 rounded-lg border border-loss/30 bg-loss-soft p-4 font-medium text-ink">
+        <div role="alert" className="mt-4 rounded-[12px] border-2 border-loss bg-loss-soft p-4 font-medium text-ink">
           {status.banner}
           {pendingCheckoutAction ? (
             <form action={pendingCheckoutAction} className="mt-3">

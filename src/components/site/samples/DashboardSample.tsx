@@ -56,7 +56,7 @@ export function DashboardSample() {
           <span>Sub-accounts</span>
           <span className="pill-sample">Sample</span>
         </div>
-        <div className={`hidden border-b-2 border-rule px-5 py-3.5 text-[0.9rem] font-semibold text-ink-dim ${GRID}`}>
+        <div className={`hidden border-b border-border px-5 py-3.5 small font-semibold text-ink-dim ${GRID}`}>
           <span>Sub-account</span>
           <span>WhatsApp status</span>
           <span>Sent today</span>
