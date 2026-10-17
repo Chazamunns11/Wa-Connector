@@ -18,13 +18,13 @@ function upd(status: number | undefined, over: { fromMe?: boolean; remoteJid?: s
 }
 
 test("receiptFromUpdate: status mapping and rejects", () => {
-  assert.deepEqual(receiptFromUpdate(upd(3)), { waMessageId: "WAID1", level: "delivered", isGroup: false });
+  assert.deepEqual(receiptFromUpdate(upd(3)), { waMessageId: "WAID1", level: "delivered" });
   assert.equal(receiptFromUpdate(upd(4))?.level, "read");
   assert.equal(receiptFromUpdate(upd(5))?.level, "read");
   assert.equal(receiptFromUpdate(upd(3, { fromMe: false })), null);
   assert.equal(receiptFromUpdate(upd(undefined)), null);
   assert.equal(receiptFromUpdate(upd(2)), null);
-  assert.equal(receiptFromUpdate(upd(3, { remoteJid: GROUP }))?.isGroup, true);
+  assert.equal(receiptFromUpdate(upd(3, { remoteJid: GROUP })), null);
 });
 
 /** Fake store with the real coalesce semantics: set once, read implies delivered. */
@@ -77,12 +77,46 @@ test("delivered after read changes nothing", async () => {
   assert.ok(readAt && readAt > first!);
 });
 
-test("group read is recorded as delivered only", async () => {
-  const { store, calls, row } = fakeStore();
+test("group update -> ignored", async () => {
+  const { store, calls } = fakeStore();
   const a = new ReceiptApplier(store);
-  await a.handle("c1", [upd(4, { remoteJid: GROUP })]);
-  assert.deepEqual(calls.map((x) => x.level), ["delivered"]);
-  assert.equal(row.read_at, null);
+  await a.handle("c1", [upd(3, { remoteJid: GROUP }), upd(4, { remoteJid: GROUP })]);
+  assert.equal(calls.length, 0);
+});
+
+test("pending keeps the first delivered time when a read arrives later", async () => {
+  const { store, calls, row } = fakeStore(false);
+  const { c, now } = clock();
+  const a = new ReceiptApplier(store, now);
+  await a.handle("c1", [upd(3)]);
+  c.t += 5_000;
+  await a.handle("c1", [upd(4)]);
+  c.t += 5_000;
+  await a.handle("c1", [upd(3)]); // repeat must not move the time
+  const deliveredAt = calls[0]!.atIso;
+  const readAt = calls[1]!.atIso;
+  assert.notEqual(deliveredAt, readAt);
+  row.exists = true;
+  const n = calls.length;
+  await a.afterSent("c1", "WAID1");
+  assert.deepEqual(calls.slice(n).map((x) => [x.level, x.atIso]), [["delivered", deliveredAt], ["read", readAt]]);
+  assert.equal(row.delivered_at, deliveredAt);
+  assert.equal(row.read_at, readAt);
+});
+
+test("pending TTL runs from the first sighting and later acks do not refresh it", async () => {
+  const { store, calls, row } = fakeStore(false);
+  const { c, now } = clock();
+  const a = new ReceiptApplier(store, now);
+  await a.handle("c1", [upd(3)]);
+  c.t += 40_000;
+  await a.handle("c1", [upd(4)]);
+  c.t += 30_000; // 70s after first sighting, 30s after the last ack
+  row.exists = true;
+  const n = calls.length;
+  await a.afterSent("c1", "WAID1");
+  assert.equal(calls.length, n);
+  assert.equal(row.delivered_at, null);
 });
 
 test("early receipt is applied after markMessageSent", async () => {
@@ -94,11 +128,11 @@ test("early receipt is applied after markMessageSent", async () => {
   row.exists = true;
   c.t += 10_000;
   await a.afterSent("c1", "WAID1");
-  assert.equal(calls.length, 3);
-  assert.equal(calls[2]!.level, "read", "highest level seen");
+  assert.equal(calls.length, 4);
+  assert.deepEqual(calls.slice(2).map((x) => x.level), ["delivered", "read"]);
   assert.ok(row.read_at);
   await a.afterSent("c1", "WAID1");
-  assert.equal(calls.length, 3, "applied once");
+  assert.equal(calls.length, 4, "applied once");
 });
 
 test("early receipt older than 60s is not applied", async () => {

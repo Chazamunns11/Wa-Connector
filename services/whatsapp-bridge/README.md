@@ -109,7 +109,8 @@ events.
   `0010_missed_calls_and_receipts.sql` first.
 - Each timestamp is set once and never moves backwards. A read also sets
   `delivered_at` if it is empty.
-- Group messages only get `delivered_at`; there is no read tracking in groups.
+- Receipts are tracked for one-to-one messages only. Group updates are ignored
+  (Baileys reports group receipts through a different event).
 - An ack that arrives before the ledger row has its WhatsApp message id is held
   in memory for 60 seconds (at most 1,000 entries) and applied once the send is
   recorded.

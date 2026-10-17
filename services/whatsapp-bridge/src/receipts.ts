@@ -2,8 +2,9 @@
  * Delivery and read receipts for our own sent messages (migration 0010).
  * Watches Baileys' `messages.update` and records `delivered_at` / `read_at` on
  * the ledger row (whatsapp_messages), set once and never moved backwards. A
- * read implies delivered. Group messages only ever get `delivered_at`: read
- * tracking in groups is not meaningful.
+ * read implies delivered. Receipts are tracked for one-to-one messages only:
+ * Baileys reports group receipts through `message-receipt.update`, not
+ * `messages.update`, so group updates are ignored here.
  *
  * An ack can arrive before the ledger row has its wa_message_id (the send
  * resolves, then markMessageSent runs). Such an ack is kept in memory for 60
@@ -25,8 +26,9 @@ const DELIVERY_ACK = 3;
 const READ = 4;
 const PLAYED = 5;
 
-export function receiptFromUpdate(u: WAMessageUpdate): { waMessageId: string; level: ReceiptLevel; isGroup: boolean } | null {
+export function receiptFromUpdate(u: WAMessageUpdate): { waMessageId: string; level: ReceiptLevel } | null {
   if (u.key?.fromMe !== true) return null;
+  if (u.key.remoteJid?.endsWith("@g.us")) return null;
   const waMessageId = u.key.id;
   if (!waMessageId) return null;
   const status = u.update?.status;
@@ -35,7 +37,7 @@ export function receiptFromUpdate(u: WAMessageUpdate): { waMessageId: string; le
   if (status === DELIVERY_ACK) level = "delivered";
   else if (status === READ || status === PLAYED) level = "read";
   else return null;
-  return { waMessageId, level, isGroup: u.key.remoteJid?.endsWith("@g.us") === true };
+  return { waMessageId, level };
 }
 
 export interface ReceiptStore {
@@ -43,9 +45,11 @@ export interface ReceiptStore {
 }
 
 interface Pending {
-  level: ReceiptLevel;
-  atIso: string;
-  touchedAt: number;
+  /** Each ack keeps the time it was first seen; later repeats never move it. */
+  deliveredAt?: string;
+  readAt?: string;
+  /** First sighting: the 60s TTL runs from here and later acks do not refresh it. */
+  firstSeenAt: number;
 }
 
 export class ReceiptApplier {
@@ -62,11 +66,9 @@ export class ReceiptApplier {
       try {
         const r = receiptFromUpdate(u);
         if (!r) continue;
-        // No read tracking for groups: a read is recorded as delivered only.
-        const level: ReceiptLevel = r.isGroup ? "delivered" : r.level;
         const atIso = new Date(this.now()).toISOString();
-        const result = await this.store.markMessageReceipt(coachId, r.waMessageId, level, atIso);
-        if (result === "no_row") this.remember(`${coachId}:${r.waMessageId}`, level, atIso);
+        const result = await this.store.markMessageReceipt(coachId, r.waMessageId, r.level, atIso);
+        if (result === "no_row") this.remember(`${coachId}:${r.waMessageId}`, r.level, atIso);
       } catch (err) {
         this.log.error({ err: (err as Error)?.name ?? "Error" }, "receipt handling failed");
       }
@@ -81,7 +83,9 @@ export class ReceiptApplier {
       const entry = this.pending.get(key);
       if (!entry) return;
       this.pending.delete(key);
-      await this.store.markMessageReceipt(coachId, waMessageId, entry.level, entry.atIso);
+      // Delivered first with its own time, so a later read cannot overwrite it.
+      if (entry.deliveredAt) await this.store.markMessageReceipt(coachId, waMessageId, "delivered", entry.deliveredAt);
+      if (entry.readAt) await this.store.markMessageReceipt(coachId, waMessageId, "read", entry.readAt);
     } catch (err) {
       this.log.error({ err: (err as Error)?.name ?? "Error" }, "pending receipt apply failed");
     }
@@ -89,23 +93,22 @@ export class ReceiptApplier {
 
   private remember(key: string, level: ReceiptLevel, atIso: string): void {
     this.sweep();
-    const existing = this.pending.get(key);
-    // Keep the highest level seen; a later delivered never downgrades a read.
-    if (existing && existing.level === "read" && level === "delivered") {
-      existing.touchedAt = this.now();
-      return;
+    let entry = this.pending.get(key);
+    if (!entry) {
+      entry = { firstSeenAt: this.now() };
+      this.pending.set(key, entry);
+      while (this.pending.size > MAX_PENDING) {
+        const oldest = this.pending.keys().next().value;
+        if (oldest === undefined) break;
+        this.pending.delete(oldest);
+      }
     }
-    this.pending.delete(key); // re-insert so Map order stays oldest-first
-    this.pending.set(key, { level, atIso, touchedAt: this.now() });
-    while (this.pending.size > MAX_PENDING) {
-      const oldest = this.pending.keys().next().value;
-      if (oldest === undefined) break;
-      this.pending.delete(oldest);
-    }
+    if (level === "delivered") entry.deliveredAt ??= atIso;
+    else entry.readAt ??= atIso;
   }
 
   private sweep(): void {
     const cutoff = this.now() - PENDING_TTL_MS;
-    for (const [key, p] of this.pending) if (p.touchedAt < cutoff) this.pending.delete(key);
+    for (const [key, p] of this.pending) if (p.firstSeenAt < cutoff) this.pending.delete(key);
   }
 }
