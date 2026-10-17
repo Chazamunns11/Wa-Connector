@@ -46,7 +46,11 @@
  *      texting their own prospect by hand, AND our own bridge's
  *      `sock.sendMessage` calls echoing back through this same event.
  *      Neither is a reply.
- *   3. `remoteJid` must be a 1:1 chat: `isPnUser(jid) || isLidUser(jid)`.
+ *   3. `remoteJid` must be a 1:1 chat: `isPnUser(jid) || isLidUser(jid)` —
+ *      OR an opted-in WhatsApp group (see "GROUPS" below): an `@g.us` JID
+ *      passes only when it is well-formed (`isGroupJid`, src/groups.ts) AND
+ *      in the session's in-memory enabled set; any other group drops here
+ *      as `group_not_enabled`, before its content is even looked at.
  *      (`isPnUser` is Baileys 7.x's rename of what 6.7.x called `isJidUser`
  *      — byte-identical predicate, `jid?.endsWith('@s.whatsapp.net')`; do
  *      NOT reach for `isLidUser` alone here, tsc's "did you mean" suggestion
@@ -137,6 +141,20 @@
  *      the 0045 contract. Guessing wrong here would message (or worse,
  *      attribute a reply to) a stranger.
  *
+ * GROUPS (opt-in; docs/superpowers/specs/2026-10-17-whatsapp-groups-
+ * design.md, src/groups.ts): a group message passes step 3 only if its group
+ * is in `enabledGroups` — empty until the session's first load lands, and
+ * emptied by any failed load, so unknown means DROPPED. It then runs steps
+ * 4-6 exactly like a 1:1 message. At step 7 the SENDER is the member who
+ * wrote it, `key.participant` (+ its bidirectional alt `key.participantAlt`),
+ * resolved through the very same `resolveSenderE164` rules — a PN JID
+ * directly, a LID only via a server-checked PN alt or the LID-mapping store
+ * — never `remoteJid`/`remoteJidAlt`, which name the group. A member we
+ * cannot attribute to an E.164 is dropped `unmappable_sender`, same as a
+ * 1:1 sender: no row is ever stored without a real phone number. The reply
+ * carries `groupJid` and `senderName` (the member's push name, trimmed and
+ * cut to 60 code points — 0004's CHECK); both are null on a 1:1 reply.
+ *
  * NO LEDGER GATE: every session is a GHL-location tenant (PortalHub's
  * `kind = 'ghl_location'` branch, docs/GHL-PROVIDER-PLAN.md decision D4).
  * PortalHub also served Hub coach sessions, whose linked number was the
@@ -166,6 +184,7 @@ import {
 import type { MessageUpsertType, WAMessage } from "@whiskeysockets/baileys";
 import type { Logger } from "pino";
 import { isE164 } from "./phone.js";
+import { isGroupJid } from "./groups.js";
 
 /** Fixed-string drop reasons — logged, never the JID or body (see file header). */
 export type InboundDropReason =
@@ -173,6 +192,7 @@ export type InboundDropReason =
   | "stale_history_backfill"
   | "from_me"
   | "not_one_to_one"
+  | "group_not_enabled"
   | "no_content"
   | "edit_reaction_or_system"
   | "unmappable_sender";
@@ -212,6 +232,10 @@ export interface InboundReply {
   messageType: string;
   /** Media plan (docs/MEDIA-PLAN.md §6) — see `InboundMediaRef`'s own JSDoc. `null` for text, stickers, and view-once media. */
   mediaRef: InboundMediaRef | null;
+  /** The opted-in group this came from (already `isGroupJid`-checked and in the enabled set), or null for a 1:1 reply. */
+  groupJid: string | null;
+  /** The group member's WhatsApp push name, trimmed and cut to 60 code points; null for a 1:1 reply or a blank name. */
+  senderName: string | null;
 }
 
 /**
@@ -231,6 +255,10 @@ export type ClassifyResult =
   | { kind: "needs_lid_resolution"; lidJid: string; pending: Omit<InboundReply, "fromPhone"> };
 
 const MAX_BODY_CHARS = 500;
+/** 0004's CHECK on whatsapp_inbound_messages.sender_name. */
+const MAX_SENDER_NAME_CHARS = 60;
+/** The default for `classifyInboundMessage`'s `enabledGroups`: no groups — fail closed. */
+const NO_GROUPS: ReadonlySet<string> = new Set();
 
 /**
  * How recent an `'append'`-type message's own `messageTimestamp` must be to
@@ -401,8 +429,12 @@ function coerceFileLength(value: number | { toNumber?: () => number } | null | u
   return null;
 }
 
-/** Pure classifier — see the file header for the full, ordered filter chain. */
-export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertType): ClassifyResult {
+/**
+ * Pure classifier — see the file header for the full, ordered filter chain.
+ * @param enabledGroups the session's opted-in group JIDs (file header,
+ *   "GROUPS"). Omitted means none: every group message is dropped.
+ */
+export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertType, enabledGroups: ReadonlySet<string> = NO_GROUPS): ClassifyResult {
   if (batchType !== "notify") {
     // Anything that isn't 'notify' and isn't 'append' either (there is no
     // third value today, but never assume the union can't grow) is dropped
@@ -423,7 +455,13 @@ export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertT
 
   const remoteJid = msg.key.remoteJid ?? undefined;
   if (!remoteJid) return { kind: "dropped", reason: "not_one_to_one" };
-  if (!isPnUser(remoteJid) && !isLidUser(remoteJid)) {
+  // Step 3, groups (file header "GROUPS"): any group-server JID is decided
+  // HERE — well-formed and enabled, or dropped before its content is read.
+  const isGroup = jidDecode(remoteJid)?.server === "g.us";
+  if (isGroup && !(isGroupJid(remoteJid) && enabledGroups.has(remoteJid))) {
+    return { kind: "dropped", reason: "group_not_enabled" };
+  }
+  if (!isGroup && !isPnUser(remoteJid) && !isLidUser(remoteJid)) {
     // Excludes groups, status/general broadcast, newsletters, and bots by
     // construction — see file header step 3. `isPnUser` (NOT `isLidUser`
     // alone — see that step's own comment) is Baileys 7.x's rename of what
@@ -473,15 +511,23 @@ export function classifyInboundMessage(msg: WAMessage, batchType: MessageUpsertT
     body,
     messageType: contentType,
     mediaRef,
+    groupJid: isGroup ? remoteJid : null,
+    senderName: isGroup ? sanitizeSenderName(msg.pushName) : null,
   };
 
-  const resolution = resolveSenderE164(remoteJid, msg.key.remoteJidAlt ?? undefined);
+  // Step 7. In a group the sender is the MEMBER (`participant` + its alt),
+  // never `remoteJid`, which names the group itself — file header "GROUPS".
+  // A group message with no participant has no sender to attribute.
+  const senderJid = isGroup ? (msg.key.participant ?? undefined) : remoteJid;
+  if (!senderJid) return { kind: "dropped", reason: "unmappable_sender" };
+  const senderJidAlt = isGroup ? msg.key.participantAlt : msg.key.remoteJidAlt;
+  const resolution = resolveSenderE164(senderJid, senderJidAlt ?? undefined);
   if (resolution.kind === "unmappable") return { kind: "dropped", reason: "unmappable_sender" };
   if (resolution.kind === "unresolved_lid") {
     // See file header step 7 / `ClassifyResult`'s own JSDoc — this classifier
     // stays pure/synchronous, so the LAST resort (`InboundDeps.resolvePnForLid`)
     // is `processInboundBatch`'s job, not this function's.
-    return { kind: "needs_lid_resolution", lidJid: remoteJid, pending };
+    return { kind: "needs_lid_resolution", lidJid: senderJid, pending };
   }
 
   return { kind: "reply", reply: { ...pending, fromPhone: resolution.phone } };
@@ -615,6 +661,20 @@ function sanitizeBody(text: string): string {
   return Array.from(noNul).slice(0, MAX_BODY_CHARS).join("");
 }
 
+/**
+ * A group member's push name for `InboundReply.senderName`: NULs removed
+ * (same Postgres reason as `sanitizeBody`), surrounding whitespace trimmed,
+ * cut to 60 CODE POINTS (0004's `char_length` CHECK; never splits an
+ * emoji). Blank or absent -> null, so the drain falls back to the number.
+ */
+function sanitizeSenderName(pushName: string | null | undefined): string | null {
+  if (typeof pushName !== "string") return null;
+  const NUL_CHAR = String.fromCharCode(0);
+  const trimmed = pushName.split(NUL_CHAR).join("").trim();
+  if (!trimmed) return null;
+  return Array.from(trimmed).slice(0, MAX_SENDER_NAME_CHARS).join("").trimEnd();
+}
+
 // ---------------------------------------------------------------------------
 // Batch processing — the impure half, deps-injected so it is testable
 // against fakes (see module header).
@@ -638,6 +698,10 @@ export interface RecordInboundInput {
    * insert reads.
    */
   captureMedia?: boolean;
+  /** Opted-in group the message came from (`InboundReply.groupJid`), null for 1:1. The store re-checks it with `isGroupJid` before writing. */
+  groupJid: string | null;
+  /** `InboundReply.senderName` — only meaningful on a group row. */
+  senderName: string | null;
 }
 
 /**
@@ -688,6 +752,12 @@ export interface InboundDeps {
    * lookup shape) that a naive string check would choke on.
    */
   resolvePnForLid?: (lidJid: string) => Promise<string | null>;
+  /**
+   * The session's opted-in group JIDs (file header "GROUPS"; sessions.ts's
+   * `Session.enabledGroups`). Omitted means none — every group message is
+   * dropped `group_not_enabled`.
+   */
+  enabledGroups?: ReadonlySet<string>;
   log: Logger;
 }
 
@@ -706,7 +776,7 @@ export async function processInboundBatch(
 ): Promise<void> {
   for (const msg of messages) {
     try {
-      const result = classifyInboundMessage(msg, batchType);
+      const result = classifyInboundMessage(msg, batchType, deps.enabledGroups ?? NO_GROUPS);
       if (result.kind === "dropped") {
         deps.log.debug({ coachId, reason: result.reason }, "inbound message dropped");
         continue;
@@ -760,6 +830,8 @@ export async function processInboundBatch(
         messageType: reply.messageType,
         receivedAt: reply.receivedAt,
         captureMedia: shouldCaptureMedia,
+        groupJid: reply.groupJid,
+        senderName: reply.senderName,
       });
 
       if (fresh) {

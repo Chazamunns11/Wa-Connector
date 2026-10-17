@@ -95,12 +95,12 @@ test("LOCKSTEP (SOURCE-LEVEL): drainQueue types before TEXT sends only, after th
   const typingAt = drain.indexOf("simulateTyping(");
   assert.ok(typingAt > 0, "drainQueue must call simulateTyping");
   assert.ok(drain.indexOf("sock.onWhatsApp(") < typingAt, "typing must follow the existence check (it needs WhatsApp's JID)");
-  assert.ok(typingAt < drain.indexOf("session.pacer.recordSend()"), "typing must come before the attempt is recorded");
+  assert.ok(typingAt < drain.indexOf("session.pacer.recordSend("), "typing must come before the attempt is recorded");
   assert.match(drain.slice(drain.lastIndexOf("if (", typingAt) - 200, typingAt), /payload\.kind === "text"/, "typing is for text parts only");
 });
 
 test("LOCKSTEP (SOURCE-LEVEL): after typing, a dropped socket fails the row as NOT dispatched", () => {
-  const after = drain.slice(drain.indexOf("simulateTyping("), drain.indexOf("session.pacer.recordSend()"));
+  const after = drain.slice(drain.indexOf("simulateTyping("), drain.indexOf("session.pacer.recordSend("));
   assert.match(after, /session\.sock !== sock/);
   assert.match(after, /recordFailed\([^)]*false\)/);
 });

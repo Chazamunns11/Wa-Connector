@@ -26,9 +26,11 @@ function makeRecord(overrides: Partial<MessageRecord> = {}): MessageRecord {
     status: "accepted",
     waMessageId: null,
     error: null,
+    groupJid: null,
     dispatchAttempted: false,
     createdAt: "2026-07-29T10:00:00.000Z",
     sentAt: null,
+    kind: "text",
     ...overrides,
   };
 }
@@ -431,4 +433,188 @@ test("constantTimeEqualStr agrees with === without throwing on length mismatch",
   assert.equal(constantTimeEqualStr("abc", "abd"), false);
   assert.equal(constantTimeEqualStr("abc", "abcd"), false);
   assert.equal(constantTimeEqualStr("", ""), true);
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in WhatsApp groups — `groupJid` sends and the two group routes.
+// ---------------------------------------------------------------------------
+
+const GROUP_JID = "120363418570879210@g.us";
+
+function makeGroupFakes(opts: {
+  sendOutcome?: SendOutcome;
+  listGroups?: unknown;
+  refresh?: unknown;
+}) {
+  const calls: Call[] = [];
+  const manager = {
+    send: async (...args: unknown[]) => {
+      calls.push({ method: "send", args });
+      return opts.sendOutcome;
+    },
+    sendToGroup: async (...args: unknown[]) => {
+      calls.push({ method: "sendToGroup", args });
+      return opts.sendOutcome;
+    },
+    sendAttachmentToGroup: async (...args: unknown[]) => {
+      calls.push({ method: "sendAttachmentToGroup", args });
+      return opts.sendOutcome;
+    },
+    listGroups: async (...args: unknown[]) => {
+      calls.push({ method: "listGroups", args });
+      return opts.listGroups;
+    },
+    refreshEnabledGroups: async (...args: unknown[]) => {
+      calls.push({ method: "refreshEnabledGroups", args });
+      return opts.refresh;
+    },
+  } as unknown as SessionManager;
+  const store = { tenantExists: async () => true, getMessage: async () => null } as unknown as BridgeStore;
+  return { manager, store, calls };
+}
+
+async function withGroupServer(
+  opts: Parameters<typeof makeGroupFakes>[0] & { mediaOutboundEnabled?: boolean },
+  fn: (base: string, calls: Call[]) => Promise<void>
+): Promise<void> {
+  const { manager, store, calls } = makeGroupFakes(opts);
+  const server = createBridgeServer({ manager, store, bridgeSecret: SECRET, log: pino({ level: "silent" }), mediaOutboundEnabled: opts.mediaOutboundEnabled });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    await fn(`http://127.0.0.1:${port}`, calls);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+const groupRecord = () => makeRecord({ toPhone: null, groupJid: GROUP_JID, idempotencyKey: "g-1" });
+
+test("groups send: BOTH 'to' and 'groupJid' is a 400, manager never consulted", async () => {
+  await withGroupServer({ sendOutcome: { kind: "accepted", record: groupRecord(), fresh: true } }, async (base, calls) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/send`, {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ to: "+447700900123", groupJid: GROUP_JID, text: "hi", idempotencyKey: "g-1" }),
+    });
+    assert.equal(res.status, 400);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("groups send: a malformed groupJid is 400 group_not_enabled before the manager is consulted", async () => {
+  await withGroupServer({ sendOutcome: { kind: "accepted", record: groupRecord(), fresh: true } }, async (base, calls) => {
+    for (const bad of ["abc@g.us", "447700900123@s.whatsapp.net", "@g.us", 42]) {
+      const res = await fetch(`${base}/sessions/${COACH_A}/send`, {
+        method: "POST",
+        headers: AUTH,
+        body: JSON.stringify({ groupJid: bad, text: "hi", idempotencyKey: "g-1" }),
+      });
+      assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(bad)}`);
+      const body = (await res.json()) as { error: { code: string } };
+      assert.equal(body.error.code, "group_not_enabled");
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("groups send: a valid groupJid reaches manager.sendToGroup with the PATH tenant id; response names the group", async () => {
+  await withGroupServer({ sendOutcome: { kind: "accepted", record: groupRecord(), fresh: true } }, async (base, calls) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/send`, {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ groupJid: GROUP_JID, text: "hi all", idempotencyKey: "g-1" }),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls.find((c) => c.method === "sendToGroup")?.args, [COACH_A, GROUP_JID, "hi all", "g-1"]);
+    assert.equal(calls.filter((c) => c.method === "send").length, 0);
+    const body = (await res.json()) as { message: { toPhone: string | null; groupJid: string | null } };
+    assert.equal(body.message.toPhone, null);
+    assert.equal(body.message.groupJid, GROUP_JID);
+  });
+});
+
+test("groups send: the manager's group_not_enabled outcome is a 400 group_not_enabled", async () => {
+  await withGroupServer({ sendOutcome: { kind: "group_not_enabled" } }, async (base) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/send`, {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ groupJid: GROUP_JID, text: "hi", idempotencyKey: "g-1" }),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { error: { code: string } };
+    assert.equal(body.error.code, "group_not_enabled");
+  });
+});
+
+test("groups send: an attachment to a group (flag on) reaches manager.sendAttachmentToGroup", async () => {
+  await withGroupServer({ sendOutcome: { kind: "accepted", record: groupRecord(), fresh: true }, mediaOutboundEnabled: true }, async (base, calls) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/send`, {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ groupJid: GROUP_JID, attachment: { url: "https://example.com/f.pdf" }, idempotencyKey: "g-1" }),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls.find((c) => c.method === "sendAttachmentToGroup")?.args, [COACH_A, GROUP_JID, { url: "https://example.com/f.pdf", fileName: undefined }, "g-1"]);
+  });
+});
+
+test("groups send: an idempotency conflict on a group row does not echo a phone number", async () => {
+  await withGroupServer({ sendOutcome: { kind: "idempotency_conflict", existing: groupRecord() } }, async (base) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/send`, {
+      method: "POST",
+      headers: AUTH,
+      body: JSON.stringify({ to: "+447700900123", text: "hi", idempotencyKey: "g-1" }),
+    });
+    assert.equal(res.status, 422);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    assert.equal(body.error.code, "idempotency_conflict");
+    assert.ok(!body.error.message.includes("null"));
+  });
+});
+
+test("GET /sessions/:id/groups: connected -> { ok, groups: [{ jid, name, size }] }", async () => {
+  const groups = [{ jid: GROUP_JID, name: "Monday bootcamp", size: 14 }];
+  await withGroupServer({ listGroups: { kind: "ok", groups } }, async (base, calls) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/groups`, { headers: AUTH });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { ok: boolean; groups: unknown };
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.groups, groups);
+    assert.deepEqual(calls.find((c) => c.method === "listGroups")?.args, [COACH_A]);
+  });
+});
+
+test("GET /sessions/:id/groups: not connected -> 409 session_not_connected (same shape as /send)", async () => {
+  await withGroupServer({ listGroups: { kind: "session_not_connected", status: "waiting_qr" } }, async (base) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/groups`, { headers: AUTH });
+    assert.equal(res.status, 409);
+    const body = (await res.json()) as { ok: boolean; error: { code: string } };
+    assert.equal(body.ok, false);
+    assert.equal(body.error.code, "session_not_connected");
+  });
+});
+
+test("GET /sessions/:id/groups: requires the bearer secret", async () => {
+  await withGroupServer({ listGroups: { kind: "ok", groups: [] } }, async (base, calls) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/groups`);
+    assert.equal(res.status, 401);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("POST /sessions/:id/groups/refresh: refreshed -> 200; not connected -> 409; failed read -> 502", async () => {
+  await withGroupServer({ refresh: { kind: "refreshed" } }, async (base, calls) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/groups/refresh`, { method: "POST", headers: AUTH });
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls.find((c) => c.method === "refreshEnabledGroups")?.args, [COACH_A]);
+  });
+  await withGroupServer({ refresh: { kind: "session_not_connected", status: "disconnected" } }, async (base) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/groups/refresh`, { method: "POST", headers: AUTH });
+    assert.equal(res.status, 409);
+  });
+  await withGroupServer({ refresh: { kind: "refresh_failed" } }, async (base) => {
+    const res = await fetch(`${base}/sessions/${COACH_A}/groups/refresh`, { method: "POST", headers: AUTH });
+    assert.equal(res.status, 502);
+  });
 });

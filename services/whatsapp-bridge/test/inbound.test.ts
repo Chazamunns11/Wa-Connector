@@ -31,9 +31,11 @@ function makeMsg(overrides: {
     addressingMode: string;
     remoteJidUsername: string;
     participant: string;
+    participantAlt: string;
   }>;
   message?: Record<string, unknown> | null;
   messageTimestamp?: number;
+  pushName?: string;
 } = {}): WAMessage {
   return {
     key: {
@@ -44,6 +46,7 @@ function makeMsg(overrides: {
     },
     message: overrides.message === undefined ? { conversation: "hey, got your message" } : overrides.message,
     messageTimestamp: overrides.messageTimestamp ?? 1_800_000_000,
+    ...(overrides.pushName !== undefined ? { pushName: overrides.pushName } : {}),
   } as unknown as WAMessage;
 }
 
@@ -84,9 +87,9 @@ test("classify: fromMe (coach's own send, or our own bridge echo) is never a rep
   assert.deepEqual(result, { kind: "dropped", reason: "from_me" });
 });
 
-test("classify: a group chat message is dropped", () => {
+test("classify: a group chat message is dropped (no enabled groups passed — the default is fail closed)", () => {
   const result = classifyInboundMessage(makeMsg({ key: { remoteJid: "120363000000000000@g.us" } }), "notify");
-  assert.deepEqual(result, { kind: "dropped", reason: "not_one_to_one" });
+  assert.deepEqual(result, { kind: "dropped", reason: "group_not_enabled" });
 });
 
 test("classify: the status broadcast is dropped", () => {
@@ -522,4 +525,118 @@ test("processInboundBatch: THE TRAP, end to end — a LID whose alt is itself @l
   await processInboundBatch([msg], "notify", COACH_A, fake.deps);
   assert.equal(fake.recordCalls.length, 0, "must never reach the store under the fabricated LID-as-phone number");
   assert.equal(fake.pokeCalls, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in WhatsApp groups (docs/superpowers/specs/2026-10-17-whatsapp-groups-
+// design.md). A group JID passes step 3 only when it is in the session's
+// enabled set; the sender comes from `key.participant`/`participantAlt`
+// through the same `resolveSenderE164` rules a 1:1 sender uses.
+// ---------------------------------------------------------------------------
+
+const GROUP_JID = "120363418570879210@g.us";
+const MEMBER_JID = "447700900555@s.whatsapp.net";
+const MEMBER_PHONE = "+447700900555";
+
+function groupMsg(overrides: Parameters<typeof makeMsg>[0] = {}): WAMessage {
+  return makeMsg({
+    ...overrides,
+    key: { remoteJid: GROUP_JID, participant: MEMBER_JID, ...overrides.key },
+    pushName: overrides.pushName ?? "Sam from the gym",
+  });
+}
+
+test("groups: a message from a group NOT in the enabled set is dropped group_not_enabled and never reaches the store", async () => {
+  const other = new Set(["120363000000000001@g.us"]);
+  assert.deepEqual(classifyInboundMessage(groupMsg(), "notify", other), { kind: "dropped", reason: "group_not_enabled" });
+
+  const fake = makeFakeStore();
+  fake.deps = { ...fake.deps, enabledGroups: other };
+  await processInboundBatch([groupMsg()], "notify", COACH_A, fake.deps);
+  assert.equal(fake.recordCalls.length, 0, "a disabled group's message must never be written");
+  assert.equal(fake.pokeCalls, 0);
+});
+
+test("groups: with no enabledGroups in the deps at all (not loaded yet), group traffic is dropped — fail closed", async () => {
+  const fake = makeFakeStore();
+  await processInboundBatch([groupMsg()], "notify", COACH_A, fake.deps);
+  assert.equal(fake.recordCalls.length, 0);
+});
+
+test("groups: an enabled group's message is stored with groupJid, senderName and the member's E.164", async () => {
+  const fake = makeFakeStore();
+  fake.deps = { ...fake.deps, enabledGroups: new Set([GROUP_JID]) };
+  await processInboundBatch([groupMsg()], "notify", COACH_A, fake.deps);
+  assert.equal(fake.recordCalls.length, 1);
+  const row = fake.recordCalls[0]!;
+  assert.equal(row.groupJid, GROUP_JID);
+  assert.equal(row.senderName, "Sam from the gym");
+  assert.equal(row.fromPhone, MEMBER_PHONE);
+  assert.equal(row.body, "hey, got your message");
+  assert.equal(fake.pokeCalls, 1);
+});
+
+test("groups: a 1:1 reply records groupJid and senderName as null", async () => {
+  const fake = makeFakeStore();
+  fake.deps = { ...fake.deps, enabledGroups: new Set([GROUP_JID]) };
+  await processInboundBatch([makeMsg({ pushName: "Prospect" })], "notify", COACH_A, fake.deps);
+  assert.equal(fake.recordCalls[0]?.groupJid, null);
+  assert.equal(fake.recordCalls[0]?.senderName, null);
+});
+
+test("groups: senderName is trimmed and cut to 60 characters (code points, never a split emoji)", () => {
+  const long = "  " + "😀".repeat(70) + "  ";
+  const result = classifyInboundMessage(groupMsg({ pushName: long }), "notify", new Set([GROUP_JID]));
+  assert.equal(result.kind, "reply");
+  if (result.kind === "reply") {
+    assert.equal(Array.from(result.reply.senderName ?? "").length, 60);
+    assert.equal(result.reply.senderName, "😀".repeat(60));
+  }
+});
+
+test("groups: a blank pushName records senderName null", () => {
+  const result = classifyInboundMessage(groupMsg({ pushName: "   " }), "notify", new Set([GROUP_JID]));
+  assert.equal(result.kind, "reply");
+  if (result.kind === "reply") assert.equal(result.reply.senderName, null);
+});
+
+test("groups: a LID participant resolves only through a phone-JID participantAlt", () => {
+  const enabled = new Set([GROUP_JID]);
+  const viaAlt = classifyInboundMessage(groupMsg({ key: { participant: "123456789012345@lid", participantAlt: MEMBER_JID } }), "notify", enabled);
+  assert.equal(viaAlt.kind, "reply");
+  if (viaAlt.kind === "reply") assert.equal(viaAlt.reply.fromPhone, MEMBER_PHONE);
+
+  // THE TRAP, group edition: an @lid alt is never read as a phone number.
+  const trap = classifyInboundMessage(groupMsg({ key: { participant: "123456789012345@lid", participantAlt: "987654321098765@lid" } }), "notify", enabled);
+  assert.notEqual(trap.kind, "reply");
+});
+
+test("groups: the group's own remoteJidAlt is never used as the sender", () => {
+  const result = classifyInboundMessage(
+    groupMsg({ key: { participant: undefined as unknown as string, remoteJidAlt: "447700900999@s.whatsapp.net" } }),
+    "notify",
+    new Set([GROUP_JID])
+  );
+  assert.deepEqual(result, { kind: "dropped", reason: "unmappable_sender" });
+});
+
+test("groups: an unattributable group sender is dropped, never stored", async () => {
+  const fake = makeFakeStore();
+  fake.deps = { ...fake.deps, enabledGroups: new Set([GROUP_JID]) };
+  await processInboundBatch([groupMsg({ key: { participant: "123456789012345@lid" } })], "notify", COACH_A, fake.deps);
+  assert.equal(fake.recordCalls.length, 0);
+});
+
+test("groups: the rest of the filter chain still applies to an enabled group (fromMe, reactions)", () => {
+  const enabled = new Set([GROUP_JID]);
+  assert.deepEqual(classifyInboundMessage(groupMsg({ key: { fromMe: true } }), "notify", enabled), { kind: "dropped", reason: "from_me" });
+  assert.deepEqual(
+    classifyInboundMessage(groupMsg({ message: { reactionMessage: { text: "👍", key: { id: "MSG0" } } } }), "notify", enabled),
+    { kind: "dropped", reason: "edit_reaction_or_system" }
+  );
+});
+
+test("groups: a malformed @g.us JID is dropped even if it were somehow in the set", () => {
+  const bad = "abc@g.us";
+  assert.deepEqual(classifyInboundMessage(groupMsg({ key: { remoteJid: bad } }), "notify", new Set([bad])), { kind: "dropped", reason: "group_not_enabled" });
 });

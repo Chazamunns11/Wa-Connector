@@ -147,6 +147,13 @@ still exists on the linked phone regardless.
   byte-for-byte to the portal's `src/lib/phone.ts`).
 - Every dispatch is preceded by `onWhatsApp()` and sent to the JID WhatsApp
   returns; recipients without WhatsApp end `not_on_whatsapp`, terminal.
+- WhatsApp groups are opt-in (`src/groups.ts`). Only groups the owner enabled
+  in `whatsapp_groups` pass, inbound or outbound; the bridge's in-memory set
+  is empty until it loads (on connect and `POST /sessions/:id/groups/refresh`)
+  and after a failed load, so unknown means dropped. A group send goes to the
+  stored JID (from WhatsApp's own group list, `^[0-9]+(-[0-9]+)?@g\.us$`),
+  replaces `onWhatsApp()` with a `groupMetadata()` participant check, and
+  costs 5 daily-cap units. Group names and JIDs are never logged.
 - `(coach_id, idempotency_key)` is unique (`coach_id` is the historical column name for the tenant id; for a GHL location it holds that location's tenant id); the only path to the wire is the
   atomic `accepted -> sending` claim. Interrupted `sending` rows are failed,
   never retried: at-most-once beats at-least-once when the recipient is human.
@@ -158,7 +165,7 @@ still exists on the linked phone regardless.
 - Pacing (`WA_SEND_MIN_GAP_MS` + jitter + `WA_DAILY_CAP`) is per tenant session
   and survives restarts (both the daily count AND the min-gap clock are
   seeded from the ledger — `store.getDailyActivity`). Budget is also
-  RESERVED at accept time (`sentToday + queueLength`), not only counted at
+  RESERVED at accept time (`sentToday + queued units`), not only counted at
   dispatch time, so a burst of due sends arriving faster than the pacer can
   drain (e.g. an hourly cron finding dozens of steps due at once) cannot
   blow through the cap before any of them has actually dispatched. A ban

@@ -32,8 +32,17 @@
  *   POST /sessions/:coachId/connect
  *   GET  /sessions/:coachId
  *   POST /sessions/:coachId/logout
- *   POST /sessions/:coachId/send                        {to, text, idempotencyKey}
+ *   POST /sessions/:coachId/send                        {to | groupJid, text, idempotencyKey}
  *   GET  /sessions/:coachId/messages/:idempotencyKey
+ *   GET  /sessions/:coachId/groups                      -> { groups: {jid, name, size}[] }
+ *   POST /sessions/:coachId/groups/refresh              reload the enabled-group set
+ *
+ * GROUPS (opt-in — src/groups.ts): `/send` takes EXACTLY ONE of `to`
+ * (E.164, as before) or `groupJid` (both -> 400 invalid_body). A `groupJid`
+ * must pass `isGroupJid` and be in the session's enabled set, else 400
+ * `group_not_enabled`. The group list is live from WhatsApp for a connected
+ * session only (else the same 409 `session_not_connected` as /send), shown
+ * to the owner and never stored or logged here.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
@@ -41,6 +50,7 @@ import type { Logger } from "pino";
 import type { BridgeStore } from "./store.js";
 import { LeaseUnavailableError, ShuttingDownError, type SessionManager } from "./sessions.js";
 import { isE164 } from "./phone.js";
+import { isGroupJid } from "./groups.js";
 
 /** Mirrors src/app/api/cron/reminders/route.ts's `constantTimeEqualStr` — length check first, then timingSafeEqual. */
 export function constantTimeEqualStr(a: string, b: string): boolean {
@@ -208,15 +218,35 @@ export function createBridgeServer(deps: ServerDeps): Server {
         return;
       }
       const to = body.to;
+      const groupJid = body.groupJid;
       const text = body.text;
       const attachment = body.attachment;
       const idempotencyKey = body.idempotencyKey;
-      if (typeof to !== "string" || !isE164(to)) {
+      // Opt-in groups — exactly one target. With no `groupJid` at all, the
+      // `to` check below runs exactly as before (neither -> 422 invalid_phone).
+      if (to !== undefined && groupJid !== undefined) {
+        sendError(res, 400, "invalid_body", "exactly one of 'to' or 'groupJid' is allowed");
+        return;
+      }
+      let target: { kind: "group"; groupJid: string } | { kind: "phone"; to: string };
+      if (groupJid !== undefined) {
+        if (typeof groupJid !== "string" || !isGroupJid(groupJid)) {
+          // Hard rule 3 — a group JID is never repaired either; the enabled-
+          // set check proper happens in the manager.
+          sendError(res, 400, "group_not_enabled", "'groupJid' is not an enabled WhatsApp group for this session");
+          return;
+        }
+        target = { kind: "group", groupJid };
+      } else if (typeof to !== "string" || !isE164(to)) {
         // Hard rule 3 — strict E.164 or refusal; the bridge never normalises
         // (src/phone.ts's file header has the full argument).
         sendError(res, 422, "invalid_phone", "'to' must be strict E.164 (+447700900123) — normalisation happens at capture in the portal, never here");
         return;
+      } else {
+        target = { kind: "phone", to };
       }
+      const sendText = (t: string, key: string) =>
+        target.kind === "group" ? manager.sendToGroup(coachId, target.groupJid, t, key) : manager.send(coachId, target.to, t, key);
       let outcome;
       if (!mediaOutboundEnabled) {
         // QA Blocker 2 fix — with the media master switch off, run the
@@ -251,7 +281,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
           sendError(res, 422, "invalid_text", `'text' must be a non-empty string of at most ${MAX_TEXT_LENGTH} characters`);
           return;
         }
-        outcome = await manager.send(coachId, to, text, idempotencyKey);
+        outcome = await sendText(text, idempotencyKey);
       } else {
         // Media plan (docs/MEDIA-PLAN.md §5.3) — exactly one of `text` /
         // `attachment`; both or neither is a 422, same as today's "text is
@@ -274,7 +304,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
             sendError(res, 422, "invalid_text", `'text' must be a non-empty string of at most ${MAX_TEXT_LENGTH} characters`);
             return;
           }
-          outcome = await manager.send(coachId, to, text, idempotencyKey);
+          outcome = await sendText(text, idempotencyKey);
         } else {
           if (typeof attachment !== "object" || attachment === null || Array.isArray(attachment)) {
             sendError(res, 422, "invalid_attachment", "'attachment' must be an object of the shape { url, fileName? }");
@@ -291,12 +321,18 @@ export function createBridgeServer(deps: ServerDeps): Server {
             sendError(res, 422, "invalid_attachment", `'attachment.fileName', when present, must be a non-empty string of at most ${MAX_ATTACHMENT_FILENAME_LENGTH} characters`);
             return;
           }
-          outcome = await manager.sendAttachment(coachId, to, { url, fileName }, idempotencyKey);
+          outcome =
+            target.kind === "group"
+              ? await manager.sendAttachmentToGroup(coachId, target.groupJid, { url, fileName }, idempotencyKey)
+              : await manager.sendAttachment(coachId, target.to, { url, fileName }, idempotencyKey);
         }
       }
       switch (outcome.kind) {
         case "invalid_phone":
           sendError(res, 422, "invalid_phone", "'to' must be strict E.164");
+          return;
+        case "group_not_enabled":
+          sendError(res, 400, "group_not_enabled", "'groupJid' is not an enabled WhatsApp group for this session");
           return;
         case "idempotency_conflict":
           // Same (coachId, idempotencyKey) but a DIFFERENT 'to' than the
@@ -307,7 +343,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
             res,
             422,
             "idempotency_conflict",
-            `idempotencyKey already used for a different recipient (${outcome.existing.toPhone}) — choose a new idempotencyKey to send to a different number`
+            `idempotencyKey already used for a different recipient (${outcome.existing.toPhone ?? "a WhatsApp group"}) — choose a new idempotencyKey to send to a different number`
           );
           return;
         case "session_not_connected":
@@ -330,6 +366,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
               id: record.id,
               idempotencyKey: record.idempotencyKey,
               toPhone: record.toPhone,
+              groupJid: record.groupJid,
               status: record.status,
               waMessageId: record.waMessageId,
               error: record.error,
@@ -359,6 +396,7 @@ export function createBridgeServer(deps: ServerDeps): Server {
           id: record.id,
           idempotencyKey: record.idempotencyKey,
           toPhone: record.toPhone,
+          groupJid: record.groupJid,
           status: record.status,
           waMessageId: record.waMessageId,
           error: record.error,
@@ -366,6 +404,37 @@ export function createBridgeServer(deps: ServerDeps): Server {
           sentAt: record.sentAt,
         },
       });
+      return;
+    }
+
+    // GET /sessions/:coachId/groups — the number's groups, live from WhatsApp.
+    if (req.method === "GET" && parts[2] === "groups" && parts.length === 3) {
+      const outcome = await manager.listGroups(coachId);
+      if (outcome.kind === "session_not_connected") {
+        sendError(res, 409, "session_not_connected", `session status is '${outcome.status}' — connect and link a device first`);
+        return;
+      }
+      if (outcome.kind === "list_failed") {
+        sendError(res, 502, "groups_unavailable", "could not fetch this number's groups from WhatsApp — retry shortly");
+        return;
+      }
+      sendJson(res, 200, { ok: true, groups: outcome.groups });
+      return;
+    }
+
+    // POST /sessions/:coachId/groups/refresh — the app changed whatsapp_groups.
+    if (req.method === "POST" && parts[2] === "groups" && parts[3] === "refresh" && parts.length === 4) {
+      const outcome = await manager.refreshEnabledGroups(coachId);
+      if (outcome.kind === "session_not_connected") {
+        sendError(res, 409, "session_not_connected", `session status is '${outcome.status}' — connect and link a device first`);
+        return;
+      }
+      if (outcome.kind === "refresh_failed") {
+        // The set is now EMPTY (fail closed) — retrying restores it.
+        sendError(res, 502, "groups_refresh_failed", "could not reload the enabled groups — group traffic is paused until a reload succeeds; retry shortly");
+        return;
+      }
+      sendJson(res, 200, { ok: true });
       return;
     }
 

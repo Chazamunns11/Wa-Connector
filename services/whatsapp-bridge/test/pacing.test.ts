@@ -155,9 +155,20 @@ test("LOCKSTEP (SOURCE-LEVEL): warm-up is only wired when WA_WARMUP_ENABLED is s
   assert.ok(block.indexOf("markPhoneLinked(") < block.indexOf("persistStatus("), "markPhoneLinked must run before the status write replaces phone_number");
 });
 
-test("LOCKSTEP (SOURCE-LEVEL): accept-time cap reservation uses the pacer's effective (warm-up aware) cap", () => {
-  assert.match(SESSIONS_SRC, /queue\.length >= session\.pacer\.effectiveDailyCap\(\)/);
+test("LOCKSTEP (SOURCE-LEVEL): accept-time cap reservation counts queued UNITS against the pacer's effective (warm-up aware) cap", () => {
+  assert.match(SESSIONS_SRC, /sentTodayCount\(\) \+ queuedUnits\(session\) \+ units > session\.pacer\.effectiveDailyCap\(\)/);
+  assert.doesNotMatch(SESSIONS_SRC, /queue\.length >= session\.pacer\.effectiveDailyCap\(\)/, "queue.length undercounts a queued group send (5 units)");
   assert.doesNotMatch(SESSIONS_SRC, /queue\.length >= this\.config\.dailyCap/);
+});
+
+test("recordSend(units): a group send spends 5 units; the default stays 1", () => {
+  const clock = fixedClock(T0);
+  const pacer = new SessionPacer({ minGapMs: 0, jitterMs: 0, dailyCap: 10 }, 0, clock.now, () => 0);
+  pacer.recordSend();
+  assert.equal(pacer.sentTodayCount(), 1);
+  pacer.recordSend(5);
+  assert.equal(pacer.sentTodayCount(), 6);
+  assert.equal(pacer.remainingToday(), 4);
 });
 
 test("LOCKSTEP (SOURCE-LEVEL): wipeCreds clears phone_linked_at so a re-linked number warms up again", () => {

@@ -16,9 +16,11 @@
  *     whatsapp_messages ledger at session start (`store.getDailyActivity`),
  *     so a bridge restart cannot reset a coach's spent budget — and budget
  *     is additionally RESERVED at accept time in sessions.ts's `send()`
- *     (`sentTodayCount() + queue.length`), not only counted at dispatch, so
- *     a burst of accepts arriving faster than the pacer can drain cannot
- *     overshoot the cap before any of them has actually dispatched.
+ *     (`sentTodayCount() + queuedUnits + units`), not only counted at
+ *     dispatch, so a burst of accepts arriving faster than the pacer can
+ *     drain cannot overshoot the cap before any of them has actually
+ *     dispatched. Units, not sends: a group send costs 5 (src/groups.ts's
+ *     `GROUP_SEND_CAP_UNITS`), both when reserved and when recorded.
  *
  * Pure in-memory arithmetic + an injected clock, so the unit tests
  * (test/pacing.test.ts) exercise real decisions without real waiting.
@@ -139,10 +141,13 @@ export class SessionPacer {
     return Math.max(0, earliest - this.now());
   }
 
-  /** Record an actual (attempted) send — advances both the gap clock and the daily counter. Counted on ATTEMPT, not success: a failed attempt still hit WhatsApp's servers, which is what the cap protects. */
-  recordSend(): void {
+  /**
+   * Record an actual (attempted) send — advances both the gap clock and the daily counter. Counted on ATTEMPT, not success: a failed attempt still hit WhatsApp's servers, which is what the cap protects.
+   * @param units daily-cap units this send costs: 1 for a 1:1 part, `GROUP_SEND_CAP_UNITS` (5, src/groups.ts) for a group send, which reaches every member at once. The gap clock advances once either way.
+   */
+  recordSend(units = 1): void {
     this.rollDayIfNeeded();
     this.lastSendAtMs = this.now();
-    this.sentToday += 1;
+    this.sentToday += units;
   }
 }
