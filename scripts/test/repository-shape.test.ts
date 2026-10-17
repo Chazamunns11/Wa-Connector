@@ -95,17 +95,23 @@ const METHODS = [
   "setSessionTriggerState",
   "stampSessionTriggerPhone",
   "listSessionsForTriggers",
+  "recordSmsFallbackEcho",
+  "consumeSmsFallbackEcho",
+  "blockSmsFallback",
+  "setSmsFallbackEnabled",
+  "claimSmsFallback",
+  "setSmsFallbackResult",
 ] as const;
 
-test("SupabaseGhlRepository implements all 86 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 86);
-  assert.equal(new Set(METHODS).size, 86);
+test("SupabaseGhlRepository implements all 92 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 92);
+  assert.equal(new Set(METHODS).size, 92);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 86", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 92", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });
@@ -228,7 +234,66 @@ test("getTenantPhone reads only the phone column of the tenant's session", () =>
   assert.match(body, /\.eq\("coach_id", tenantId\)/);
 });
 
-test("updateGhlOutboundSendState clears the text on accept unless workflow triggers are on", () => {
+test("updateGhlOutboundSendState clears the text on accept unless workflow triggers or the SMS fallback are on", () => {
   const body = methodSource("updateGhlOutboundSendState");
-  assert.match(body, /if \(patch\.sendState === "refused" \|\| \(patch\.sendState === "accepted" && !isWorkflowTriggersEnabled\(\)\)\) update\.pending_text = null;/);
+  assert.match(
+    body,
+    /if \(patch\.sendState === "refused" \|\| \(patch\.sendState === "accepted" && !isWorkflowTriggersEnabled\(\) && !isSmsFallbackEnabled\(\)\)\) update\.pending_text = null;/
+  );
+});
+
+test("recordSmsFallbackEcho stores only the text hash, valid until the expiry, and drops the location's expired echoes", () => {
+  const body = methodSource("recordSmsFallbackEcho");
+  assert.match(body, /from\("ghl_sms_fallback_echoes"\)/);
+  assert.match(body, /\.delete\(\)\s*\.eq\("location_id", locationId\)\s*\.lte\("expires_at", /);
+  assert.match(body, /\{ location_id: locationId, contact_id: contactId, text_sha256: textSha256, expires_at: expiresIso \}/);
+  assert.match(body, /onConflict: "location_id,contact_id,text_sha256"/);
+  assert.doesNotMatch(body, /message|text:/);
+});
+
+test("consumeSmsFallbackEcho deletes one matching unexpired echo and says whether there was one", () => {
+  const body = methodSource("consumeSmsFallbackEcho");
+  assert.match(
+    body,
+    /\.delete\(\)\s*\.eq\("location_id", locationId\)\s*\.eq\("contact_id", contactId\)\s*\.eq\("text_sha256", textSha256\)\s*\.gt\("expires_at", nowIso\)\s*\.select\("location_id"\)/
+  );
+  assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
+});
+
+test("blockSmsFallback stamps blocked_at on this sub-account only", () => {
+  const body = methodSource("blockSmsFallback");
+  assert.match(body, /from\("ghl_accounts"\)\s*\.update\(\{ sms_fallback_blocked_at: new Date\(\)\.toISOString\(\) \}\)\s*\.eq\("location_id", locationId\)\s*\.is\("sms_fallback_blocked_at", null\)/);
+});
+
+test("setSmsFallbackEnabled clears blocked_at only when switching on", () => {
+  const body = methodSource("setSmsFallbackEnabled");
+  assert.match(body, /const patch: Record<string, unknown> = \{ sms_fallback_enabled: enabled \};/);
+  assert.match(body, /if \(enabled\) patch\.sms_fallback_blocked_at = null;/);
+  assert.match(body, /\.update\(patch\)\s*\.eq\("location_id", locationId\)/);
+});
+
+test("claimSmsFallback wins only for a row never claimed and still unreported", () => {
+  const body = methodSource("claimSmsFallback");
+  assert.match(body, /\.update\(\{ sms_fallback: "claimed" \}\)\s*\.eq\("id", id\)\s*\.is\("sms_fallback", null\)\s*\.is\("reported_status", null\)\s*\.select\("id"\)/);
+  assert.match(body, /return \(data \?\? \[\]\)\.length > 0;/);
+});
+
+test("setSmsFallbackResult writes only a claimed row", () => {
+  const body = methodSource("setSmsFallbackResult");
+  assert.match(body, /\.update\(\{ sms_fallback: result \}\)\s*\.eq\("id", id\)\s*\.eq\("sms_fallback", "claimed"\)/);
+});
+
+test("0014: the SMS fallback switch is on by default, blocked_at is nullable, the echo table holds only a hash and has RLS on with no policies", () => {
+  const sql = readFileSync(new URL("../../supabase/migrations/0014_sms_fallback.sql", import.meta.url), "utf8");
+  assert.match(sql, /add column if not exists sms_fallback_enabled boolean not null default true/);
+  assert.match(sql, /add column if not exists sms_fallback_blocked_at timestamptz(,|;)/);
+  assert.match(sql, /add column if not exists sms_fallback text\s+check \(sms_fallback is null or sms_fallback in \('claimed', 'sent', 'failed'\)\)/);
+  assert.match(sql, /create table public\.ghl_sms_fallback_echoes \(/);
+  assert.match(sql, /location_id\s+text not null references public\.ghl_accounts \(location_id\) on delete cascade/);
+  assert.match(sql, /contact_id\s+text not null/);
+  assert.match(sql, /text_sha256\s+text not null/);
+  assert.match(sql, /expires_at\s+timestamptz not null/);
+  assert.match(sql, /primary key \(location_id, contact_id, text_sha256\)/);
+  assert.match(sql, /alter table public\.ghl_sms_fallback_echoes enable row level security/);
+  assert.doesNotMatch(sql, /create policy/);
 });

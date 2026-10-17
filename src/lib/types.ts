@@ -175,6 +175,10 @@ export interface GhlAccount {
   showReactions: boolean;
   /** Message events (0011) — post contact message deletes to GHL as a notice. Off by default; `false` on a pre-0011 database. */
   showDeletes: boolean;
+  /** SMS fallback B (0014) — the sub-account's own switch for sending the text as an SMS when a contact isn't on WhatsApp. On by default. */
+  smsFallbackEnabled: boolean;
+  /** SMS fallback B (0014) — set by the loop guard when GHL handed our fallback SMS back to PingWren; while set, this sub-account never falls back. Cleared by switching the setting on again. */
+  smsFallbackBlockedAt: string | null;
 }
 
 /**
@@ -293,8 +297,16 @@ export interface GhlOutboundMessage {
   readReportedAt: string | null;
   /** 0010 — fixed diagnostic string from a refused `read` report; `null` when none. */
   readReportError: string | null;
+  /**
+   * SMS fallback B (0014) — `claimed` by the one pass that may send this row's
+   * fallback SMS, then `sent` or `failed`; `null` when no fallback was tried
+   * (and on a pre-0014 database). Optional so fixtures may leave it out.
+   */
+  smsFallback?: GhlOutboundSmsFallback | null;
   createdAt: string;
 }
+
+export type GhlOutboundSmsFallback = "claimed" | "sent" | "failed";
 
 /** Input for `Repository.recordGhlOutboundMessage` — the webhook route's own fields, already normalised/derived by `src/lib/ghl.ts` before this is called. */
 export interface GhlOutboundMessageDraft {

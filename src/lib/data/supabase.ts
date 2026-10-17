@@ -38,7 +38,7 @@ import type {
   WhatsappSessionSummary,
 } from "@/lib/types";
 import { LOGO_BUCKET, LOGO_EXTENSION, normaliseHex, type SafeLogoType } from "@/lib/brand";
-import { ghlTenantKeyQueryFilters } from "@/lib/ghl";
+import { ghlTenantKeyQueryFilters, isSmsFallbackEnabled } from "@/lib/ghl";
 import { GROUP_SEND_CAP_UNITS } from "@/lib/ghl-provider";
 import { isWorkflowTriggersEnabled } from "@/lib/ghl-triggers";
 import { ActivationCapError } from "@/lib/billing/activation";
@@ -272,6 +272,9 @@ interface GhlAccountRow {
   /** Migration 0011 — optional for the same `select("*")` pre-migration reason; absent reads as `false` (off). */
   show_reactions?: boolean | null;
   show_deletes?: boolean | null;
+  /** Migration 0014 — optional for the same pre-migration reason; absent reads as on (the column default) and not blocked. */
+  sms_fallback_enabled?: boolean | null;
+  sms_fallback_blocked_at?: string | null;
 }
 
 function mapGhlAccount(row: GhlAccountRow): GhlAccount {
@@ -307,6 +310,8 @@ function mapGhlAccount(row: GhlAccountRow): GhlAccount {
     activatedAt: typeof row.activated_at === "string" ? row.activated_at : null,
     showReactions: row.show_reactions === true,
     showDeletes: row.show_deletes === true,
+    smsFallbackEnabled: row.sms_fallback_enabled !== false,
+    smsFallbackBlockedAt: typeof row.sms_fallback_blocked_at === "string" ? row.sms_fallback_blocked_at : null,
   };
 }
 
@@ -402,6 +407,8 @@ interface GhlOutboundMessageRow {
   report_error: string | null;
   read_reported_at: string | null;
   read_report_error: string | null;
+  /** 0014 — absent on a pre-0014 database (`select("*")`). */
+  sms_fallback?: string | null;
   created_at: string;
 }
 
@@ -424,6 +431,7 @@ function mapGhlOutboundMessage(row: GhlOutboundMessageRow): GhlOutboundMessage {
     reportError: row.report_error,
     readReportedAt: row.read_reported_at,
     readReportError: row.read_report_error,
+    smsFallback: row.sms_fallback === "claimed" || row.sms_fallback === "sent" || row.sms_fallback === "failed" ? row.sms_fallback : null,
     createdAt: row.created_at,
   };
 }
@@ -1270,9 +1278,10 @@ export class SupabaseGhlRepository implements GhlRepository {
     // 'accepted' (until its status is reported, so a "not on WhatsApp" trigger
     // can carry it; `markGhlOutboundReported` clears it, and the cron clears one
     // never reported within 7 days). With triggers off nothing needs the text
-    // after the accept, so it is cleared then, as before 0013. Always cleared
-    // when the row is refused.
-    if (patch.sendState === "refused" || (patch.sendState === "accepted" && !isWorkflowTriggersEnabled())) update.pending_text = null;
+    // after the accept, so it is cleared then, as before 0013. The SMS fallback
+    // (0014) sends that same text as an SMS, so it is kept while either switch
+    // is on. Always cleared when the row is refused.
+    if (patch.sendState === "refused" || (patch.sendState === "accepted" && !isWorkflowTriggersEnabled() && !isSmsFallbackEnabled())) update.pending_text = null;
     // 0071_ghl_outbound_refusal_reason.sql — stamped once, alongside (not
     // instead of) report_error, and never cleared again (adversarial-review
     // finding 3 — see Repository.updateGhlOutboundSendState's JSDoc).
@@ -2199,6 +2208,72 @@ export class SupabaseGhlRepository implements GhlRepository {
   async forgetNotOnWhatsapp(locationId: string, phoneE164: string) {
     const supabase = getServiceClient();
     const { error } = await supabase.from("ghl_not_on_whatsapp").delete().eq("location_id", locationId).eq("phone_e164", phoneE164);
+    if (error) throw error;
+  }
+
+  async recordSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, expiresIso: string) {
+    const supabase = getServiceClient();
+    // Keeps the table small: this location's expired echoes go first.
+    const { error: cleanupError } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .delete()
+      .eq("location_id", locationId)
+      .lte("expires_at", new Date().toISOString());
+    if (cleanupError) throw cleanupError;
+    const { error } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .upsert({ location_id: locationId, contact_id: contactId, text_sha256: textSha256, expires_at: expiresIso }, { onConflict: "location_id,contact_id,text_sha256" });
+    if (error) throw error;
+  }
+
+  async consumeSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, nowIso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_sms_fallback_echoes")
+      .delete()
+      .eq("location_id", locationId)
+      .eq("contact_id", contactId)
+      .eq("text_sha256", textSha256)
+      .gt("expires_at", nowIso)
+      .select("location_id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async blockSmsFallback(locationId: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_accounts")
+      .update({ sms_fallback_blocked_at: new Date().toISOString() })
+      .eq("location_id", locationId)
+      .is("sms_fallback_blocked_at", null);
+    if (error) throw error;
+  }
+
+  async setSmsFallbackEnabled(locationId: string, enabled: boolean) {
+    const patch: Record<string, unknown> = { sms_fallback_enabled: enabled };
+    if (enabled) patch.sms_fallback_blocked_at = null;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_accounts").update(patch).eq("location_id", locationId);
+    if (error) throw error;
+  }
+
+  async claimSmsFallback(id: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update({ sms_fallback: "claimed" })
+      .eq("id", id)
+      .is("sms_fallback", null)
+      .is("reported_status", null)
+      .select("id");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async setSmsFallbackResult(id: string, result: "sent" | "failed") {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_outbound_messages").update({ sms_fallback: result }).eq("id", id).eq("sms_fallback", "claimed");
     if (error) throw error;
   }
 

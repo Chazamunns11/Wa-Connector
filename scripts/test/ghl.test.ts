@@ -28,6 +28,8 @@ import {
   parseGhlInstalledLocations,
   upsertGhlGroupContact,
   verifyGhlSignature,
+  sendGhlSms,
+  isSmsFallbackEnabled,
 } from "@/lib/ghl";
 import { sendingGate } from "@/lib/billing/gate";
 import { brandConfig } from "@/lib/brand-config";
@@ -4079,4 +4081,84 @@ test("fallback: an app-originated send to a remembered contact is refused too", 
   const outcome = await sendAppOriginatedText(repoBundle.repo, deps, { account: makeAccount(), ...APP_INPUT });
   assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.notOnWhatsapp });
   assert.equal(sendCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// SMS fallback B: sendGhlSms (POST /conversations/messages, type SMS).
+// ---------------------------------------------------------------------------
+
+test("sendGhlSms: posts type SMS, the contact and the text with the location token and the conversations Version", async () => {
+  const { result, requests } = await withCapturedFetch(
+    async () => jsonResponse(201, { conversationId: "conv-1", messageId: "m-1" }),
+    () => sendGhlSms("loc-token", { contactId: "contact-9", message: "Your class is at 6pm" })
+  );
+  assert.deepEqual(result, { ok: true });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://services.leadconnectorhq.com/conversations/messages");
+  assert.equal(requests[0].method, "POST");
+  assert.equal(requests[0].headers.authorization, "Bearer loc-token");
+  assert.equal(requests[0].headers["content-type"], "application/json");
+  assert.equal(requests[0].headers.version, "2021-04-15");
+  assert.deepEqual(requests[0].body, { type: "SMS", contactId: "contact-9", message: "Your class is at 6pm" });
+});
+
+test("sendGhlSms: a rejection comes back with its status and logs no text", async () => {
+  const logged: string[] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => logged.push(args.map(String).join(" "));
+  try {
+    const { result } = await withCapturedFetch(
+      async () => jsonResponse(422, { message: "echo of Secret text 123" }),
+      () => sendGhlSms("loc-token", { contactId: "contact-9", message: "Secret text 123" })
+    );
+    assert.deepEqual(result, { ok: false, status: 422 });
+  } finally {
+    console.error = realError;
+  }
+  assert.ok(logged.length > 0);
+  assert.ok(logged.every((l) => !l.includes("Secret text") && !l.includes("contact-9") && !l.includes("loc-token")));
+});
+
+test("sendGhlSms: a network error or timeout never throws and has no status", async () => {
+  for (const make of [
+    () => Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } }),
+    () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }),
+  ]) {
+    const result = await withStubbedFetch(
+      async () => {
+        throw make();
+      },
+      () => sendGhlSms("loc-token", { contactId: "contact-9", message: "hi" })
+    );
+    assert.deepEqual(result, { ok: false, status: null });
+  }
+});
+
+test("sendGhlSms: the request is bounded by a 5 s timeout signal", async () => {
+  let signal: AbortSignal | null | undefined;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    signal = init?.signal;
+    return jsonResponse(200, {});
+  }) as typeof fetch;
+  try {
+    await sendGhlSms("loc-token", { contactId: "contact-9", message: "hi" });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(signal instanceof AbortSignal);
+});
+
+test("isSmsFallbackEnabled: only exactly \"true\" switches it on", () => {
+  const saved = process.env.GHL_SMS_FALLBACK_ENABLED;
+  try {
+    for (const [value, expected] of [[undefined, false], ["", false], ["TRUE", false], ["1", false], ["true", true]] as const) {
+      if (value === undefined) delete process.env.GHL_SMS_FALLBACK_ENABLED;
+      else process.env.GHL_SMS_FALLBACK_ENABLED = value;
+      assert.equal(isSmsFallbackEnabled(), expected, String(value));
+    }
+  } finally {
+    if (saved === undefined) delete process.env.GHL_SMS_FALLBACK_ENABLED;
+    else process.env.GHL_SMS_FALLBACK_ENABLED = saved;
+  }
 });

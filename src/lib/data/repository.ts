@@ -850,6 +850,23 @@ export interface GhlRepository {
   /** Clears the not-on-WhatsApp memory for (location, phone); a no-op when absent. */
   forgetNotOnWhatsapp(locationId: string, phoneE164: string): Promise<void>;
   /**
+   * SMS fallback B (0014) — records a pending echo of a fallback SMS about to
+   * be sent: (location, contact, sha256 of the text), valid until
+   * `expiresIso`. Stores only the hash. Replaces an existing echo for the same
+   * key, and drops this location's expired echoes.
+   */
+  recordSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, expiresIso: string): Promise<void>;
+  /** Deletes a matching echo unexpired at `nowIso`; true when there was one (the loop guard's check). */
+  consumeSmsFallbackEcho(locationId: string, contactId: string, textSha256: string, nowIso: string): Promise<boolean>;
+  /** Stamps `ghl_accounts.sms_fallback_blocked_at` (first time only) for this sub-account; it then never falls back. */
+  blockSmsFallback(locationId: string): Promise<void>;
+  /** The sub-account's SMS fallback switch. Switching it on also clears `sms_fallback_blocked_at`. The caller confirms the row exists first. */
+  setSmsFallbackEnabled(locationId: string, enabled: boolean): Promise<void>;
+  /** Once per message: claims the row's fallback SMS while it is unclaimed and unreported; true when this call won. */
+  claimSmsFallback(id: string): Promise<boolean>;
+  /** Stores the outcome of a claimed row's fallback SMS. */
+  setSmsFallbackResult(id: string, result: "sent" | "failed"): Promise<void>;
+  /**
    * Compare-and-set of a number's connection-trigger state: applies only while the
    * stored `lastFired` still equals `expectedLastFired` (null-safe). Returns whether
    * this call won, so overlapping passes fire at most once.

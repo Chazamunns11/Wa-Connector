@@ -1293,6 +1293,54 @@ export async function addGhlOutboundMessage(
 }
 
 /**
+ * SMS fallback B (docs/superpowers/plans/2026-10-17-sms-fallback-b.md) — the
+ * global switch. Off unless `GHL_SMS_FALLBACK_ENABLED` is exactly "true",
+ * until the sandbox check shows which provider sends the SMS. Each
+ * sub-account also has its own switch (`ghl_accounts.sms_fallback_enabled`).
+ */
+export function isSmsFallbackEnabled(): boolean {
+  return process.env.GHL_SMS_FALLBACK_ENABLED === "true";
+}
+
+/**
+ * `POST /conversations/messages` — asks GHL to SEND an SMS to the contact
+ * through the sub-account's own SMS provider. Used by the SMS fallback when a
+ * contact isn't on WhatsApp (`src/lib/sms-fallback.ts`). Same headers and
+ * `Version` as the other conversations calls; body `{ type: "SMS",
+ * contactId, message }`.
+ *
+ * UNVERIFIED until the sandbox check: if PingWren is itself the
+ * sub-account's SMS provider, GHL may hand this SMS straight back to our
+ * provider webhook. The caller records a pending echo before calling this,
+ * so `handleProviderOutboundMessage` can refuse it.
+ *
+ * Never throws; 5 s timeout. Logs the HTTP status or the error name only,
+ * never the body, the contact or the text.
+ */
+export async function sendGhlSms(accessToken: string, input: { contactId: string; message: string }): Promise<{ ok: true } | { ok: false; status: number | null }> {
+  try {
+    const res = await fetch(`${API_BASE}/conversations/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Version: API_VERSION,
+      },
+      body: JSON.stringify({ type: "SMS", contactId: input.contactId, message: input.message }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[ghl] conversations/messages (SMS fallback) rejected: HTTP ${res.status}`);
+      return { ok: false, status: res.status };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error("[ghl] conversations/messages (SMS fallback) failed:", err instanceof Error ? err.name : "unknown");
+    return { ok: false, status: null };
+  }
+}
+
+/**
  * Provably PRE-FLIGHT failures only — the request never reached (or could
  * never have reached) GHL's servers, so a retry cannot possibly double-post.
  * `ENOTFOUND`/`EAI_AGAIN` (DNS resolution never completed) and
