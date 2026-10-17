@@ -15,6 +15,9 @@ const KEYS = [
   "BRAND_ACCENT",
   "NEXT_PUBLIC_APP_URL",
   "NODE_ENV",
+  "VERCEL_ENV",
+  "VERCEL_BRANCH_URL",
+  "VERCEL_URL",
 ] as const;
 const saved: Record<string, string | undefined> = {};
 for (const k of KEYS) saved[k] = process.env[k];
@@ -95,6 +98,25 @@ test("brandConfig does not throw in production without any pricing variable", ()
   (process.env as Record<string, string | undefined>).NODE_ENV = "production";
   process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com";
   assert.doesNotThrow(() => brandConfig());
+});
+
+test("Vercel preview without NEXT_PUBLIC_APP_URL uses the branch URL", () => {
+  for (const k of KEYS) delete process.env[k];
+  (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+  process.env.VERCEL_ENV = "preview";
+  process.env.VERCEL_BRANCH_URL = "pingwren-git-branch-syncme.vercel.app";
+  process.env.VERCEL_URL = "pingwren-abc123-syncme.vercel.app";
+  assert.equal(brandConfig().appUrl, "https://pingwren-git-branch-syncme.vercel.app");
+  delete process.env.VERCEL_BRANCH_URL;
+  assert.equal(brandConfig().appUrl, "https://pingwren-abc123-syncme.vercel.app");
+});
+
+test("production (not a Vercel preview) still requires NEXT_PUBLIC_APP_URL", () => {
+  for (const k of KEYS) delete process.env[k];
+  (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+  process.env.VERCEL_ENV = "production";
+  process.env.VERCEL_URL = "pingwren-abc123-syncme.vercel.app";
+  assert.throws(() => brandConfig(), /NEXT_PUBLIC_APP_URL must be set in production/);
 });
 
 test("BRAND_ACCENT '#abc' normalises to #AABBCC and brandCssVars sets accent and ink (text stays themed)", () => {

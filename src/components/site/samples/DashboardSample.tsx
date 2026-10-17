@@ -13,7 +13,7 @@ interface Row {
   sent: string;
   pct: number;
   note?: { text: string; tone: "warn" | "none" };
-  action?: string;
+  actions?: string[];
 }
 
 const ROWS: Row[] = [
@@ -30,7 +30,7 @@ const ROWS: Row[] = [
     sent: "18 / 150",
     pct: 12,
     note: { text: "Disconnected — 4 messages waiting", tone: "warn" },
-    action: "Reconnect",
+    actions: ["Reconnect", "Send connect link"],
   },
   {
     name: "Fernbank Dental",
@@ -47,7 +47,7 @@ const L = "text-sm font-semibold text-ink-dim sm:hidden";
 
 export function DashboardSample() {
   const { name } = brandConfig();
-  const label = `The ${name} dashboard with three sample sub-accounts: Harbour Street Physio, connected, 42 of 150 sent today; Millbrook Vets, disconnected with 4 messages waiting and a Reconnect button; Fernbank Dental, connected, 0 of 150, with the note "No messages from GoHighLevel yet. Is the Telephony Provider set?"`;
+  const label = `The ${name} dashboard with three sample sub-accounts: Harbour Street Physio, connected, 42 of 150 sent today; Millbrook Vets, disconnected with 4 messages waiting and Reconnect and Send connect link buttons; Fernbank Dental, connected, 0 of 150, with the note "No messages from GoHighLevel yet. Is the Telephony Provider set?"`;
 
   return (
     <div role="img" aria-label={label} className="w-full">
@@ -56,7 +56,7 @@ export function DashboardSample() {
           <span>Sub-accounts</span>
           <span className="pill-sample">Sample</span>
         </div>
-        <div className={`hidden border-b-2 border-rule px-5 py-3.5 text-[0.9rem] font-semibold text-ink-dim ${GRID}`}>
+        <div className={`hidden border-b border-border px-5 py-3.5 small font-semibold text-ink-dim ${GRID}`}>
           <span>Sub-account</span>
           <span>WhatsApp status</span>
           <span>Sent today</span>
@@ -89,7 +89,15 @@ export function DashboardSample() {
               <div className="flex flex-col items-start gap-2">
                 <span className={L}>Needs attention</span>
                 {r.note ? <p className="text-sm font-semibold">{r.note.text}</p> : <p className="text-sm font-medium">Nothing to do</p>}
-                {r.action ? <span className="attn">{r.action}</span> : null}
+                {r.actions ? (
+                  <span className="flex flex-wrap gap-2">
+                    {r.actions.map((a) => (
+                      <span key={a} className="attn">
+                        {a}
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
               </div>
             </li>
           ))}

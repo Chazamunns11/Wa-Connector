@@ -15,7 +15,7 @@ export function generateMetadata(): Metadata {
   };
 }
 
-const H2 = "font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]";
+const H2 = "h-section font-display";
 
 export default function ConnectSheetPage() {
   const brand = brandConfig();
@@ -31,7 +31,7 @@ export default function ConnectSheetPage() {
           </a>
         </div>
       </PageTop>
-      <section className="pb-12 pt-10 md:pb-16 md:pt-14">
+      <section className="band">
         <Container>
           <div className="sheet-top grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-16">
             <div className="grid gap-10">
@@ -51,12 +51,12 @@ export default function ConnectSheetPage() {
                     <li key={st.title} className="sheet-step grid grid-cols-[2.5rem_1fr] gap-3">
                       <span
                         aria-hidden="true"
-                        className="grid size-10 place-items-center rounded-full border-2 border-border-strong font-display text-lg font-extrabold"
+                        className="grid size-10 place-items-center rounded-full border-2 border-outline font-display text-lg font-extrabold"
                       >
                         {i + 1}
                       </span>
                       <div>
-                        <h3 className="font-display text-[1.2rem] font-extrabold leading-tight">{st.title}</h3>
+                        <h3 className="h-item font-display">{st.title}</h3>
                         <p className="mt-1 max-w-[56ch] text-ink-dim">{st.body}</p>
                       </div>
                     </li>
@@ -67,7 +67,7 @@ export default function ConnectSheetPage() {
 
             <figure className="sheet-block sheet-figure">
               <ConnectPanelSample connectedStrip />
-              <figcaption className="mt-3 text-[0.95rem] text-ink-dim">
+              <figcaption className="mt-3 small text-ink-dim">
                 Sample screen: what you see at steps 2 to 5, before and after the scan.
               </figcaption>
             </figure>
@@ -96,15 +96,15 @@ export default function ConnectSheetPage() {
             <h2 className={H2}>If something goes wrong</h2>
             <dl className="mt-4 grid gap-x-10 gap-y-5 md:grid-cols-2">
               {s.problems.map((p) => (
-                <div key={p.title} className="sheet-step border-t-2 border-border-strong pt-3">
-                  <dt className="font-display text-[1.15rem] font-extrabold leading-tight">{p.title}</dt>
+                <div key={p.title} className="sheet-step border-t-2 border-rule pt-3">
+                  <dt className="h-item font-display">{p.title}</dt>
                   <dd className="mt-1 text-ink-dim">{p.body}</dd>
                 </div>
               ))}
             </dl>
           </div>
 
-          <div className="sheet-block mt-12 max-w-[62ch] text-[0.95rem] text-ink-dim">
+          <div className="sheet-block mt-12 max-w-[62ch] small text-ink-dim">
             <p>{s.disclosure}</p>
             <p className="mt-2">{s.notAffiliated}</p>
           </div>

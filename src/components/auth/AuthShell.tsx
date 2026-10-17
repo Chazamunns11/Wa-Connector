@@ -24,10 +24,10 @@ export function AuthShell({
             aria-label={`${brandConfig().name} home`}
             className="rounded-sm focus-visible:outline-2 focus-visible:outline-offset-4"
           >
-            <BrandMark size={36} />
+            <BrandMark size={40} />
           </Link>
         </header>
-        <h1 className="mt-6 font-display text-[28px] font-extrabold leading-[1.15]">{title}</h1>
+        <h1 className="mt-6 h-app font-display">{title}</h1>
         {intro ? <div className="mt-3 text-ink-dim">{intro}</div> : null}
         <div className="mt-6">{children}</div>
       </div>

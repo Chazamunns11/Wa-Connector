@@ -13,8 +13,9 @@ test("W35: customer copy says verified badge and per message, never green tick o
     assert.ok(!/green tick/i.test(t), `${f} still says green tick`);
     assert.ok(!/per conversation/i.test(t), `${f} still says per conversation`);
   }
-  assert.match(read("src/lib/site/sales-copy.ts"), /verified badge/);
-  assert.match(read("src/lib/site/sales-copy.ts"), /charge you per message/);
+  // The disclosure block went (owner, 2026-10-17); the home FAQ's official-api answer carries these now.
+  assert.match(read("src/lib/site/faq.ts"), /verified badge/);
+  assert.match(read("src/lib/site/faq.ts"), /charge you per message/);
 });
 
 test("13D copy fixes: no send/sends echo, no 'not settings' contrast, plain footer sentence", () => {

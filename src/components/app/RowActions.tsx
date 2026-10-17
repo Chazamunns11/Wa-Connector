@@ -11,12 +11,12 @@ const ACTIONS = [
   { key: "deactivate", label: "Deactivate", can: "deactivate" },
 ] as const;
 
-/** Each button posts to rowAction. Which buttons are enabled comes only from rowActionsFor. */
+/** Each button posts to rowAction. Which buttons show comes only from rowActionsFor; the rest are left out, not greyed. */
 export function RowActions({ row, filter }: { row: LocationRow; filter: string }) {
   const allowed = rowActionsFor(row);
   return (
     <ul className="flex flex-wrap gap-2" aria-label={`Actions for ${row.name}`}>
-      {ACTIONS.map((a) => (
+      {ACTIONS.filter((a) => allowed[a.can]).map((a) => (
         <li key={a.key}>
           <form action={rowAction}>
             <input type="hidden" name="filter" value={filter} />
@@ -27,7 +27,6 @@ export function RowActions({ row, filter }: { row: LocationRow; filter: string }
               size="sm"
               variant={a.key === "deactivate" || a.key === "disconnect" ? "danger" : "secondary"}
               className="min-h-11"
-              disabled={!allowed[a.can]}
               aria-label={`${a.label}, ${row.name}`}
             >
               {a.label}
