@@ -14,21 +14,21 @@ Order of work from the design spec (`docs/superpowers/specs/2026-10-12-brand-wha
 | Warm-up for newly linked numbers | `src/pacing.ts`, migration `0002` | Off by default; apply 0002 before deploying the bridge |
 | Public status page | `src/app/status/page.tsx`, `src/lib/public-status.ts` | No customer data, 60s cache |
 
-## Waiting on a decision from Charlie
+## Decisions (A and B decided 17 Oct; the trial and C are recommendations awaiting Charlie's yes)
 
-### A. Pricing and trial (before Product §2 is built)
-- **Decide:** per sub-account with 3-5 numbers included (market: $19-29, volume tiers, annual discount) or keep per number; card at trial or not; trial length (market: 5-14 days, all no-card).
-- **Changes:** spec §2 rewritten. Stripe quantity becomes activated sub-accounts, not numbers. The trial limit "3 active numbers" becomes sub-accounts. A no-card trial needs a trial-end path that pauses sending until a card is added (Stripe `trial_settings.end_behavior.missing_payment_method = pause`).
-- **Blocks:** B's pricing (extra numbers per sub-account) and D.
+### A. Pricing and trial: decided 17 Oct, written into the spec
+- **Decided:** per sub-account, 3 numbers included, with volume tiers and an annual discount. Amounts still Charlie's to set.
+- **Recommended, awaiting confirmation:** 14-day trial with no card; sending pauses when it ends without one.
+- **Spec:** `docs/superpowers/specs/2026-10-12-brand-whatsapp-saas-design.md` Decisions table and §2 updated. Stripe quantity was already activated locations, so the billing mechanics barely change: the trial limit is now 3 sub-accounts, and a `paused` state covers a trial ending with no card.
 
 ### B. Several numbers per sub-account
-- **Decide:** how many included; how GHL picks the sending number (one default plus a per-contact sticky number is the simplest; GoGHL uses routing rules).
+- **Decided 17 Oct:** up to 3 included; one default sending number, and a contact who has messaged a particular number gets replies from that number (sticky).
 - **Shape:** today a tenant (`whatsapp_tenants`) is one GHL location and `whatsapp_sessions` is keyed by tenant (`coach_id`), so one number per location. Either (1) a tenant per number, with `ghl_accounts` pointing at several tenants, or (2) a `whatsapp_numbers` table under the tenant. Option 1 reuses every bridge path unchanged (session, lease, pacer and queue are all per tenant) and is the recommended start.
 - **Touches:** `supabase/migrations`, `src/lib/ghl-provider.ts` (pick the tenant for an outbound), `src/lib/ghl-inbound.ts` (which number a reply came to), the embed and connect pages (connect a second number), the dashboard rows.
 - **Why it matters:** GHL's top WhatsApp request (607 votes); native GHL still allows one.
 
 ### C. White-label, agency install, affiliates
-- **Decide:** white-label scope (logo and colours on the embed and connect pages only, or a custom domain too); affiliate commission (market: 15-30% recurring); affiliate tooling (Stripe-native coupons, or a tool such as Rewardful or Reditus).
+- **Recommended 17 Oct, awaiting confirmation:** at launch, agency branding inherited by every sub-account plus auto-claiming new sub-accounts; a 20% recurring affiliate scheme after the soft launch; custom domains later. Still to pick: affiliate tooling (Stripe-native coupons, or a tool such as Rewardful or Reditus).
 - **Already there:** per-location branding (`src/lib/brand.ts`, `client-logos` bucket, `saveGhlAccountBrandingAction`) and agency-level OAuth installs (spec §1).
 - **Missing:** agency-level branding that every sub-account inherits; auto-claiming locations added to an agency after the install (needs GHL's location-created webhook, to be confirmed in GHL's docs); wholesale pricing for SaaS-mode agencies (depends on A).
 

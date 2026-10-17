@@ -1,6 +1,6 @@
 # `<Brand>`: self-serve WhatsApp for GoHighLevel — design
 
-Charlie, 12 Oct 2026; **revised 16 Oct 2026 to a standalone product** (see "Revision: standalone" below). Agreed in conversation, section by section. `<Brand>` is a placeholder until the name is picked.
+Charlie, 12 Oct 2026; **revised 16 Oct 2026 to a standalone product** (see "Revision: standalone" below); **revised 17 Oct 2026 for pricing, numbers and agency resale** after the competitor research (`docs/research/2026-10-16-competitor-gap-analysis.md`). Agreed in conversation, section by section. `<Brand>` is a placeholder until the name is picked.
 
 ## Goal
 
@@ -17,7 +17,10 @@ A public, paid product that anyone running GoHighLevel can find (through ads or 
 | Topic | Decision |
 |---|---|
 | Customer | Anyone with GHL: **agency owners** (many sub-accounts) **and single sub-account owners** (often under a white-label like FitPro CRM). Both use the same system. |
-| Price | **Per activated number, monthly.** 7-day trial with the card taken at signup. Trial limited to **3 active numbers**. The price is Charlie's to set. |
+| Price | **Per activated sub-account, monthly** (decided 17 Oct), with **3 WhatsApp numbers included** per sub-account. Volume tiers and an annual discount; the amounts are Charlie's to set (market: $29, $22 at 3+, $19 at 10+ per sub-account; extra numbers $9–10). |
+| Trial | **Recommended 17 Oct, not yet confirmed:** **14 days, no card.** When the trial ends without a card, sending pauses until one is added. Trial limited to **3 active sub-accounts**. (Previously: 7 days, card at signup. Every competitor checked runs a no-card trial.) |
+| Numbers per sub-account | Up to 3 included (decided 17 Oct). **One default sending number per sub-account; a contact who has messaged a particular number gets replies from that number** (sticky). See roadmap item B. |
+| Agency resale | **Recommended 17 Oct, not yet confirmed:** at launch, agency branding that every sub-account inherits, plus auto-claiming sub-accounts added to an installed agency later. After the soft launch, a 20% recurring affiliate scheme. Custom domains later. |
 | Brand | **A new brand on its own domain** (`app.<brand>.com`). Agencies never see "FitClosers". |
 | Login | **Both:** a passwordless email sign-in link on `app.<brand>.com` (the main login; Supabase OTP, as the Hub uses), plus the in-GHL page per sub-account (GHL signs that user in for that one sub-account only). |
 | Architecture | **Standalone** (revised 16 Oct): its own private GitHub repo, its own Vercel project, its **own Supabase project** and its **own bridge service**, in the same Railway account/project and Supabase organisation as the Hub (one login, one bill, separate instances). |
@@ -76,13 +79,13 @@ Steps 1–2 above ship before §1–§4. Paid traffic must not land on a product
 
 ## 2. Signup and billing
 
-**Flow:** landing page → **Start 7-day free trial** → `/signup` (account name, "agency or single business?", email; sign-in link emailed) → **Stripe Checkout** (subscription mode, `trial_period_days: 7`, card always collected) → the dashboard (`/`) → **Connect GHL** → choose sub-accounts in GHL → **Activate** each one wanted → scan the QR or send a connect link → checklist: set the Telephony Provider.
+**Flow:** landing page → **Start 14-day free trial** → `/signup` (account name, "agency or single business?", email; sign-in link emailed) → **Stripe Checkout** (subscription mode, `trial_period_days: 14`, `payment_method_collection: 'if_required'` so no card is asked for, `trial_settings.end_behavior.missing_payment_method: 'pause'`) → the dashboard (`/`) → **Connect GHL** → choose sub-accounts in GHL → **Activate** each one wanted → scan the QR or send a connect link → checklist: set the Telephony Provider.
 
 **Stripe:**
 - A **separate Stripe account** for `<Brand>`, with one recurring price per number per month. Stripe Tax handles UK and EU VAT.
 - A new webhook route, `/api/webhooks/brand-billing`, with its own signing secret, separate from the existing Connect webhook. It handles `checkout.session.completed`, `customer.subscription.created|updated|deleted` and `invoice.payment_failed`.
 - **Subscription quantity = the number of activated locations.** Activate and Deactivate update the subscription item quantity with prorations. Quantity 0 is allowed.
-- Stripe status maps to `billing_status`: `trialing` → `trialing`, `active` → `active`, `past_due` → `past_due` (**sending continues**, with a dashboard banner), `unpaid` → `paused`, `canceled` / `incomplete_expired` → `cancelled`. In Stripe settings, failed retries end in `unpaid` after about 7 days.
+- Stripe status maps to `billing_status`: `trialing` → `trialing`, `paused` (trial ended with no card) → `paused`, `active` → `active`, `past_due` → `past_due` (**sending continues**, with a dashboard banner), `unpaid` → `paused`, `canceled` / `incomplete_expired` → `cancelled`. In Stripe settings, failed retries end in `unpaid` after about 7 days.
 - Stripe's hosted Customer Portal handles card updates, invoices and cancelling (at the end of the period).
 
 **Sending gate.** In `handleProviderOutboundMessage`, before any send:
@@ -92,13 +95,13 @@ Steps 1–2 above ship before §1–§4. Paid traffic must not land on a product
 
 Both refusal reasons are fixed strings, reported as failed in GHL.
 
-**Limits:** while `trialing`, Activate refuses past **3** active numbers ("Your trial includes 3 numbers. Start your paid plan now to add more", with a button that ends the trial early in Stripe). A platform-wide `BRAND_MAX_ACTIVE_NUMBERS` env var makes Activate refuse beyond the server's tested capacity and adds the account to a waitlist instead.
+**Limits:** while `trialing`, Activate refuses past **3** active sub-accounts ("Your trial includes 3 sub-accounts. Start your paid plan now to add more", with a button that adds a card and ends the trial early in Stripe). A trial that ends with no card leaves the account `paused`: the dashboard and the in-GHL page show "Your trial has ended. Add a card to keep sending.", with the Stripe Customer Portal link. A platform-wide `BRAND_MAX_ACTIVE_NUMBERS` env var makes Activate refuse beyond the server's tested capacity and adds the account to a waitlist instead.
 
 **Cancellation cleanup:** a daily cron. **14 days** after `cancelled_at`, it logs out every bridge session for that account's locations and deletes their stored WhatsApp credentials.
 
 ## 3. Dashboard (`/`)
 
-- **Header:** plan state ("Trial: N days left" / "Active" / a red "Payment failed — update card" banner), "N numbers active · £X/month", and the main **Connect GHL** button ("Add sub-accounts" once something is linked).
+- **Header:** plan state ("Trial: N days left" / "Active" / a red "Payment failed — update card" banner), "N sub-accounts active · £X/month", and the main **Connect GHL** button ("Add sub-accounts" once something is linked).
 - **One row per location:** name, WhatsApp state (not active / waiting for scan / connected with the number / disconnected with N waiting), sent today out of the cap, and a **Needs attention** column.
 - A **"Needs attention" filter.**
 - **Row actions:** Activate, Show QR, Send connect link (the existing `ghl-connect-link` mechanism), Disconnect, Deactivate.
@@ -146,7 +149,7 @@ This is the existing embed plus the phase 1 overview card, with `<Brand>` stylin
 
 ## Out of scope (later, if wanted)
 
-Team members per account; customers without GHL; SMS fallback through the customer's own Twilio; read receipts; gradual warm-up for new numbers; tiered pricing; affiliates; transferring a location between accounts; holding messages for Hub sequences.
+Team members per account; customers without GHL; SMS fallback through the customer's own Twilio; read receipts; affiliates (planned after the soft launch, see Agency resale above); custom domains for agencies; transferring a location between accounts; holding messages for Hub sequences.
 
 ## Open items
 
