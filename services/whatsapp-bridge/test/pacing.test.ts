@@ -141,6 +141,16 @@ test("pacer: a daily cap below the warm-up cap still wins", () => {
   assert.equal(pacer.effectiveDailyCap(), 10);
 });
 
+test("isInWarmup: false with no setLinkedAt, true at 13.9 days, false at 14", () => {
+  const clock = fixedClock(T0);
+  const pacer = new SessionPacer({ minGapMs: 0, jitterMs: 0, dailyCap: 150 }, 0, clock.now, () => 0);
+  assert.equal(pacer.isInWarmup(), false);
+  pacer.setLinkedAt(T0 - 13.9 * DAY);
+  assert.equal(pacer.isInWarmup(), true);
+  pacer.setLinkedAt(T0 - 14 * DAY);
+  assert.equal(pacer.isInWarmup(), false);
+});
+
 // drainQueue/openSocket need a live Baileys socket, so the warm-up wiring is
 // pinned at source level (same approach as test/sessions-text-content.test.ts).
 import { readFileSync } from "node:fs";

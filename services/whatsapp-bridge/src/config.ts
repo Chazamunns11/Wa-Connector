@@ -29,6 +29,10 @@ export interface BridgeConfig {
   dailyCap: number;
   /** Ramp a newly linked number's daily cap up over 14 days (src/pacing.ts WARMUP_SCHEDULE). Off by default. */
   warmupEnabled: boolean;
+  /** Max groups one number may create per UTC day (src/group-limits.ts). Mass group creation is a ban trigger. */
+  groupCreateDaily: number;
+  /** Max people one number may add directly to groups per UTC day (src/group-limits.ts); the rest get an invite link. Mass adds are a ban trigger. */
+  groupAddDaily: number;
   /** Show "typing…" before each outbound text part (src/typing.ts). */
   typingIndicatorEnabled: boolean;
   /** Longest single typing window (ms); 0 disables typing like the flag does. */
@@ -198,6 +202,8 @@ export function loadConfig(): BridgeConfig {
     sendJitterMs: intWithDefault("WA_SEND_JITTER_MS", 30_000),
     dailyCap: intWithDefault("WA_DAILY_CAP", 150),
     warmupEnabled: boolWithDefault("WA_WARMUP_ENABLED", false),
+    groupCreateDaily: intWithDefault("WA_GROUP_CREATE_DAILY", 3),
+    groupAddDaily: intWithDefault("WA_GROUP_ADD_DAILY", 50),
     typingIndicatorEnabled: boolWithDefault("WA_TYPING_INDICATOR_ENABLED", true),
     typingMaxMs: intWithDefault("WA_TYPING_MAX_MS", 4_000),
     lockHeartbeatMs: intWithDefault("WA_LOCK_HEARTBEAT_MS", 10_000),

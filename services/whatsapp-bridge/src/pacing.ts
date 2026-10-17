@@ -112,6 +112,16 @@ export class SessionPacer {
     return warm === null ? this.config.dailyCap : Math.min(this.config.dailyCap, warm);
   }
 
+  /**
+   * True while this number is inside the warm-up window (first 14 days since
+   * it was linked). Only ever true with WA_WARMUP_ENABLED, because
+   * `setLinkedAt` is only called then. Group creation and direct adds are
+   * refused while this holds (src/group-limits.ts's callers).
+   */
+  isInWarmup(): boolean {
+    return this.linkedAtMs !== null && warmupCapForAgeDays((this.now() - this.linkedAtMs) / DAY_MS) !== null;
+  }
+
   /** True when this session has spent its daily budget — the send ROUTE checks this up front so the caller gets an immediate 429 instead of a message that sits queued until midnight. */
   atDailyCap(): boolean {
     this.rollDayIfNeeded();

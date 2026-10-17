@@ -39,7 +39,9 @@ const MEDIA_KEYS = [
 const SHUTDOWN_FLUSH_KEYS = ["WA_SHUTDOWN_FLUSH_TIMEOUT_MS"];
 /** Session-lease heartbeat/TTL (src/lock.ts) — same "clear before every test" discipline as the keys above. */
 const LOCK_KEYS = ["WA_LOCK_HEARTBEAT_MS", "WA_LOCK_TTL_MS"];
-const CLEARED_KEYS = [...POKE_KEYS, ...MEDIA_KEYS, ...SHUTDOWN_FLUSH_KEYS, ...LOCK_KEYS];
+/** Group management daily limits (src/group-limits.ts). */
+const GROUP_LIMIT_KEYS = ["WA_GROUP_CREATE_DAILY", "WA_GROUP_ADD_DAILY"];
+const CLEARED_KEYS = [...POKE_KEYS, ...MEDIA_KEYS, ...SHUTDOWN_FLUSH_KEYS, ...LOCK_KEYS, ...GROUP_LIMIT_KEYS];
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void): void {
   const previous: Record<string, string | undefined> = {};
@@ -318,5 +320,18 @@ test("config: WA_VOICE_TRANSCODE_ENABLED defaults to false, reads true, and refu
   });
   withEnv({ WA_VOICE_TRANSCODE_ENABLED: "yes" }, () => {
     assert.throws(() => loadConfig(), /WA_VOICE_TRANSCODE_ENABLED must be exactly "true" or "false"/);
+  });
+});
+
+test("config: group limits default to 3 creates and 50 direct adds a day, and read overrides", () => {
+  withEnv({}, () => {
+    const config = loadConfig();
+    assert.equal(config.groupCreateDaily, 3);
+    assert.equal(config.groupAddDaily, 50);
+  });
+  withEnv({ WA_GROUP_CREATE_DAILY: "1", WA_GROUP_ADD_DAILY: "10" }, () => {
+    const config = loadConfig();
+    assert.equal(config.groupCreateDaily, 1);
+    assert.equal(config.groupAddDaily, 10);
   });
 });

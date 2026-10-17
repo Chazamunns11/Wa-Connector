@@ -31,6 +31,12 @@ import { GROUP_SEND_CAP_UNITS, isGroupJid } from "./groups.js";
 /** Mirrors the portal's `WhatsappSessionStatus` (src/lib/types.ts) and the 0046 CHECK constraint — keep all three in lockstep. */
 export type SessionStatus = "disconnected" | "waiting_qr" | "connected" | "logged_out" | "banned";
 
+/** Mirrors the 0009 CHECK on `whatsapp_group_actions.action`. Only `create` and `add` count towards the daily limits (src/group-limits.ts). */
+export type GroupActionKind = "create" | "add" | "remove" | "promote" | "demote" | "update" | "invite_reset" | "leave";
+
+/** The largest `count` one `whatsapp_group_actions` row may carry (0009's CHECK: between 1 and 50). */
+export const GROUP_ACTION_MAX_COUNT = 50;
+
 export type MessageStatus = "accepted" | "sending" | "sent" | "failed" | "not_on_whatsapp";
 
 export interface MessageRecord {
@@ -596,6 +602,71 @@ export class BridgeStore {
       .is("left_at", null);
     if (error) throw error;
     return ((data ?? []) as { group_jid: string }[]).map((r) => r.group_jid).filter(isGroupJid);
+  }
+
+  // -------------------------------------------------------------------------
+  // whatsapp_group_actions (0009) — what each number has done to groups.
+  // Holds no names, numbers or links: tenant, group JID, action, count.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Today's (UTC) `create` and `add` totals for this tenant — the sum of
+   * `count`, so a 12-person add row counts 12. Seeds src/group-limits.ts so a
+   * restart cannot hand a number a fresh day's budget.
+   */
+  async countGroupActionsToday(tenantId: string): Promise<{ creates: number; adds: number }> {
+    const midnightUtc = new Date();
+    midnightUtc.setUTCHours(0, 0, 0, 0);
+    const { data, error } = await this.supabase
+      .from("whatsapp_group_actions")
+      .select("action, count")
+      .eq("tenant_id", tenantId)
+      .in("action", ["create", "add"])
+      .gte("created_at", midnightUtc.toISOString());
+    if (error) throw error;
+    let creates = 0;
+    let adds = 0;
+    for (const row of (data ?? []) as { action: GroupActionKind; count: number }[]) {
+      if (row.action === "create") creates += row.count;
+      else if (row.action === "add") adds += row.count;
+    }
+    return { creates, adds };
+  }
+
+  /**
+   * Appends one action row. `groupJid` is null for a create that has no
+   * group yet. Re-checks the JID and count before the insert so a bad value
+   * fails here with a fixed message rather than as a constraint error.
+   */
+  async recordGroupAction(tenantId: string, action: GroupActionKind, count: number, groupJid: string | null): Promise<void> {
+    if (groupJid !== null && !isGroupJid(groupJid)) {
+      throw new Error("[store] recordGroupAction: refused a malformed group jid");
+    }
+    if (!Number.isInteger(count) || count < 1 || count > GROUP_ACTION_MAX_COUNT) {
+      throw new Error("[store] recordGroupAction: count out of range");
+    }
+    const { error } = await this.supabase
+      .from("whatsapp_group_actions")
+      .insert({ tenant_id: tenantId, action, count, group_jid: groupJid });
+    if (error) throw error;
+  }
+
+  /**
+   * True when this phone has sent this tenant at least one 1:1 message
+   * (a non-group inbound row). Gates direct adds: only someone who has
+   * messaged the number before is added directly; everyone else gets an
+   * invite link. Bounded by the inbound table's 90-day retention.
+   */
+  async hasInboundFromPhone(tenantId: string, phoneE164: string): Promise<boolean> {
+    const { data, error } = await this.supabase
+      .from("whatsapp_inbound_messages")
+      .select("id")
+      .eq("coach_id", tenantId)
+      .eq("from_phone", phoneE164)
+      .is("group_jid", null)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? []).length > 0;
   }
 
   // -------------------------------------------------------------------------
