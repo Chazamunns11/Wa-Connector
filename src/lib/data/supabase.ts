@@ -1396,17 +1396,26 @@ export class SupabaseGhlRepository implements GhlRepository {
     // two drains do.
     const { data: accountRows, error: accountsError } = await supabase.from("ghl_accounts").select("location_id, tenant_id, label");
     if (accountsError) throw accountsError;
-    const locations: GhlHealthLocation[] = ((accountRows ?? []) as { location_id: string; tenant_id: string; label: string }[]).map((r) => ({
-      locationId: r.location_id,
-      tenantId: r.tenant_id,
-      label: r.label,
-    }));
+    const accounts = (accountRows ?? []) as { location_id: string; tenant_id: string; label: string }[];
     // Nothing installed yet — an empty snapshot with zero further reads,
     // same "no accounts, no work" short-circuit `getUnprocessedGhlInboundMessages`
     // already uses for its own tenant fence.
-    if (locations.length === 0) return buildGhlHealthSnapshot([], [], [], Date.now());
+    if (accounts.length === 0) return buildGhlHealthSnapshot([], [], [], Date.now());
+    // Every number of each location, so a non-default number's inbound
+    // failures and backlog show against its location too.
+    const numbers = await listAllLocationNumberTenants(accounts.map((a) => a.location_id));
+    const tenantIdsByLocation = locationTenantIds(
+      accounts.map((a) => ({ locationId: a.location_id, tenantId: a.tenant_id })),
+      numbers
+    );
+    const locations: GhlHealthLocation[] = accounts.map((r) => ({
+      locationId: r.location_id,
+      tenantId: r.tenant_id,
+      tenantIds: tenantIdsByLocation.get(r.location_id) ?? [r.tenant_id],
+      label: r.label,
+    }));
 
-    const tenantIds = locations.map((l) => l.tenantId);
+    const tenantIds = [...tenantIdsByLocation.values()].flat();
     const inboundWindowStartIso = new Date(Date.now() - GHL_HEALTH_INBOUND_WINDOW_DAYS * 86_400_000).toISOString();
 
     const [outboundResult, inboundResult, waitingResult] = await Promise.all([

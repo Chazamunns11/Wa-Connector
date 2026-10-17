@@ -109,3 +109,9 @@ test("the GHL inbound drain fences on every number of each active location, not 
   assert.match(body, /locationTenantIds\(/);
   assert.match(body, /\.in\("coach_id", activeTenantIds\)/);
 });
+
+test("the owner health snapshot maps every number's tenant to its location", () => {
+  const body = methodSource("getGhlHealthSnapshot");
+  assert.match(body, /listAllLocationNumberTenants\(/);
+  assert.match(body, /tenantIds: tenantIdsByLocation\.get\(/);
+});

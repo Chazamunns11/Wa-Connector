@@ -130,6 +130,8 @@ export const GHL_HEALTH_RECENT_PROBLEMS_LIMIT = 10;
 export interface GhlHealthLocation {
   locationId: string;
   tenantId: string;
+  /** Every number's tenant for this location (`ghl_location_numbers`), so a non-default number's inbound counts here too. `tenantId` always counts, listed or not. */
+  tenantIds?: string[];
   label: string;
 }
 
@@ -210,7 +212,9 @@ export function buildGhlHealthSnapshot(
 ): GhlHealthSnapshot {
   const outboundByLocation = new Map(locations.map((loc) => [loc.locationId, emptyOutboundHealth(loc)]));
   const inboundByLocation = new Map(locations.map((loc) => [loc.locationId, emptyInboundHealth(loc)]));
-  const locationIdByTenantId = new Map(locations.map((loc) => [loc.tenantId, loc.locationId]));
+  const locationIdByTenantId = new Map(
+    locations.flatMap((loc) => [loc.tenantId, ...(loc.tenantIds ?? [])].map((tenantId) => [tenantId, loc.locationId] as const))
+  );
 
   // Tracks the timestamp behind each location's CURRENT "latest" string, so a
   // later (chronologically) row can overwrite an earlier one regardless of
