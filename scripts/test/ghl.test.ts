@@ -3509,6 +3509,7 @@ test("merge STOP: a contact opted out on the DEFAULT number is refused from thei
   assert.equal(sendCalls.length, 0);
   assert.equal([...rows.values()][0].tenantId, SECOND_TENANT_ID);
   assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.optedOutOtherNumber);
+  assert.equal(GHL_PROVIDER_REASONS.optedOutOtherNumber, "Contact opted out (STOP) on this sub-account — not sent");
 });
 
 test("merge STOP: a contact opted out on the number it is sent from keeps the original W10 string", async () => {

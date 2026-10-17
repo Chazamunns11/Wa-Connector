@@ -300,7 +300,7 @@ const REASON_OPTED_OUT = "contact replied STOP to this number — not sent (they
  * the business, so it blocks every number of the location; this string says
  * so honestly instead of "to this number".
  */
-const REASON_OPTED_OUT_OTHER_NUMBER = "contact replied STOP to another WhatsApp number of this sub-account — not sent (they can reply START to opt back in)";
+const REASON_OPTED_OUT_OTHER_NUMBER = "Contact opted out (STOP) on this sub-account — not sent";
 /** Plan's D7, verbatim (including the cap value — this is the bridge's own documented default, restated here as a fixed string rather than parsed out of the bridge's response text). */
 const REASON_CAP_REACHED = "daily WhatsApp cap (150) reached for this number — resumes at UTC midnight";
 const REASON_IDEMPOTENCY_CONFLICT = "message could not be sent — a conflicting send already used this message id";
