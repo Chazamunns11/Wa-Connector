@@ -52,6 +52,11 @@ messages from groups that were never enabled are not stored. Sending to a
 group contact posts to the group and costs 5 daily-cap units.
 
 Apply migrations `0003` to `0005` (in order, after `0001` and `0002`) before
-deploying the new bridge and app. Details are in
+deploying the new bridge and app. The app build must not go live before
+them: without them every GHL outbound message fails before it is recorded,
+the inbound drain fails on every pass, and a GHL install (OAuth) errors after
+it has already written the account. The bridge tolerates running before
+them: one-to-one sending and receiving are unaffected, and groups fail
+closed (no group traffic in or out). Details are in
 [`docs/GO-LIVE-FOUNDATION.md`](docs/GO-LIVE-FOUNDATION.md) and
 [`services/whatsapp-bridge/README.md`](services/whatsapp-bridge/README.md).

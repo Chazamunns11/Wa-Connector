@@ -70,8 +70,14 @@ then every later migration in number order (`0002_…` adds
 `whatsapp_sessions.phone_linked_at`, which `wipeCreds` writes)
 → deploy bridge → set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
 Migrations `0003` (numbers), `0004` (groups) and `0005`
-(`whatsapp_messages.group_jid`, `to_phone` nullable) must all be applied
-before this version of the bridge is deployed.
+(`whatsapp_messages.group_jid`, `to_phone` nullable) should all be applied
+before this version of the bridge is deployed. The bridge tolerates running
+before them: one-to-one sending and receiving are unaffected, and groups fail
+closed (the enabled-group set cannot load, so group traffic is dropped in
+both directions). The app is different: its build must not go live before
+0003 to 0005 are applied, or every GHL outbound message fails before it is
+recorded, the GHL inbound drain fails on every pass, and a GHL install
+(OAuth) errors after it has already written the account.
 
 ## Routes added for groups
 
@@ -79,7 +85,7 @@ All need the bearer secret, like every route except `/health`.
 
 | Route | Does |
 | --- | --- |
-| `GET /sessions/:id/groups` | Lists the number's groups live from WhatsApp (`{ groups: [{ jid, name, size }] }`). 409 `session_not_connected` if the session is down, 502 `groups_unavailable` if WhatsApp will not answer. Nothing is stored or logged. |
+| `GET /sessions/:id/groups` | Lists the number's groups live from WhatsApp (`{ ok: true, groups: [{ jid, name, size }] }`). 409 `session_not_connected` if the session is down, 502 `groups_unavailable` if WhatsApp will not answer. Nothing is stored or logged. |
 | `POST /sessions/:id/groups/refresh` | Reloads the enabled-group set from `whatsapp_groups`. The app calls it after the owner changes a group. 502 `groups_refresh_failed` if the load fails. |
 | `POST /sessions/:id/send` with `groupJid` | Sends to an enabled group. Give exactly one of `to` or `groupJid` (both is 400 `invalid_body`). A `groupJid` that is not in the enabled set is 400 `group_not_enabled`. |
 
@@ -183,7 +189,9 @@ still exists on the linked phone regardless.
 - Pacing (`WA_SEND_MIN_GAP_MS` + jitter + `WA_DAILY_CAP`) is per tenant session
   and survives restarts (both the daily count AND the min-gap clock are
   seeded from the ledger — `store.getDailyActivity`). Budget is also
-  RESERVED at accept time (`sentToday + queued units`), not only counted at
+  RESERVED at accept time (`sentToday + in-flight units + queued units`,
+  where in-flight is the send the worker is dispatching right now and a
+  group send is 5 units), not only counted at
   dispatch time, so a burst of due sends arriving faster than the pacer can
   drain (e.g. an hourly cron finding dozens of steps due at once) cannot
   blow through the cap before any of them has actually dispatched. A ban

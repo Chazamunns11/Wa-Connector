@@ -75,6 +75,13 @@ two are filled in a second pass once both domains exist. That is expected.
    0001 to 0005 in order before deploying the bridge and the app: 0003 adds
    the several-numbers tables, 0004 the group tables, and 0005 the
    `whatsapp_messages.group_jid` column the bridge and app now use.
+   The app build must not go live before 0003 to 0005 are applied. Without
+   them every GHL outbound message fails before it is recorded, the GHL
+   inbound drain fails on every pass (no replies reach GHL), and a GHL
+   install (OAuth) errors after it has already written the account. The
+   bridge tolerates running before them: one-to-one sending and receiving
+   are unaffected, and groups fail closed (no group traffic in or out until
+   the migrations are in and the enabled-group set loads).
 3. **Project Settings → API**. Note three values for Vercel and Railway:
    - Project URL → `NEXT_PUBLIC_SUPABASE_URL` (Vercel), `SUPABASE_URL` (Railway)
    - `anon` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY` (Vercel)

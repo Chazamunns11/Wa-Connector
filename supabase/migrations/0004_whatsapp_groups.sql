@@ -2,9 +2,12 @@
 --
 -- WHY OPT-IN: a linked number can sit in dozens of groups, and mirroring all
 -- of them into GHL would flood the client's CRM with contacts and
--- conversations they never asked for. A group row is created when the bridge
--- sees a group, but `enabled` defaults to false: nothing is forwarded (and no
--- GHL contact is made) until the client switches that group on.
+-- conversations they never asked for. A group row is created when the owner
+-- switches a group on in the embed (the app's setWhatsappGroupEnabled, from
+-- the bridge's live group list); groups never switched on have no row and
+-- nothing from them is forwarded or stored. Switching a group off keeps its
+-- row with `enabled = false` (the column defaults to false), and no GHL
+-- contact is made until the first forwarded message.
 --
 -- Deploy order: apply BEFORE the bridge or portal build that reads these.
 
