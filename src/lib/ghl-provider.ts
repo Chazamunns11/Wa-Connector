@@ -74,15 +74,16 @@
  * verbatim — `src/lib/ghl.ts`'s `updateGhlMessageStatus` sanitises its own
  * failure strings to the same standard (adversarial-review finding 13).
  *
- * THE pending_text ADAPTATION (Phase 2, flagged in the go-live report): 0069
- * committed to "no message body stored" for `ghl_outbound_messages`, but the
- * plan's own D3 requires the drain to retry a bridge-unreachable send under
- * the SAME idempotency key with the SAME text (resending different text under
- * that key would be ACCEPTED as the real content — the bridge's own ledger
- * has no row yet for a send that never reached it). `pending_text`
- * (0070_ghl_outbound_pending_text.sql) closes that gap: populated only while
- * `send_state = 'pending_send'`, cleared the instant a row leaves that state
- * — see that migration's header for the full argument.
+ * THE pending_text ADAPTATION (Phase 2, flagged in the go-live report; extended
+ * by 0013): 0069 committed to "no message body stored" for
+ * `ghl_outbound_messages`, but the plan's own D3 requires the drain to retry a
+ * bridge-unreachable send under the SAME idempotency key with the SAME text
+ * (resending different text under that key would be ACCEPTED as the real
+ * content — the bridge's own ledger has no row yet for a send that never
+ * reached it). `pending_text` (0070) closes that gap, and 0013 keeps it on an
+ * accepted row until its status is reported, so a "not on WhatsApp" trigger can
+ * carry the unsent text. It is cleared on refusal, when the status is reported,
+ * and by the cron for an accepted row never reported within 7 days.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -147,6 +148,7 @@ export type GhlProviderRepo = Pick<
   | "markWhatsappGroupLeft"
   // Workflow triggers — "not on WhatsApp" fires from the status drain.
   | "listTriggerSubscriptions"
+  | "getTenantPhone"
 >;
 
 /**
@@ -254,6 +256,7 @@ export type FireTrigger = <K extends TriggerKey>(repo: TriggerRepo, locationId: 
  * outcome. Uses `deps.fireTrigger` when injected, else the real helper (which
  * does nothing unless `GHL_WORKFLOW_TRIGGERS_ENABLED` is "true"). Logs nothing
  * itself: the helper logs fixed strings, and a throw here is swallowed.
+ * Resolves false when the fire threw or reported failed targets.
  */
 export async function fireTriggerBestEffort<K extends TriggerKey>(
   repo: TriggerRepo,
@@ -261,41 +264,115 @@ export async function fireTriggerBestEffort<K extends TriggerKey>(
   locationId: string,
   key: K,
   payload: TriggerPayloads[K]
-): Promise<void> {
+): Promise<boolean> {
   try {
+    let outcome: unknown;
     if (deps.fireTrigger) {
-      await deps.fireTrigger(repo, locationId, key, payload);
-      return;
+      outcome = await deps.fireTrigger(repo, locationId, key, payload);
+    } else {
+      const triggers = await import("@/lib/ghl-triggers");
+      outcome = await triggers.fireWorkflowTrigger(repo, triggers.defaultTriggerDeps(deps), locationId, key, payload);
     }
-    const triggers = await import("@/lib/ghl-triggers");
-    await triggers.fireWorkflowTrigger(repo, triggers.defaultTriggerDeps(deps), locationId, key, payload);
+    const failed = (outcome as { failed?: unknown } | null | undefined)?.failed;
+    return !(typeof failed === "number" && failed > 0);
   } catch {
     // Best effort: a trigger can never change a drain result.
+    return false;
+  }
+}
+
+/** Overall time a drain pass waits for its started fires before returning anyway. */
+export const TRIGGER_PASS_CAP_MS = 8_000;
+
+type TriggerTarget = { number: string; numberLabel: string | null };
+
+/**
+ * The fires one drain pass starts. Fires are started without being awaited
+ * inline (`startTrigger`) and awaited together, under one cap, when the pass
+ * ends (`settleTriggers`), so a slow or hanging trigger endpoint can never hold
+ * up a row. After the first fire that fails or throws, later fires in the pass
+ * are not started and are counted as skipped. Also memoises the number lookups.
+ */
+export interface TriggerPass {
+  pending: Promise<void>[];
+  stopped: boolean;
+  /** Counts one fire not started. */
+  skip: () => void;
+  /** Payload `number` / `numberLabel` per `${locationId}:${tenantId}`; a failed lookup is dropped so it is retried. */
+  targets: Map<string, Promise<TriggerTarget | null>>;
+}
+
+export function newTriggerPass(onSkip: () => void): TriggerPass {
+  return { pending: [], stopped: false, skip: onSkip, targets: new Map() };
+}
+
+/**
+ * Starts `run` (which resolves false when the fire failed) in the background,
+ * unless firing is switched off (nothing is read or built) or the pass has
+ * stopped after a failure. Never throws and never awaits.
+ */
+export function startTrigger(pass: TriggerPass, run: () => Promise<boolean>): void {
+  if (!isWorkflowTriggersEnabled()) return;
+  if (pass.stopped) {
+    pass.skip();
+    return;
+  }
+  pass.pending.push(
+    (async () => {
+      try {
+        if (!(await run())) pass.stopped = true;
+      } catch {
+        pass.stopped = true;
+      }
+    })()
+  );
+}
+
+/** Waits for the pass's started fires, at most `TRIGGER_PASS_CAP_MS` in all, then returns regardless. Never throws. */
+export async function settleTriggers(pass: TriggerPass, capMs: number = TRIGGER_PASS_CAP_MS): Promise<void> {
+  if (pass.pending.length === 0) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([Promise.allSettled(pass.pending), new Promise<void>((resolve) => (timer = setTimeout(resolve, capMs)))]);
+  } catch {
+    // never changes the drain result
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
 /**
  * The `number` / `numberLabel` of a trigger payload for `tenantId`'s number, or
  * null when its phone is unknown or unreadable (the trigger is then skipped).
- * `memo` caches the phone per tenant for one pass; only a successful read is cached.
+ * Memoised on the pass; `knownNumbers` skips the label read when the caller has it.
  */
-export async function resolveTriggerNumber(
-  repo: Pick<GhlRepository, "getWhatsappSessionSummary">,
+export function resolvePassTarget(
+  repo: Pick<GhlRepository, "getTenantPhone" | "listLocationNumbers">,
+  pass: TriggerPass,
+  locationId: string,
   tenantId: string,
-  label: string | null | undefined,
-  memo?: Map<string, string>
-): Promise<{ number: string; numberLabel: string | null } | null> {
-  try {
-    let phone = memo?.get(tenantId) ?? null;
-    if (!phone) {
-      phone = (await repo.getWhatsappSessionSummary(tenantId))?.phoneNumber ?? null;
-      if (!phone) return null;
-      memo?.set(tenantId, phone);
-    }
-    return { number: phone, numberLabel: label?.trim() ? label.trim() : null };
-  } catch {
-    return null;
+  knownNumbers?: LocationNumber[]
+): Promise<TriggerTarget | null> {
+  const key = `${locationId}:${tenantId}`;
+  let lookup = pass.targets.get(key);
+  if (!lookup) {
+    lookup = (async () => {
+      try {
+        const phone = await repo.getTenantPhone(tenantId);
+        if (!phone) return null;
+        const numbers = knownNumbers ?? (await repo.listLocationNumbers(locationId));
+        const label = numbers.find((n) => n.tenantId === tenantId)?.label?.trim();
+        return { number: phone, numberLabel: label ? label : null };
+      } catch {
+        return null;
+      }
+    })();
+    pass.targets.set(key, lookup);
+    void lookup.then((t) => {
+      if (!t) pass.targets.delete(key);
+    });
   }
+  return lookup;
 }
 
 /** The text we could not send, at most 500 code points. */
@@ -303,23 +380,24 @@ export function capTriggerMessage(text: string | null): string {
   return text === null ? "" : Array.from(text).slice(0, 500).join("");
 }
 
-/** Fires `whatsapp_not_on_whatsapp` for a row the bridge reported as not on WhatsApp. Never throws. */
-async function fireNotOnWhatsapp(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage, text: string | null): Promise<void> {
-  try {
-    if (!isWorkflowTriggersEnabled()) return;
-    const numbers = await repo.listLocationNumbers(row.locationId);
-    const target = await resolveTriggerNumber(repo, row.tenantId, numbers.find((n) => n.tenantId === row.tenantId)?.label);
-    if (!target) return;
+/** The trigger pass of each running status drain, keyed by its result object (the drain helpers already receive it). */
+const passByResult = new WeakMap<object, TriggerPass>();
+
+/** Starts `whatsapp_not_on_whatsapp` for a row the bridge reported as not on WhatsApp. Never throws or awaits. */
+function fireNotOnWhatsapp(repo: GhlProviderRepo, deps: GhlProviderDeps, result: object, row: GhlOutboundMessage, text: string | null): void {
+  const pass = passByResult.get(result);
+  if (!pass) return;
+  startTrigger(pass, async () => {
+    const target = await resolvePassTarget(repo, pass, row.locationId, row.tenantId);
+    if (!target) return true;
     // `text` is the row's `pendingText` as read BEFORE the failure was reported
     // (reporting clears it from the database); never logged.
-    await fireTriggerBestEffort(repo, deps, row.locationId, "whatsapp_not_on_whatsapp", {
+    return fireTriggerBestEffort(repo, deps, row.locationId, "whatsapp_not_on_whatsapp", {
       ...target,
       contactId: row.ghlContactId,
       message: capTriggerMessage(text),
     });
-  } catch {
-    // never changes the drain result
-  }
+  });
 }
 
 /** The narrow slice `resolveGhlAccessToken` actually touches — see `GhlTokenRefreshRepo`'s identical rationale, just for `deps` instead of `repo`. `GhlProviderDeps` already contains all three, so `defaultGhlProviderDeps` (and every existing call site) keeps typechecking unchanged. */
@@ -1579,6 +1657,8 @@ export interface DrainGhlOutboundStatusesResult {
   reportFailed: number;
   /** Finding 5 — `true` iff this pass stopped early after `DRAIN_TIME_BUDGET_MS` because it ran long; any rows past that point were never started and remain valid candidates for the next pass. `false` on every normal pass. */
   timeBudgetExceeded: boolean;
+  /** Workflow-trigger fires not started this pass because an earlier fire in it failed. */
+  triggersSkipped: number;
 }
 
 /**
@@ -1600,7 +1680,23 @@ export async function drainGhlOutboundStatuses(
     unresolved: 0,
     reportFailed: 0,
     timeBudgetExceeded: false,
+    triggersSkipped: 0,
   };
+  const pass = newTriggerPass(() => result.triggersSkipped++);
+  passByResult.set(result, pass);
+  try {
+    return await drainGhlOutboundStatusesPass(repo, deps, result);
+  } finally {
+    // Started trigger fires get a bounded wait; the rows are already resolved.
+    await settleTriggers(pass);
+  }
+}
+
+async function drainGhlOutboundStatusesPass(
+  repo: GhlProviderRepo,
+  deps: GhlProviderDeps,
+  result: DrainGhlOutboundStatusesResult
+): Promise<DrainGhlOutboundStatusesResult> {
   const startedAtMs = Date.now();
 
   let rows: GhlOutboundMessage[] = [];
@@ -1818,7 +1914,7 @@ async function drainMultipartRow(
     if (aggregate.status === "delivered") result.delivered++;
     else {
       result.failed++;
-      if (aggregate.reason === REASON_NOT_ON_WHATSAPP) await fireNotOnWhatsapp(repo, deps, row, unsentText);
+      if (aggregate.reason === REASON_NOT_ON_WHATSAPP) fireNotOnWhatsapp(repo, deps, result, row, unsentText);
     }
   } else {
     result.reportFailed++;
@@ -2107,14 +2203,12 @@ async function drainPendingSend(
   if (!account || !target || row.pendingText === null) {
     // Structurally shouldn't happen — a 'pending_send' row is only ever
     // created with both set (see handleProviderOutboundMessage) — EXCEPT for
-    // the exact overlapping-drains race finding 2 describes: a faster
-    // concurrent pass can move this row to 'accepted' (clearing
-    // `pending_text`) between when THIS pass read the row and when it gets
-    // here, and — before the finding-2 fix below made the write conditional
-    // — a slower pass's own transient retry used to blindly PATCH
-    // `send_state` back to 'pending_send' anyway, leaving the row
-    // 'pending_send' with `pending_text = NULL`. Same finding-4-style check
-    // as the exhaustion branch above: before reporting the fixed refusal,
+    // the overlapping-drains race: a faster concurrent pass can move this row
+    // to 'accepted' between when THIS pass read the row and when it gets here
+    // (an accepted row now keeps its text until reported, 0013, but this pass's
+    // copy may predate that), and a slower pass's transient retry write is
+    // conditional on 'pending_send' so it cannot demote the row back. Same
+    // check as the exhaustion branch above: before reporting the fixed refusal,
     // check whether the bridge's OWN ledger already has a row for this
     // (tenantId, idempotencyKey) — if it does, the send genuinely reached
     // the bridge and must be resolved through the normal mapping, never
@@ -2237,7 +2331,7 @@ async function drainAcceptedRow(
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
     if (outcome === "reported") {
       result.failed++;
-      await fireNotOnWhatsapp(repo, deps, row, unsentText);
+      fireNotOnWhatsapp(repo, deps, result, row, unsentText);
     } else result.reportFailed++;
     return;
   }
@@ -2295,7 +2389,7 @@ export type GhlReadReceiptsRepo = GhlTokenRefreshRepo &
     | "listGhlOutboundAwaitingRead"
     | "markGhlOutboundReadReported"
     // Workflow triggers — `whatsapp_message_read` needs the number and who subscribed.
-    | "getWhatsappSessionSummary"
+    | "getTenantPhone"
     | "listLocationNumbers"
     | "listTriggerSubscriptions"
   >;
@@ -2306,6 +2400,8 @@ export interface DrainGhlReadReceiptsResult {
   failed: number;
   /** `true` iff this pass stopped early after `DRAIN_TIME_BUDGET_MS`; the rows not reached are left for the next pass. */
   timeBudgetExceeded: boolean;
+  /** Workflow-trigger fires not started this pass because an earlier fire in it failed. */
+  triggersSkipped: number;
 }
 
 /**
@@ -2320,38 +2416,24 @@ export interface DrainGhlReadReceiptsResult {
  * on. The same wall-clock budget as `drainGhlOutboundStatuses` applies.
  * Never throws; logs fixed strings only.
  */
-/** Fires `whatsapp_message_read` after a successful read PUT. Never throws. */
-async function fireMessageRead(
-  repo: GhlReadReceiptsRepo,
-  deps: GhlProviderDeps,
-  row: GhlOutboundMessage,
-  phoneByTenant: Map<string, string>,
-  numbersByLocation: Map<string, LocationNumber[]>
-): Promise<void> {
-  try {
-    if (!isWorkflowTriggersEnabled()) return;
-    let numbers = numbersByLocation.get(row.locationId);
-    if (!numbers) {
-      numbers = await repo.listLocationNumbers(row.locationId);
-      numbersByLocation.set(row.locationId, numbers);
-    }
-    const target = await resolveTriggerNumber(repo, row.tenantId, numbers.find((n) => n.tenantId === row.tenantId)?.label, phoneByTenant);
-    if (!target) return;
-    await fireTriggerBestEffort(repo, deps, row.locationId, "whatsapp_message_read", {
+/** Starts `whatsapp_message_read` after a successful read PUT. Never throws or awaits. */
+function fireMessageRead(repo: GhlReadReceiptsRepo, deps: GhlProviderDeps, pass: TriggerPass, row: GhlOutboundMessage): void {
+  startTrigger(pass, async () => {
+    const target = await resolvePassTarget(repo, pass, row.locationId, row.tenantId);
+    if (!target) return true;
+    return fireTriggerBestEffort(repo, deps, row.locationId, "whatsapp_message_read", {
       ...target,
       contactId: row.ghlContactId,
       messageId: row.ghlMessageId,
     });
-  } catch {
-    // never changes the drain result
-  }
+  });
 }
 
 export async function drainGhlReadReceipts(
   repo: GhlReadReceiptsRepo,
   deps: GhlProviderDeps = defaultGhlProviderDeps
 ): Promise<DrainGhlReadReceiptsResult> {
-  const result: DrainGhlReadReceiptsResult = { examined: 0, reported: 0, failed: 0, timeBudgetExceeded: false };
+  const result: DrainGhlReadReceiptsResult = { examined: 0, reported: 0, failed: 0, timeBudgetExceeded: false, triggersSkipped: 0 };
   const startedAtMs = Date.now();
 
   let rows: GhlOutboundMessage[];
@@ -2367,9 +2449,8 @@ export async function drainGhlReadReceipts(
   const tokenByLocation = new Map<string, string | null>();
   // Locations skipped for the rest of this pass.
   const skippedLocations = new Set<string>();
-  // Workflow triggers: the phone per tenant and the numbers per location, read at most once per pass.
-  const phoneByTenant = new Map<string, string>();
-  const numbersByLocation = new Map<string, LocationNumber[]>();
+  // Workflow triggers: fires start in the background and are awaited once, at the end.
+  const pass = newTriggerPass(() => result.triggersSkipped++);
 
   for (const row of rows) {
     if (Date.now() - startedAtMs >= DRAIN_TIME_BUDGET_MS) {
@@ -2408,7 +2489,7 @@ export async function drainGhlReadReceipts(
       if (put.ok) {
         await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
         result.reported++;
-        await fireMessageRead(repo, deps, row, phoneByTenant, numbersByLocation);
+        fireMessageRead(repo, deps, pass, row);
       } else if (put.status === 401 || (put.status !== undefined && put.status >= 500)) {
         // A token problem or a GHL outage: retry next pass, and spare the
         // rest of this location's rows a PUT that would fail the same way.
@@ -2425,5 +2506,6 @@ export async function drainGhlReadReceipts(
       console.error("[ghl-provider.drainGhlReadReceipts] row failed (non-fatal):", err instanceof Error ? err.name : "error");
     }
   }
+  await settleTriggers(pass);
   return result;
 }

@@ -356,6 +356,7 @@ test("drainGhlInboundReplies: GHL_CONVERSATION_PROVIDER_ID unset -> zero repo re
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: true,
+    triggersSkipped: 0,
   });
   assert.equal(calls.length, 0, "no repo method may be called at all when the provider id is unset");
   assert.equal(upsertCalls.length, 0);
@@ -745,6 +746,7 @@ test("drainGhlInboundReplies: the LIST call itself throwing -> an all-zero resul
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: false,
+    triggersSkipped: 0,
   });
 });
 
@@ -1771,8 +1773,8 @@ type FiredTrigger = { locationId: string; key: string; payload: unknown };
 function withTriggerReads(repo: GhlInboundRepo, phone: string | null = "+447700900999"): GhlInboundRepo {
   return {
     ...repo,
-    async getWhatsappSessionSummary() {
-      return phone === null ? null : ({ phoneNumber: phone } as never);
+    async getTenantPhone() {
+      return phone;
     },
     async listTriggerSubscriptions() {
       return [];
@@ -1872,17 +1874,41 @@ test("triggers: no phone for the number skips the fire and the push still lands"
   assert.deepEqual(fired, []);
 });
 
-test("triggers: a throwing or slow fire never changes the drain result", async () => {
-  const baseline = createFakeRepo([makeAccount()], [makeRow(), makeRow()]);
+test("triggers: a throwing or slow fire never changes the drain result, and a failed fire skips the rest of the pass", async () => {
+  const baseline = createFakeRepo([makeAccount()], [makeRow(), makeRow(), makeRow()]);
   const expected = await drainGhlInboundReplies(withTriggerReads(baseline.repo), makeDeps({ fireTrigger: fireRecorder().fireTrigger }).deps);
+  assert.equal(expected.triggersSkipped, 0);
   for (const behaviour of ["throw", "slow"] as const) {
-    const { repo, rowsById } = createFakeRepo([makeAccount()], [makeRow(), makeRow()]);
+    const { repo, rowsById } = createFakeRepo([makeAccount()], [makeRow(), makeRow(), makeRow()]);
     const { fired, fireTrigger } = fireRecorder(behaviour);
     const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
-    assert.deepEqual(result, expected, behaviour);
-    assert.equal(fired.length, 2, behaviour);
-    assert.deepEqual([...rowsById.values()].map((r) => r.resolution), ["ghl_pushed", "ghl_pushed"], behaviour);
+    const { triggersSkipped, ...rest } = result;
+    const { triggersSkipped: _ignored, ...expectedRest } = expected;
+    void _ignored;
+    assert.deepEqual(rest, expectedRest, behaviour);
+    assert.equal(fired.length + triggersSkipped, 3, behaviour);
+    if (behaviour === "throw") assert.ok(triggersSkipped >= 1, "after the first failed fire, later fires are not started");
+    else assert.equal(triggersSkipped, 0);
+    assert.deepEqual([...rowsById.values()].map((r) => r.resolution), ["ghl_pushed", "ghl_pushed", "ghl_pushed"], behaviour);
   }
+});
+
+test("triggers: a hanging helper across 50 rows never holds up the drain beyond the 8 s cap", async () => {
+  const rows = Array.from({ length: 50 }, () => makeRow());
+  const { repo, rowsById } = createFakeRepo([makeAccount()], rows);
+  process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = "true";
+  let started = 0;
+  const fireTrigger: GhlInboundDeps["fireTrigger"] = () => {
+    started++;
+    return new Promise(() => {}); // never settles
+  };
+  const t0 = Date.now();
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  const elapsed = Date.now() - t0;
+  assert.equal(result.pushed, 50);
+  assert.ok([...rowsById.values()].every((r) => r.resolution === "ghl_pushed"), "every row resolved normally");
+  assert.ok(started >= 1);
+  assert.ok(elapsed >= 7_500 && elapsed < 10_000, `returned after the cap, not hung (${elapsed} ms)`);
 });
 
 test("triggers: with the flag off the real helper posts nothing anywhere", async () => {
@@ -1930,7 +1956,7 @@ test("triggers: flag off means no phone read and no fire", async () => {
   delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
   const reads: string[] = [];
   const fired: unknown[] = [];
-  const spy = { ...withTriggerReads(repo), async getWhatsappSessionSummary() { reads.push("read"); return { phoneNumber: "+447700900999" } as never; } } as GhlInboundRepo;
+  const spy = { ...withTriggerReads(repo), async getTenantPhone() { reads.push("read"); return "+447700900999"; } } as GhlInboundRepo;
   const result = await drainGhlInboundReplies(spy, makeDeps({ fireTrigger: async (...a) => { fired.push(a); } }).deps);
   assert.equal(result.pushed, 1);
   assert.deepEqual(fired, []);

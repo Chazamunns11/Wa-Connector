@@ -262,15 +262,13 @@ export interface GhlOutboundMessage {
   sendState: GhlOutboundSendState;
   sendAttempts: number;
   /**
-   * Phase 2 addition (0070_ghl_outbound_pending_text.sql) — the exact text
-   * `src/lib/ghl.ts`'s `buildOutboundText` built for this row, present ONLY
-   * while `sendState === 'pending_send'`. See that migration's header for
-   * why: `drainGhlOutboundStatuses` (src/lib/ghl-provider.ts) retries a
-   * bridge-unreachable send under the SAME idempotency key, and that retry
-   * is only correct if it resends this EXACT text — 0069's own "no message
-   * body stored" posture made that retry impossible, so this column exists
-   * purely to close that gap, cleared to `null` the instant the row leaves
-   * `pending_send`.
+   * The exact text `src/lib/ghl.ts`'s `buildOutboundText` built for this row
+   * (0070, extended by 0013). Kept while `sendState` is `pending_send`, `held`
+   * or `accepted`: a retry or a held release must resend this EXACT text under
+   * the SAME idempotency key, and a "not on WhatsApp" trigger carries it so a
+   * workflow can fall back to SMS. Cleared to `null` when the row is refused,
+   * when its status is reported to GHL (delivered or failed), and by the cron
+   * for an accepted row never reported within 7 days. Never logged.
    */
   pendingText: string | null;
   /**

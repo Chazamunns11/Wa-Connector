@@ -78,7 +78,7 @@ test("read row: PUT read once and marked", async () => {
   const s = setup([row(1)], ["key-1"]);
   const r = await drainGhlReadReceipts(s.repo, s.deps);
   assert.deepEqual(s.puts, [{ messageId: "m1", status: "read" }]);
-  assert.deepEqual(r, { examined: 1, reported: 1, failed: 0, timeBudgetExceeded: false });
+  assert.deepEqual(r, { examined: 1, reported: 1, failed: 0, timeBudgetExceeded: false, triggersSkipped: 0 });
   assert.notEqual(s.byId.get("row-1")!.readReportedAt, null);
   assert.equal(s.byId.get("row-1")!.readReportError, null);
   await drainGhlReadReceipts(s.repo, s.deps);
@@ -210,7 +210,7 @@ for (const [label, status] of [["401", 401], ["5xx", 503]] as const) {
     );
     const r = await drainGhlReadReceipts(s.repo, s.deps);
     assert.deepEqual(s.puts.map((p) => p.messageId), ["m1", "m2", "m4"]);
-    assert.deepEqual(r, { examined: 5, reported: 2, failed: 3, timeBudgetExceeded: false });
+    assert.deepEqual(r, { examined: 5, reported: 2, failed: 3, timeBudgetExceeded: false, triggersSkipped: 0 });
     for (const id of ["row-1", "row-3", "row-5"]) {
       assert.equal(s.byId.get(id)!.readReportedAt, null, "left for the next pass");
       assert.equal(s.byId.get(id)!.readReportError, null);
@@ -223,7 +223,7 @@ test("missing token on one location: no PUT for any of its rows, the other locat
   const s = setup(twoLocationRows(), allKeys, { ok: true }, (l) => (l === "loc-1" ? null : account(l)));
   const r = await drainGhlReadReceipts(s.repo, s.deps);
   assert.deepEqual(s.puts.map((p) => p.messageId), ["m2", "m4"]);
-  assert.deepEqual(r, { examined: 5, reported: 2, failed: 3, timeBudgetExceeded: false });
+  assert.deepEqual(r, { examined: 5, reported: 2, failed: 3, timeBudgetExceeded: false, triggersSkipped: 0 });
   assert.deepEqual(s.accountLookups, ["loc-1", "loc-2"], "a failed lookup is not repeated per row");
 });
 
@@ -263,7 +263,7 @@ function withTriggerReads(s: ReturnType<typeof setup>, phone: string | null = "+
   const sessionReads: string[] = [];
   const repo = {
     ...s.repo,
-    async getWhatsappSessionSummary(tenantId: string) { sessionReads.push(tenantId); return phone === null ? null : { phoneNumber: phone }; },
+    async getTenantPhone(tenantId: string) { sessionReads.push(tenantId); return phone; },
     async listLocationNumbers() { return [{ tenantId: TENANT, slot: 1, isDefault: true, label: "Sales" }]; },
     async listTriggerSubscriptions() { return []; },
   } as unknown as GhlReadReceiptsRepo;
@@ -363,4 +363,16 @@ test("triggers: flag off means no phone read and no fire", async () => {
   assert.equal(r.reported, 1);
   assert.deepEqual(fired, []);
   assert.deepEqual(sessionReads, []);
+});
+
+test("triggers: after the first failed fire the rest of the pass is skipped and counted", async () => {
+  const s = setup([row(1), row(2), row(3)], ["key-1", "key-2", "key-3"]);
+  const { repo } = withTriggerReads(s);
+  const f = fakeFire("throw");
+  // Each PUT takes a moment, so the first failed fire settles before the next row.
+  const slowPut = async () => { await new Promise((resolve) => setTimeout(resolve, 5)); return { ok: true }; };
+  const r = await drainGhlReadReceipts(repo, { ...s.deps, updateStatus: slowPut, fireTrigger: f.fireTrigger } as unknown as GhlProviderDeps);
+  assert.equal(r.reported, 3);
+  assert.equal(f.fired.length + r.triggersSkipped, 3);
+  assert.ok(r.triggersSkipped >= 1);
 });

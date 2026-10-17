@@ -210,13 +210,17 @@ import {
 } from "@/lib/ghl";
 import {
   fireTriggerBestEffort,
+  newTriggerPass,
   resolveGhlAccessToken,
-  resolveTriggerNumber,
+  resolvePassTarget,
+  settleTriggers,
+  startTrigger,
+  type TriggerPass,
   type FireTrigger,
   type GhlTokenRefreshDeps,
   type GhlTokenRefreshRepo,
 } from "@/lib/ghl-provider";
-import { isWorkflowTriggersEnabled, toTriggerMessageType } from "@/lib/ghl-triggers";
+import { toTriggerMessageType } from "@/lib/ghl-triggers";
 import { inboundNumberPrefix } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
 import { classifyOptOutMessage } from "@/lib/opt-out";
@@ -244,7 +248,7 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     | "recordOptOut"
     | "clearOptOut"
     // Workflow triggers — the number's phone and who subscribed.
-    | "getWhatsappSessionSummary"
+    | "getTenantPhone"
     | "listTriggerSubscriptions"
   >;
 
@@ -349,6 +353,8 @@ export interface DrainGhlInboundRepliesResult {
   optedIn: number;
   /** `true` iff `GHL_CONVERSATION_PROVIDER_ID` is unset — see this file's STEP 0 note. Every other counter is `0` when this is `true`. */
   blockedUnconfigured: boolean;
+  /** Workflow-trigger fires not started this pass because an earlier fire in it failed. */
+  triggersSkipped: number;
 }
 
 /**
@@ -409,6 +415,7 @@ export async function drainGhlInboundReplies(
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: false,
+    triggersSkipped: 0,
   };
 
   const envProviderId = ghlConversationProviderId();
@@ -428,7 +435,7 @@ export async function drainGhlInboundReplies(
   result.candidates = rows.length;
   if (rows.length === 0) return result;
 
-  const memos: PassMemos = { contactIdByKey: new Map(), numbersByLocation: new Map(), groupsByTenant: new Map(), phoneByTenant: new Map() };
+  const memos: PassMemos = { contactIdByKey: new Map(), numbersByLocation: new Map(), groupsByTenant: new Map(), triggers: newTriggerPass(() => result.triggersSkipped++) };
   const breaker: CircuitBreakerState = { consecutiveContactUpsertFailures: 0, consecutivePostFailures: 0 };
 
   for (const row of rows) {
@@ -446,6 +453,8 @@ export async function drainGhlInboundReplies(
     }
   }
 
+  // Started trigger fires get a bounded wait; every row is already resolved.
+  await settleTriggers(memos.triggers);
   return result;
 }
 
@@ -462,8 +471,8 @@ interface PassMemos {
   numbersByLocation: Map<string, LocationNumber[]>;
   /** Opt-in groups — per-tenant group rows. A group contact created this pass is written into its entry, so later rows reuse it. */
   groupsByTenant: Map<string, WhatsappGroup[]>;
-  /** Workflow triggers — per-tenant phone for the payload's `number`. */
-  phoneByTenant: Map<string, string>;
+  /** Workflow triggers — the fires this pass started, and its number lookups. */
+  triggers: TriggerPass;
 }
 
 /**
@@ -768,7 +777,7 @@ async function processGhlInboundRow(
     // Not for a group contact: it belongs to its group's number, and the
     // sender is not a contact at all.
     if (!group) await recordStickiness(repo, account.locationId, contactId, row);
-    await fireInboundTrigger(repo, deps, memos, account.locationId, locationNumbers, contactId, row, group !== null || optOutOutcome !== null);
+    fireInboundTrigger(repo, deps, memos, account.locationId, locationNumbers, contactId, row, group !== null || optOutOutcome !== null);
     return;
   }
 
@@ -805,12 +814,13 @@ async function processGhlInboundRow(
 }
 
 /**
- * Workflow triggers, after a push that landed: a plain one-to-one message fires
+ * Workflow triggers, after a push that landed: a plain one-to-one message starts
  * `whatsapp_message_received` (no text) and a missed call `whatsapp_missed_call`.
- * Group rows and edit/reaction/delete rows fire nothing. Never throws, so it can
- * never change the row's result.
+ * Group rows, edit/reaction/delete rows and STOP/START keywords fire nothing.
+ * Starts the fire in the background (awaited with the rest at the end of the
+ * pass) and never throws, so it can never change or delay the row's result.
  */
-async function fireInboundTrigger(
+function fireInboundTrigger(
   repo: GhlInboundRepo,
   deps: GhlInboundDeps,
   memos: PassMemos,
@@ -819,23 +829,24 @@ async function fireInboundTrigger(
   contactId: string,
   row: WhatsappInboundMessage,
   skip: boolean
-): Promise<void> {
+): void {
   try {
     // A group row, or a STOP/START keyword (a compliance keyword, not a conversation).
-    if (skip || !isWorkflowTriggersEnabled()) return;
+    if (skip) return;
     const isMissedCall = row.eventKind === "missed_call";
     if (row.eventKind && !isMissedCall) return;
-    const target = await resolveTriggerNumber(repo, row.coachId, locationNumbers.find((n) => n.tenantId === row.coachId)?.label, memos.phoneByTenant);
-    if (!target) return;
-    if (isMissedCall) {
-      await fireTriggerBestEffort(repo, deps, locationId, "whatsapp_missed_call", { ...target, isVideo: row.messageType === "missedVideoCall", contactId });
-    } else {
-      await fireTriggerBestEffort(repo, deps, locationId, "whatsapp_message_received", {
+    startTrigger(memos.triggers, async () => {
+      const target = await resolvePassTarget(repo, memos.triggers, locationId, row.coachId, locationNumbers);
+      if (!target) return true;
+      if (isMissedCall) {
+        return fireTriggerBestEffort(repo, deps, locationId, "whatsapp_missed_call", { ...target, isVideo: row.messageType === "missedVideoCall", contactId });
+      }
+      return fireTriggerBestEffort(repo, deps, locationId, "whatsapp_message_received", {
         ...target,
         messageType: toTriggerMessageType(row.messageType),
         contactId,
       });
-    }
+    });
   } catch {
     // never changes the drain result
   }

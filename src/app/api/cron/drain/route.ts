@@ -33,6 +33,9 @@ export const dynamic = "force-dynamic";
 /** Same explicit budget as PortalHub's reminders cron — the outbound drain carries its own wall-clock budget inside it, see `DRAIN_TIME_BUDGET_MS` (src/lib/ghl-provider.ts). */
 export const maxDuration = 300;
 
+/** An accepted outbound row that was never reported keeps its text (0013) at most this long. */
+const STALE_PENDING_TEXT_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Adversarial-review fix (lens 3, finding 1) — 0048's own file header always documented a 90-day purge of `whatsapp_inbound_messages`; this constant + the pass below is what actually implements it. See `Repository.purgeOldWhatsappInboundMessages`'s JSDoc. */
 const WHATSAPP_INBOUND_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -80,6 +83,7 @@ export async function GET(request: NextRequest) {
     unresolved: 0,
     reportFailed: 0,
     timeBudgetExceeded: false,
+    triggersSkipped: 0,
   };
   try {
     ghlOutboundStatuses = await drainGhlOutboundStatuses(repo);
@@ -93,7 +97,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Read receipts: off unless GHL_READ_RECEIPTS_ENABLED is exactly "true".
-  let ghlReadReceipts = { examined: 0, reported: 0, failed: 0, timeBudgetExceeded: false };
+  let ghlReadReceipts = { examined: 0, reported: 0, failed: 0, timeBudgetExceeded: false, triggersSkipped: 0 };
   if (process.env.GHL_READ_RECEIPTS_ENABLED === "true") {
     try {
       ghlReadReceipts = await drainGhlReadReceipts(repo);
@@ -105,7 +109,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, groupNotEnabled: 0, staleMissedCalls: 0, eventsSuppressed: 0, optedOut: 0, optedIn: 0, blockedUnconfigured: false };
+  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, groupNotEnabled: 0, staleMissedCalls: 0, eventsSuppressed: 0, optedOut: 0, optedIn: 0, blockedUnconfigured: false, triggersSkipped: 0 };
   try {
     ghlInboundReplies = await drainGhlInboundReplies(repo);
     if (ghlInboundReplies.candidates > 0) {
@@ -115,6 +119,14 @@ export async function GET(request: NextRequest) {
     }
   } catch (err) {
     console.error("[cron/drain] ghl inbound-reply drain failed (non-fatal):", err);
+  }
+
+  // Data minimisation: an accepted row never reported keeps its text only 7 days.
+  try {
+    const cleared = await repo.clearStaleOutboundPendingText(new Date(now - STALE_PENDING_TEXT_MS).toISOString());
+    if (cleared > 0) console.log(`[cron/drain] cleared the kept text of ${cleared} unreported outbound row(s) older than 7 days.`);
+  } catch (err) {
+    console.error("[cron/drain] pending-text cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
   let whatsappInboundPurged = 0;

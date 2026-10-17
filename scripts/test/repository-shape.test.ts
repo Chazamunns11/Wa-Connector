@@ -47,6 +47,8 @@ const METHODS = [
   "resolveGhlInboundMessage",
   "recordGhlInboundPushFailure",
   "purgeOldWhatsappInboundMessages",
+  "clearStaleOutboundPendingText",
+  "getTenantPhone",
   "createWhatsappMediaSignedUrl",
   "getWhatsappSessionSummary",
   "getWhatsappSessionSummaries",
@@ -94,15 +96,15 @@ const METHODS = [
   "listSessionsForTriggers",
 ] as const;
 
-test("SupabaseGhlRepository implements all 83 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 83);
-  assert.equal(new Set(METHODS).size, 83);
+test("SupabaseGhlRepository implements all 85 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 85);
+  assert.equal(new Set(METHODS).size, 85);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 83", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 85", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });
@@ -198,4 +200,23 @@ test("chooseGroupForContact: a group of another location's current number is not
 test("removeLocationNumber switches off the removed number's groups", () => {
   const body = methodSource("removeLocationNumber");
   assert.match(body, /from\("whatsapp_groups"\)\s*\.update\(\{ enabled: false \}\)\s*\.eq\("tenant_id", target\.tenantId\)/);
+});
+
+test("clearStaleOutboundPendingText clears only accepted, never-reported rows older than the cutoff", () => {
+  const body = methodSource("clearStaleOutboundPendingText");
+  assert.match(body, /\.update\(\{ pending_text: null \}\)/);
+  assert.match(body, /\.eq\("send_state", "accepted"\)/);
+  assert.match(body, /\.is\("reported_status", null\)/);
+  assert.match(body, /\.lt\("created_at", olderThanIso\)/);
+});
+
+test("markGhlOutboundReported clears the kept text only when a status is stored", () => {
+  const body = methodSource("markGhlOutboundReported");
+  assert.match(body, /if \(patch\.reportedStatus !== null\) \{[\s\S]*update\.pending_text = null;[\s\S]*\}\s*const \{ error \}/);
+});
+
+test("getTenantPhone reads only the phone column of the tenant's session", () => {
+  const body = methodSource("getTenantPhone");
+  assert.match(body, /select\("phone_number"\)/);
+  assert.match(body, /\.eq\("coach_id", tenantId\)/);
 });

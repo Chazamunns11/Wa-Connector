@@ -329,11 +329,13 @@ export interface GhlRepository {
 
   /**
    * Advance a ledger row's `send_state`/`send_attempts` — Phase 2's
-   * handler/drain only. IMPLEMENTATIONS MUST CLEAR `pending_text` to `null` on a refusal (an accepted row keeps it until `markGhlOutboundReported` reports a status, 0013; the clause below is the pre-0013 rule, kept for history)
-   * whenever `patch.sendState` is neither `'pending_send'` nor `'held'` (a held
-   * row keeps its text so the release pass can still send it) (0070_ghl_outbound_pending_text.sql's
-   * whole contract: that column exists only for the duration a row is
-   * eligible for a bridge-send retry).
+   * handler/drain only. `pending_text` lifecycle (0070, extended by 0013):
+   * IMPLEMENTATIONS MUST CLEAR it to `null` when `patch.sendState` is
+   * `'refused'`, and MUST KEEP it for `'pending_send'`, `'held'` (the release
+   * pass still has to send it) and `'accepted'` (kept until the row's status is
+   * reported: `markGhlOutboundReported` clears it when it stores a status, and
+   * `clearStaleOutboundPendingText` clears one never reported within 7 days).
+   * The kept text lets a "not on WhatsApp" trigger carry the unsent text.
    *
    * `refusalReason` (0071_ghl_outbound_refusal_reason.sql, adversarial-review
    * finding 3): pass this whenever `sendState: 'refused'` — the fixed reason
@@ -347,14 +349,11 @@ export interface GhlRepository {
    * cross-phase review finding 2) — this is the ONLY case that needs it: a
    * caller retrying a `pending_send` row transiently is writing back the
    * SAME state it read the row in, and a faster concurrent pass can have
-   * already moved the row past `pending_send` (to `accepted`, clearing
-   * `pending_text`) in between. An unconditional write would silently demote
-   * that row back to `pending_send` with `pending_text` left `null`
-   * (`pending_text` is only ever CLEARED by this method, never restored),
-   * producing an unrecoverable-looking row the drain would otherwise report
-   * a false `failed` for. Every OTHER `sendState` transition this method
-   * writes stays unconditional — see `src/lib/data/supabase.ts`'s
-   * implementation for the exact guard.
+   * already moved the row past `pending_send` (to `accepted`) in between. An
+   * unconditional write would silently demote that row back to `pending_send`,
+   * and the next pass would retry a send the bridge already accepted. Every
+   * OTHER `sendState` transition this method writes stays unconditional — see
+   * `src/lib/data/supabase.ts`'s implementation for the exact guard.
    *
    * `onlyIfSendState` (Review Focus 4): when set, the write also requires the
    * row's CURRENT `send_state` to equal it (0 rows affected, no error, if it
@@ -436,6 +435,7 @@ export interface GhlRepository {
    * `listUnreportedGhlOutboundMessages`'s `IS NULL` filter) untouched, so the
    * row is picked up and retried on the next drain pass instead of being
    * silently marked done despite GHL never actually hearing the outcome.
+   * When a status IS stored, the row's kept `pending_text` is cleared (0013).
    */
   markGhlOutboundReported(id: string, patch: { reportedStatus: GhlOutboundReportedStatus | null; reportError: string | null }): Promise<void>;
 
@@ -624,6 +624,17 @@ export interface GhlRepository {
    * to delete the second time round).
    */
   purgeOldWhatsappInboundMessages(olderThanIso: string): Promise<number>;
+
+  /**
+   * Data minimisation (0013): clears `pending_text` on `accepted` outbound rows
+   * created before `olderThanIso` that were never reported (`reported_status IS
+   * NULL`), so a kept text cannot outlive 7 days. Returns how many rows were
+   * cleared. Run once per cron pass.
+   */
+  clearStaleOutboundPendingText(olderThanIso: string): Promise<number>;
+
+  /** A tenant's linked WhatsApp number (strict E.164), or `null` if none. A phone-only read for trigger payloads. */
+  getTenantPhone(tenantId: string): Promise<string | null>;
 
   /**
    * Media plan (docs/MEDIA-PLAN.md §6.2 decision I3) — mints a signed URL

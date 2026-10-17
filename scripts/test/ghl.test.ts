@@ -439,6 +439,10 @@ function createFakeRepo(
       calls.push({ method: "getWhatsappSessionSummary", args: [coachId] });
       return sessionsByTenant.get(coachId) ?? null;
     },
+    async getTenantPhone(tenantId: string) {
+      calls.push({ method: "getTenantPhone", args: [tenantId] });
+      return sessionsByTenant.get(tenantId)?.phoneNumber ?? null;
+    },
     async isOptedOut(tenantId: string, phone: string) {
       calls.push({ method: "isOptedOut", args: [tenantId, phone] });
       return optOuts.has(`${tenantId}:${phone}`);
@@ -3853,5 +3857,32 @@ test("triggers: flag off means no phone read and no fire for the status drain", 
   const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger: async (...a) => { fired.push(a); } }).deps);
   assert.equal(result.failed, 1);
   assert.deepEqual(fired, []);
-  assert.equal(repoBundle.calls.filter((c) => c.method === "getWhatsappSessionSummary").length, 0);
+  assert.equal(repoBundle.calls.filter((c) => c.method === "getTenantPhone").length, 0);
+});
+
+test("triggers: a failed fire in the status drain is contained and later fires are skipped", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  for (let i = 0; i < 3; i++) {
+    const row = seedAcceptedRow(repoBundle, { pendingText: `t${i}` });
+    repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  }
+  const { fired, fireTrigger } = triggerFake("throw");
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
+  assert.equal(result.failed, 3);
+  assert.equal(fired.length + result.triggersSkipped, 3);
+  assert.ok(result.triggersSkipped >= 1);
+});
+
+test("triggers: number lookups are memoised per pass in the status drain", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  for (let i = 0; i < 3; i++) {
+    const row = seedAcceptedRow(repoBundle);
+    repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  }
+  const { fired, fireTrigger } = triggerFake();
+  await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
+  assert.equal(fired.length, 3);
+  assert.equal(repoBundle.calls.filter((c) => c.method === "getTenantPhone").length, 1);
 });

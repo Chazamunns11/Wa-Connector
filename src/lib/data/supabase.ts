@@ -1263,13 +1263,12 @@ export class SupabaseGhlRepository implements GhlRepository {
     const supabase = getServiceClient();
     const update: Record<string, unknown> = { send_state: patch.sendState };
     if (patch.sendAttempts !== undefined) update.send_attempts = patch.sendAttempts;
-    // 0070_ghl_outbound_pending_text.sql's whole contract: pending_text only
-    // exists for the duration a row is a bridge-send retry candidate — clear
-    // it the instant the row leaves 'pending_send' (see that migration's
-    // header and Repository.updateGhlOutboundSendState's JSDoc).
-    // A held row keeps its text: the release pass still has to send it.
-    // 0013: an accepted row keeps it too, until its status is reported
-    // (`markGhlOutboundReported`), so a "not on WhatsApp" trigger can carry it.
+    // pending_text lifecycle (0070, extended by 0013): the text is kept while a
+    // row is 'pending_send' (a retry resends the SAME text), 'held' (the release
+    // pass still has to send it) and 'accepted' (until its status is reported,
+    // so a "not on WhatsApp" trigger can carry it; `markGhlOutboundReported`
+    // clears it, and the cron clears one never reported within 7 days). It is
+    // cleared here only when the row is refused.
     if (patch.sendState === "refused") update.pending_text = null;
     // 0071_ghl_outbound_refusal_reason.sql — stamped once, alongside (not
     // instead of) report_error, and never cleared again (adversarial-review
@@ -1278,24 +1277,17 @@ export class SupabaseGhlRepository implements GhlRepository {
     let query = supabase.from("ghl_outbound_messages").update(update).eq("id", id);
     // Final cross-phase review, finding 2 — this write used to be a BLIND
     // PATCH regardless of the row's CURRENT state. `drainPendingSend`'s
-    // transient-failure branch calls this to write `send_state:
-    // 'pending_send'` back onto a row it read as 'pending_send' at the start
-    // of the pass — but a faster CONCURRENT drain pass can have already
-    // moved that same row all the way to 'accepted' (and cleared
-    // `pending_text`) in between. Without a guard, this slower pass's write
-    // would silently demote the row back to 'pending_send' with
-    // `pending_text` left NULL (this write never SETS pending_text, only
-    // clears it) — the next pass then sees an unrecoverable-looking row and
-    // (before the ghl-provider.ts finding-2 fix) reported a false 'failed'
-    // for a message the bridge had already accepted or delivered. Guarding
-    // this exact write with `.eq("send_state", "pending_send")` makes it a
-    // no-op (0 rows affected, no error) if the row has already moved on —
-    // the row's true, newer state (written by the faster pass) survives
-    // untouched. Every OTHER sendState transition this method writes
-    // ('accepted', 'refused') is unconditional as before — only the
-    // pending_send-to-pending_send retry-bookkeeping write needs this,
-    // because it's the only one that can race a state transition already in
-    // flight from elsewhere.
+    // transient-failure branch writes `send_state: 'pending_send'` back onto a
+    // row it read as 'pending_send' at the start of the pass — but a faster
+    // CONCURRENT drain pass can already have moved that same row to 'accepted'
+    // in between. An unconditional write would demote the row back to
+    // 'pending_send' and the next pass would retry a send the bridge already
+    // accepted (or report a false 'failed'). Guarding this exact write with
+    // `.eq("send_state", "pending_send")` makes it a no-op (0 rows affected, no
+    // error) if the row has already moved on, so the newer state survives.
+    // Every OTHER sendState transition this method writes ('accepted',
+    // 'refused') is unconditional — only the pending_send-to-pending_send
+    // retry-bookkeeping write can race a transition already in flight.
     // An explicit `onlyIfSendState` replaces the automatic guard: the held
     // release pass writes held -> accepted/refused, where the automatic
     // `.eq("send_state","pending_send")` would match nothing.
@@ -1610,6 +1602,27 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (!patch.unclaim) query = query.is("resolution", null);
     const { error } = await query;
     if (error) throw error;
+  }
+
+  async clearStaleOutboundPendingText(olderThanIso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_outbound_messages")
+      .update({ pending_text: null })
+      .eq("send_state", "accepted")
+      .is("reported_status", null)
+      .not("pending_text", "is", null)
+      .lt("created_at", olderThanIso)
+      .select("id");
+    if (error) throw error;
+    return (data ?? []).length;
+  }
+
+  async getTenantPhone(tenantId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("whatsapp_sessions").select("phone_number").eq("coach_id", tenantId).maybeSingle();
+    if (error) throw error;
+    return (data as { phone_number: string | null } | null)?.phone_number ?? null;
   }
 
   /**
