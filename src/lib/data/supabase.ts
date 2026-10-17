@@ -742,6 +742,33 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (numbers.length <= 1) return { ok: false as const, reason: "last_number" as const };
     const promoteSlot = promoteAfterRemoval(numbers, slot);
 
+    // Merge (STOP across numbers): opt-outs are stored per number but checked
+    // across the location's numbers (`optedOutReason`, src/lib/ghl-provider.ts).
+    // A STOP recorded on the number being removed must keep blocking the
+    // numbers that stay, so it is copied onto the number that is (or becomes)
+    // the default BEFORE anything is deleted. Idempotent: an existing opt-out
+    // on the keeper is left as it is.
+    const keeper =
+      (promoteSlot !== null ? numbers.find((n) => n.slot === promoteSlot) : undefined) ??
+      numbers.find((n) => n.isDefault && n.slot !== slot) ??
+      numbers.find((n) => n.slot !== slot)!;
+    const { data: optOutRows, error: optOutReadError } = await supabase
+      .from("whatsapp_opt_outs")
+      .select("phone, opted_out_at, keyword, ghl_contact_id")
+      .eq("tenant_id", target.tenantId);
+    if (optOutReadError) throw optOutReadError;
+    const carried = ((optOutRows ?? []) as { phone: string; opted_out_at: string; keyword: string; ghl_contact_id: string | null }[]).map((r) => ({
+      tenant_id: keeper.tenantId,
+      phone: r.phone,
+      opted_out_at: r.opted_out_at,
+      keyword: r.keyword,
+      ghl_contact_id: r.ghl_contact_id,
+    }));
+    if (carried.length > 0) {
+      const { error: carryError } = await supabase.from("whatsapp_opt_outs").upsert(carried, { onConflict: "tenant_id,phone", ignoreDuplicates: true });
+      if (carryError) throw carryError;
+    }
+
     // Number row FIRST: ghl_location_numbers.tenant_id has no ON DELETE, so it
     // must go before anything that touches the tenant. Sticky rows follow.
     const { error: deleteError } = await supabase

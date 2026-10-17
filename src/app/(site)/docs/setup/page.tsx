@@ -124,7 +124,7 @@ export default async function SetupPage({
             <h2 className="mt-16 font-display text-[clamp(1.5rem,3vw,2.2rem)] font-extrabold leading-[1.05] tracking-[-0.02em]">Once you are sending</h2>
             <ul className="mt-4 grid max-w-[62ch] list-disc gap-2 pl-5 text-ink-dim marker:text-ink-faint">
               <li>Each number has a daily cap, and messages go out at a steady pace rather than all at once.</li>
-              <li>If someone replies STOP, that number stops messaging them. Other numbers are not affected.</li>
+              <li>If someone replies STOP, that sub-account&apos;s WhatsApp numbers stop messaging them until they reply START. Other sub-accounts are not affected.</li>
               <li>The phone needs to stay switched on and online.</li>
             </ul>
             <p className="mt-4 max-w-[62ch] text-ink-dim">

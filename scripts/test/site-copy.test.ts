@@ -95,7 +95,9 @@ test("the disclosure block says the uncomfortable things once, plainly", () => {
   assert.match(d, /can't promise/);
   assert.match(d, /dedicated business number/);
   const stop = salesCopy(brand).safety[2].body;
-  assert.match(stop, /from that number/);
+  // Merge ruling: a STOP blocks every number of that sub-account (a STOP is
+  // the contact's choice about the business), never the whole account.
+  assert.match(stop, /from that sub-account's WhatsApp numbers/);
   assert.ok(!/from your account/.test(stop));
 });
 

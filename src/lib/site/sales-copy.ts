@@ -64,7 +64,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
       },
       {
         title: "STOP opt-outs",
-        body: "If someone replies STOP, they get no more messages from that number. Other numbers aren't affected.",
+        body: "If someone replies STOP, they get no more messages from that sub-account's WhatsApp numbers until they reply START. Other sub-accounts aren't affected.",
       },
     ],
     disclosure: {

@@ -135,3 +135,36 @@ test("countOptOutsByTenant counts per tenant; every requested id appears; empty 
   assert.equal((await repo.countOptOutsByTenant([])).size, 0);
   assert.equal(seen.length, 0);
 });
+
+// Merge (STOP across numbers): removing a number carries its opt-outs onto the
+// number that stays default, so a STOP keeps blocking the remaining numbers.
+test("removeLocationNumber copies the removed number's opt-outs onto the remaining default before deleting", async () => {
+  const DEFAULT_TENANT = "11111111-1111-4111-8111-111111111111";
+  const REMOVED_TENANT = "22222222-2222-4222-8222-222222222222";
+  respond = (req) => {
+    const path = req.url.pathname;
+    if (req.method === "GET" && path.endsWith("/ghl_location_numbers")) {
+      return {
+        body: [
+          { tenant_id: DEFAULT_TENANT, slot: 1, is_default: true, label: null },
+          { tenant_id: REMOVED_TENANT, slot: 2, is_default: false, label: "Sales" },
+        ],
+      };
+    }
+    if (req.method === "GET" && path.endsWith("/whatsapp_opt_outs")) {
+      return { body: [{ phone: "+447700900123", opted_out_at: "2026-10-17T09:00:00Z", keyword: "STOP", ghl_contact_id: "c-1" }] };
+    }
+    return { body: [] };
+  };
+  const repo = new SupabaseGhlRepository();
+  const result = await repo.removeLocationNumber("loc-1", 2);
+  assert.deepEqual(result, { ok: true, removedTenantId: REMOVED_TENANT });
+  const upsertIndex = seen.findIndex((s) => s.method === "POST" && s.url.pathname.endsWith("/whatsapp_opt_outs"));
+  const deleteIndex = seen.findIndex((s) => s.method === "DELETE" && s.url.pathname.endsWith("/ghl_location_numbers"));
+  assert.ok(upsertIndex >= 0, "the opt-outs are upserted");
+  assert.ok(upsertIndex < deleteIndex, "before the number row is deleted");
+  const upsert = seen[upsertIndex];
+  assert.deepEqual(upsert.body, [{ tenant_id: DEFAULT_TENANT, phone: "+447700900123", opted_out_at: "2026-10-17T09:00:00Z", keyword: "STOP", ghl_contact_id: "c-1" }]);
+  assert.match(upsert.prefer ?? "", /resolution=ignore-duplicates/);
+  assert.equal(seen.find((s) => s.method === "GET" && s.url.pathname.endsWith("/whatsapp_opt_outs"))!.url.searchParams.get("tenant_id"), `eq.${REMOVED_TENANT}`);
+});

@@ -577,7 +577,12 @@ launch publicly until each of these is built or the copy is changed to match:
   behind them, so order is kept. Picture and file messages are held the same
   way: the whole message waits and is released text first, then attachments in
   order; a drop part-way keeps the remaining parts held and no part sends twice.
-- **(b) STOP opt-outs.** Built — `src/lib/opt-out.ts` + `src/lib/ghl-inbound.ts`. Whole-message, case-insensitive keywords. Opt-out: STOP, STOPALL, STOP ALL, UNSUBSCRIBE, END, QUIT, OPT OUT, OPTOUT (CANCEL is deliberately excluded: it cancels appointments). Opt-in: START, UNSTOP, SUBSCRIBE, OPT IN, OPTIN. The reply is still delivered to GoHighLevel.
+  With several numbers per sub-account, a message is held on the number it was
+  routed to (the contact's sticky number, the default, or the group's number)
+  and is never sent from another number instead. A number that was never
+  linked is refused at once (a non-default one with "The WhatsApp number this
+  contact uses is disconnected — reconnect it to reply").
+- **(b) STOP opt-outs.** Built — `src/lib/opt-out.ts` + `src/lib/ghl-inbound.ts`. Whole-message, case-insensitive keywords. Opt-out: STOP, STOPALL, STOP ALL, UNSUBSCRIBE, END, QUIT, OPT OUT, OPTOUT (CANCEL is deliberately excluded: it cancels appointments). Opt-in: START, UNSTOP, SUBSCRIBE, OPT IN, OPTIN. The reply is still delivered to GoHighLevel. A STOP is stored on the number it arrived on but blocks sends from every number of that sub-account; a START on any of them clears it on all of them; removing a number carries its opt-outs onto the remaining default. A member typing STOP inside an enabled WhatsApp group records nothing, and group sends are never blocked by an opt-out (the owner opted the group in).
 - **Known limits of (a) and (b).**
   - A message already inside the bridge's paced queue when a STOP lands still
     sends. The opt-out applies from the next send on every path.
