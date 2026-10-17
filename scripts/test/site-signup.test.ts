@@ -127,6 +127,9 @@ test("signup pages are noindex and no longer preview", () => {
   assert.equal(existsSync(join(root, "src/app/(site)/signup/checkout/page.tsx")), false);
 });
 
-test("the auth shell header stacks below 640px", () => {
-  assert.match(read("src/components/auth/AuthShell.tsx"), /flex-col[^"]*sm:flex-row|flex-col[^"]*sm:items/);
+test("the auth shell is an Ink band whose heading and form card stack below 901px", () => {
+  const shell = read("src/components/auth/AuthShell.tsx");
+  assert.match(shell, /surface-dark/);
+  assert.match(shell, /min-\[901px\]:grid-cols-/);
+  assert.match(shell, /light-card slab/);
 });
