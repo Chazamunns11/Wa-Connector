@@ -164,6 +164,9 @@ export interface GhlRepository {
   /** Set (or with null, clear) the sub-account's group invite message. The caller validates it ({link} present, at most 500 characters); the column's CHECK is the backstop. */
   setGroupInviteTemplate(locationId: string, template: string | null): Promise<void>;
 
+  /** Set the sub-account's reaction / deleted-message switches; an omitted key is left unchanged. The caller confirms the row exists first (a bare update). */
+  setMessageEventSettings(locationId: string, settings: { showReactions?: boolean; showDeletes?: boolean }): Promise<void>;
+
   /**
    * True when this phone has sent the number at least one 1:1 message (a
    * non-group `whatsapp_inbound_messages` row) in the last 90 days — the same

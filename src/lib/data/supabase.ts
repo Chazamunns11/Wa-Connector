@@ -975,6 +975,16 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (error) throw error;
   }
 
+  async setMessageEventSettings(locationId: string, settings: { showReactions?: boolean; showDeletes?: boolean }) {
+    const patch: Record<string, boolean> = {};
+    if (settings.showReactions !== undefined) patch.show_reactions = settings.showReactions;
+    if (settings.showDeletes !== undefined) patch.show_deletes = settings.showDeletes;
+    if (Object.keys(patch).length === 0) return;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_accounts").update(patch).eq("location_id", locationId);
+    if (error) throw error;
+  }
+
   async hasInboundFromPhone(tenantId: string, phoneE164: string) {
     const supabase = getServiceClient();
     // Same query as the bridge store's hasInboundFromPhone: a non-group

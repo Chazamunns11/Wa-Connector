@@ -11,6 +11,7 @@ import type { GhlEmbedWhatsappSummary } from "@/lib/types";
 import { MAX_NUMBER_LABEL_LENGTH, parseLabelInput, type LocationSlot } from "@/lib/location-numbers";
 import { CreateGroupForm } from "./CreateGroupForm";
 import { GroupManagePanel } from "./GroupManagePanel";
+import { MessageEventSettings } from "./MessageEventSettings";
 import type { BridgeOkResult, BridgeSessionResult } from "@/lib/whatsapp-bridge";
 
 /**
@@ -537,6 +538,7 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
         />
       ))}
       {numbers.length < MAX_NUMBERS ? <AddNumber changeNumbers={changeNumbers} /> : null}
+      <MessageEventSettings callEmbedApi={callEmbedApi} />
     </div>
   );
 }
