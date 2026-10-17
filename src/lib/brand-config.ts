@@ -42,7 +42,14 @@ export function brandConfig(): BrandConfig {
   const logoReversePath =
     process.env.BRAND_LOGO_REVERSE_PATH?.trim() || customLogo || DEFAULT_LOGO_REVERSE;
   const accent = normaliseHex(process.env.BRAND_ACCENT) ?? DEFAULT_ACCENT;
-  const rawUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  // Vercel preview builds get their own address, so a preview of any branch
+  // builds without NEXT_PUBLIC_APP_URL. Production still has to set it.
+  const previewHost =
+    process.env.VERCEL_ENV === "preview"
+      ? process.env.VERCEL_BRANCH_URL?.trim() || process.env.VERCEL_URL?.trim()
+      : undefined;
+  const rawUrl =
+    process.env.NEXT_PUBLIC_APP_URL?.trim() || (previewHost ? `https://${previewHost}` : undefined);
   if (!rawUrl && process.env.NODE_ENV === "production") {
     throw new Error("NEXT_PUBLIC_APP_URL must be set in production");
   }
