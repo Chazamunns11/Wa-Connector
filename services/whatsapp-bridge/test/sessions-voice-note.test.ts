@@ -7,6 +7,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { pino } from "pino";
 import { SessionManager } from "../src/sessions.js";
 import { GROUP_SYNC_OFF_REASON } from "../src/groups.js";
@@ -14,7 +18,7 @@ import { SessionPacer } from "../src/pacing.js";
 import { PendingWrites } from "../src/pending-writes.js";
 import { mapMimeToBaileysShape, sniffMime, type SniffedMime } from "../src/media.js";
 import type { ResolveOutboundAttachmentResult, resolveOutboundAttachment } from "../src/media-fetch.js";
-import type { TranscodeResult } from "../src/voice-transcode.js";
+import { realFfmpegRunner, transcodeToVoiceNote, type TranscodeResult } from "../src/voice-transcode.js";
 import type { BridgeStore, MessageRecord } from "../src/store.js";
 import type { BridgeConfig } from "../src/config.js";
 
@@ -234,6 +238,62 @@ test("drain: a webm whose transcode fails goes as a document, never failed", asy
   assert.equal(content.mimetype, "audio/webm");
   assert.equal(content.fileName, "voice-note.webm", "GHL's filename is overridden for the voice-note fallback");
   assert.equal(h.calls.filter((c) => c.method === "markMessageFailed").length, 0);
+});
+
+test("drain: has_video sends the original as a document under GHL's own filename, not voice-note.<ext>", async () => {
+  const h = makeHarness({ bytes: WEBM, transcode: async () => ({ ok: false, reason: "has_video" }) });
+  await sendAndSettle(h, "Client walkthrough.webm");
+  assert.equal(h.sent.length, 1);
+  assert.deepEqual(h.sent[0].content, { document: WEBM, mimetype: "audio/webm", fileName: "Client walkthrough.webm" });
+  assert.equal(h.calls.filter((c) => c.method === "markMessageSent").length, 1);
+});
+
+test("drain: has_video with no GHL filename is a generic attachment.<ext>, still not voice-note.<ext>", async () => {
+  const h = makeHarness({ bytes: WEBM, transcode: async () => ({ ok: false, reason: "has_video" }) });
+  await sendAndSettle(h);
+  assert.equal(h.sent[0].content.fileName, "attachment.webm");
+});
+
+test("drain: has_video on audio whose fallback is an audio file still goes as a document", async () => {
+  const h = makeHarness({ bytes: MP3, transcode: async () => ({ ok: false, reason: "has_video" }) });
+  await sendAndSettle(h, "clip.mp3");
+  assert.deepEqual(h.sent[0].content, { document: MP3, mimetype: "audio/mpeg", fileName: "clip.mp3" });
+});
+
+test("drain (real ffmpeg): a VP8+Opus webm goes as a document with its original name, never a voice note", async (t) => {
+  if (spawnSync("ffmpeg", ["-version"]).status !== 0) {
+    t.skip("ffmpeg not on PATH");
+    return;
+  }
+  const dir = await mkdtemp(path.join(tmpdir(), "voice-note-drain-it-"));
+  try {
+    const src = path.join(dir, "av.webm");
+    const gen = spawnSync("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x64:rate=5",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:v", "libvpx", "-c:a", "libopus", "-shortest", "-f", "webm", src,
+    ]);
+    if (gen.status !== 0) {
+      t.skip("no libvpx");
+      return;
+    }
+    const bytes = await readFile(src);
+    const outcomes: TranscodeResult[] = [];
+    const h = makeHarness({
+      bytes,
+      transcode: async (buf, mime) => {
+        const result = await transcodeToVoiceNote(buf, mime, { maxInputBytes: 16 * 1024 * 1024, run: realFfmpegRunner });
+        outcomes.push(result);
+        return result;
+      },
+    });
+    await sendAndSettle(h, "Screen recording.webm");
+    assert.deepEqual(outcomes, [{ ok: false, reason: "has_video" }]);
+    assert.equal(h.sent.length, 1);
+    assert.deepEqual(h.sent[0].content, { document: bytes, mimetype: "audio/webm", fileName: "Screen recording.webm" });
+    assert.equal(h.calls.filter((c) => c.method === "markMessageSent").length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("drain: transcode off (no mediaDeps.transcode) leaves mp3 exactly as today", async () => {

@@ -93,7 +93,47 @@ if (!hasFfmpeg) {
       }
       const input = await readFile(src);
       const result = await transcodeToVoiceNote(input, "audio/webm", { maxInputBytes: 16 * 1024 * 1024, run: realFfmpegRunner });
-      assert.deepEqual(result, { ok: false, reason: "ffmpeg_failed" });
+      assert.deepEqual(result, { ok: false, reason: "has_video" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("integration: a VP8+Opus webm (video with audio) is has_video, never a voice note of its audio", async (t) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "voice-transcode-it-"));
+    try {
+      const src = path.join(dir, "av.webm");
+      const gen = spawnSync("ffmpeg", [
+        "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x64:rate=5",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:v", "libvpx", "-c:a", "libopus", "-shortest", "-f", "webm", src,
+      ]);
+      if (gen.status !== 0) {
+        t.skip("no libvpx");
+        return;
+      }
+      const input = await readFile(src);
+      assert.equal(sniffMime(input), "audio/webm");
+      const result = await transcodeToVoiceNote(input, "audio/webm", { maxInputBytes: 16 * 1024 * 1024, run: realFfmpegRunner });
+      assert.deepEqual(result, { ok: false, reason: "has_video" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("integration: an mp3 with embedded cover art is still a voice note (cover art is not video)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "voice-transcode-it-"));
+    try {
+      const src = path.join(dir, "art.mp3");
+      const gen = spawnSync("ffmpeg", [
+        "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+        "-f", "lavfi", "-i", "color=c=red:s=32x32", "-filter_complex", "[1:v]trim=end_frame=1[v]", "-map", "0:a", "-map", "[v]",
+        "-c:a", "libmp3lame", "-c:v", "mjpeg", "-disposition:v", "attached_pic", "-id3v2_version", "3", "-f", "mp3", src,
+      ]);
+      assert.equal(gen.status, 0, "fixture generation");
+      const input = await readFile(src);
+      const result = await transcodeToVoiceNote(input, "audio/mpeg", { maxInputBytes: 16 * 1024 * 1024, run: realFfmpegRunner });
+      assert.equal(result.ok, true, JSON.stringify(result.ok ? "" : result));
+      if (result.ok) assert.equal(result.seconds, 2);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

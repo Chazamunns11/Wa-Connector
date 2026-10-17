@@ -307,8 +307,10 @@ export async function resolveOutboundAttachment(
  * Voice notes: turns a transcode candidate into an ogg/opus voice note. Any
  * failure — whatever the reason, including ones added later, and a thrown
  * error (counted as `ffmpeg_failed`) — returns `resolved` unchanged, i.e. the
- * fallback shape (an audio file, or a document for webm/wav). It never fails
- * the message. Not a candidate → `not_needed`, untouched.
+ * fallback shape (an audio file, or a document for webm/wav). The one
+ * exception is `has_video`: the same original bytes, but always as a
+ * document, since a video must never play as audio. It never fails the
+ * message. Not a candidate → `not_needed`, untouched.
  */
 export async function prepareOutboundAudio(
   resolved: ResolvedOutboundAttachment,
@@ -323,6 +325,9 @@ export async function prepareOutboundAudio(
     result = await deps.transcode(resolved.buffer, resolved.mimetype);
   } catch {
     result = { ok: false, reason: "ffmpeg_failed" };
+  }
+  if (!result.ok && result.reason === "has_video") {
+    return { content: { ok: true, kind: "document", mimetype: resolved.mimetype, buffer: resolved.buffer }, outcome: "has_video" };
   }
   if (!result.ok) return { content: resolved, outcome: result.reason };
   return {

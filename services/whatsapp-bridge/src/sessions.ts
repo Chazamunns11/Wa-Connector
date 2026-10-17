@@ -132,7 +132,7 @@ import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
 import { runMediaCapture } from "./media-capture.js";
 import { prepareOutboundAudio, resolveOutboundAttachment } from "./media-fetch.js";
-import { buildBaileysMediaContent, type SniffedMime } from "./media.js";
+import { buildBaileysMediaContent, extensionForMime, type SniffedMime } from "./media.js";
 import type { TranscodeResult } from "./voice-transcode.js";
 import type { PortalPoke } from "./poke.js";
 
@@ -1543,6 +1543,11 @@ export class SessionManager {
               continue;
             }
             let content: Parameters<typeof buildBaileysMediaContent>[0] = resolved;
+            // A transcode candidate's fallback is named by the bridge
+            // (`voice-note.<ext>` for a webm/wav document), never by GHL —
+            // except a video (`has_video`): that is the coach's file, sent as
+            // a document under GHL's own name (or a generic one).
+            let fileName = resolved.transcodeCandidate ? undefined : payload.attachment.fileName;
             if (resolved.transcodeCandidate && transcode !== null) {
               // Voice note (voice notes plan, Task 3): non-opus audio becomes
               // an ogg/opus voice note. Any failure, whatever its reason, sends
@@ -1568,10 +1573,9 @@ export class SessionManager {
                 continue;
               }
               content = prepared.content;
+              if (prepared.outcome === "has_video") fileName = payload.attachment.fileName ?? `attachment.${extensionForMime(resolved.mimetype)}`;
             }
-            // A transcode candidate's fallback is named by the bridge
-            // (`voice-note.<ext>` for a webm/wav document), never by GHL.
-            messageContent = buildBaileysMediaContent(content, resolved.transcodeCandidate ? undefined : payload.attachment.fileName);
+            messageContent = buildBaileysMediaContent(content, fileName);
           }
 
           // Typing simulation (src/typing.ts) — "typing…" before a TEXT part,

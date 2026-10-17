@@ -15,8 +15,15 @@
  * Output is bounded: `-t 900` (before `-i`) caps a note at 15 minutes, and
  * both outputs are `stat`ed against their caps before either is read.
  *
- * `-map 0:a:0` makes ffmpeg fail when the input has no audio stream, and
- * `-vn` drops any video, so a WebM video can never become a "voice note".
+ * An input with a video track never becomes a voice note: a WebM or MP4
+ * screen recording would otherwise go out as just its soundtrack. Before the
+ * transcode, a cheap probe run (same input posture: `file:` path, `file`-only
+ * protocols, named demuxer, the same timeout) maps `0:V:0` — a real video
+ * stream; `V` skips attached pictures, so an mp3/m4a with cover art is still
+ * audio — and stream-copies one packet to the null muxer. It exits 0 only when
+ * such a stream exists, which is refused as `has_video`: the caller then sends
+ * the original file as a document. Any other probe exit goes on to the
+ * transcode, where `-map 0:a:0` fails an input with no audio stream.
  *
  * The ffmpeg runner is injected: unit tests use a fake, the integration test
  * and main.ts use `realFfmpegRunner`. Nothing here logs; ffmpeg's stderr is
@@ -80,6 +87,15 @@ export function ffmpegArgs(inputFormat: InputDemuxer, inPath: string, oggPath: s
   ];
 }
 
+/** The video probe: exits 0 iff the input has a real (non cover-art) video stream. */
+export function videoProbeArgs(inputFormat: InputDemuxer, inPath: string): string[] {
+  return [
+    "-hide_banner", "-nostdin", "-loglevel", "error", "-protocol_whitelist", "file",
+    "-f", inputFormat, "-i", `file:${inPath}`,
+    "-map", "0:V:0", "-c", "copy", "-frames:v", "1", "-f", "null", "-",
+  ];
+}
+
 /** The ffmpeg demuxer for a sniffed audio type; null for anything that isn't audio we transcode. */
 export function demuxerFor(mime: SniffedMime): InputDemuxer | null {
   switch (mime) {
@@ -117,7 +133,7 @@ export function waveformFromPcm(pcm: Buffer, bars = 64): Uint8Array {
 
 export type TranscodeResult =
   | { ok: true; buffer: Buffer; seconds: number; waveform: Uint8Array }
-  | { ok: false; reason: "too_large" | "too_long" | "unsupported" | "busy" | "unavailable" | "timeout" | "ffmpeg_failed" | "bad_output" };
+  | { ok: false; reason: "too_large" | "too_long" | "unsupported" | "busy" | "unavailable" | "timeout" | "ffmpeg_failed" | "bad_output" | "has_video" };
 
 export type TranscodeFailureReason = Extract<TranscodeResult, { ok: false }>["reason"];
 
@@ -150,9 +166,13 @@ export async function transcodeToVoiceNote(
     const pcmPath = path.join(dir, "out.pcm");
     await writeFile(inPath, input, { mode: 0o600, flag: "wx" });
 
-    const ran = await opts.run(ffmpegArgs(demuxer, inPath, oggPath, pcmPath), {
-      timeoutMs: opts.timeoutMs ?? VOICE_TRANSCODE_TIMEOUT_MS,
-    });
+    const timeoutMs = opts.timeoutMs ?? VOICE_TRANSCODE_TIMEOUT_MS;
+    const probed = await opts.run(videoProbeArgs(demuxer, inPath), { timeoutMs });
+    if (probed.kind === "spawn_failed") return { ok: false, reason: "unavailable" };
+    if (probed.kind === "timeout") return { ok: false, reason: "timeout" };
+    if (probed.code === 0) return { ok: false, reason: "has_video" };
+
+    const ran = await opts.run(ffmpegArgs(demuxer, inPath, oggPath, pcmPath), { timeoutMs });
     if (ran.kind === "spawn_failed") return { ok: false, reason: "unavailable" };
     if (ran.kind === "timeout") return { ok: false, reason: "timeout" };
     if (ran.code !== 0) return { ok: false, reason: "ffmpeg_failed" };

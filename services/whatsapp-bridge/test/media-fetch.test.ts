@@ -468,12 +468,23 @@ test("prepareOutboundAudio: a successful transcode becomes an ogg/opus voice not
 });
 
 test("prepareOutboundAudio: every failure reason returns the original unchanged (the generic fallback)", async () => {
+  // has_video is the one exception: see the next test.
   const reasons: Extract<TranscodeResult, { ok: false }>["reason"][] = ["too_large", "too_long", "unsupported", "busy", "unavailable", "timeout", "ffmpeg_failed", "bad_output"];
   for (const reason of reasons) {
     const prepared = await prepareOutboundAudio(MP3_CANDIDATE, { transcode: async () => ({ ok: false, reason }) });
     assert.equal(prepared.outcome, reason);
     assert.equal(prepared.content, MP3_CANDIDATE, reason);
   }
+});
+
+test("prepareOutboundAudio: has_video sends the original bytes as a document, never audio or a voice note", async () => {
+  const m4a: ResolvedOutboundAttachment = { ok: true, kind: "audio", mimetype: "audio/mp4", buffer: Buffer.from("mp4-with-video"), ptt: false, transcodeCandidate: true };
+  const prepared = await prepareOutboundAudio(m4a, { transcode: async () => ({ ok: false, reason: "has_video" }) });
+  assert.equal(prepared.outcome, "has_video");
+  assert.equal(prepared.content.kind, "document");
+  assert.equal(prepared.content.buffer, m4a.buffer);
+  assert.equal(prepared.content.mimetype, "audio/mp4");
+  assert.equal(prepared.content.ptt, undefined);
 });
 
 test("prepareOutboundAudio: a transcode that throws falls back to the original as ffmpeg_failed", async () => {

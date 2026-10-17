@@ -17,6 +17,7 @@ import {
   VOICE_TRANSCODE_TIMEOUT_MS,
   ffmpegArgs,
   probeFfmpeg,
+  videoProbeArgs,
   transcodeToVoiceNote,
   waveformFromPcm,
   type FfmpegRunResult,
@@ -51,8 +52,18 @@ function outputPaths(args: readonly string[]): { ogg: string; pcm: string } {
 
 interface FakeRunner {
   run: FfmpegRunner;
+  /** Transcode runs only; the video probe that precedes each one is recorded in `probes`. */
   calls: string[][];
+  probes: string[][];
 }
+
+/** The video probe is the run that maps `0:V:0`; the transcode maps only audio. */
+function isVideoProbe(args: readonly string[]): boolean {
+  return args.includes("0:V:0");
+}
+
+/** "Stream map '0:V:0' matches no streams" — what real ffmpeg exits with for audio-only input. */
+const NO_VIDEO: FfmpegRunResult = { kind: "exited", code: 234 };
 
 function fakeRunner(
   behave: (args: readonly string[]) => Promise<FfmpegRunResult> = async (args) => {
@@ -60,12 +71,19 @@ function fakeRunner(
     await writeFile(ogg, oggOpusFixture());
     await writeFile(pcm, Buffer.alloc(ONE_SECOND_PCM));
     return { kind: "exited", code: 0 };
-  }
+  },
+  probe: (args: readonly string[]) => Promise<FfmpegRunResult> = async () => NO_VIDEO
 ): FakeRunner {
   const calls: string[][] = [];
+  const probes: string[][] = [];
   return {
     calls,
+    probes,
     run: async (args) => {
+      if (isVideoProbe(args)) {
+        probes.push([...args]);
+        return probe(args);
+      }
       calls.push([...args]);
       return behave(args);
     },
@@ -306,6 +324,74 @@ test("transcode: a third concurrent call is busy, not queued", async () => {
     const after = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", opts);
     assert.equal(after.ok, true);
   });
+});
+
+test("transcode: an input with a video track is has_video — the transcode never runs", async () => {
+  await withTmpRoot(async (root) => {
+    const fake = fakeRunner(undefined, async () => ({ kind: "exited", code: 0 }));
+    const result = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run: fake.run, tmpRoot: root });
+    assert.deepEqual(result, { ok: false, reason: "has_video" });
+    assert.equal(fake.probes.length, 1);
+    assert.equal(fake.calls.length, 0, "no transcode run for a video");
+    assert.deepEqual(await readdir(root), [], "temp dir removed");
+  });
+});
+
+test("transcode: the video probe reads the same private input file, with the hard timeout, before the transcode", async () => {
+  await withTmpRoot(async (root) => {
+    const order: string[] = [];
+    let probeInput: Buffer | null = null;
+    let probeTimeout = -1;
+    const fake = fakeRunner(
+      async (args) => {
+        order.push("transcode");
+        const { ogg, pcm } = outputPaths(args);
+        await writeFile(ogg, oggOpusFixture());
+        await writeFile(pcm, Buffer.alloc(ONE_SECOND_PCM));
+        return { kind: "exited", code: 0 };
+      },
+      async (args) => {
+        order.push("probe");
+        probeInput = await readFile(fromFileUrl(args[args.indexOf("-i") + 1]!));
+        return NO_VIDEO;
+      }
+    );
+    const run: FfmpegRunner = (args, opts) => {
+      if (isVideoProbe(args)) probeTimeout = opts.timeoutMs;
+      return fake.run(args, opts);
+    };
+    const result = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run, tmpRoot: root });
+    assert.equal(result.ok, true);
+    assert.deepEqual(order, ["probe", "transcode"]);
+    assert.deepEqual(probeInput, WEBM_INPUT);
+    assert.equal(probeTimeout, VOICE_TRANSCODE_TIMEOUT_MS);
+    assert.equal(fake.probes[0]![fake.probes[0]!.indexOf("-i") + 1], fake.calls[0]![fake.calls[0]!.indexOf("-i") + 1], "same input file");
+  });
+});
+
+test("transcode: a video probe that times out or can't spawn fails the same way the transcode would", async () => {
+  await withTmpRoot(async (root) => {
+    const timedOut = fakeRunner(undefined, async () => ({ kind: "timeout" }));
+    const r1 = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run: timedOut.run, tmpRoot: root });
+    assert.deepEqual(r1, { ok: false, reason: "timeout" });
+    assert.equal(timedOut.calls.length, 0);
+
+    const missing = fakeRunner(undefined, async () => ({ kind: "spawn_failed" }));
+    const r2 = await transcodeToVoiceNote(WEBM_INPUT, "audio/webm", { maxInputBytes: 1024 * 1024, run: missing.run, tmpRoot: root });
+    assert.deepEqual(r2, { ok: false, reason: "unavailable" });
+    assert.equal(missing.calls.length, 0);
+    assert.deepEqual(await readdir(root), []);
+  });
+});
+
+test("videoProbeArgs: same input posture as the transcode; maps a real (non cover-art) video stream to nowhere", () => {
+  const args = videoProbeArgs("mov", "/tmp/x/in");
+  assert.deepEqual(args, [
+    "-hide_banner", "-nostdin", "-loglevel", "error", "-protocol_whitelist", "file",
+    "-f", "mov", "-i", "file:/tmp/x/in",
+    "-map", "0:V:0", "-c", "copy", "-frames:v", "1", "-f", "null", "-",
+  ]);
+  for (const arg of args) assert.doesNotMatch(arg, /^[a-z]+:\/\//);
 });
 
 test("ffmpegArgs: input is a named demuxer on a local file, protocols limited to file", () => {
