@@ -171,6 +171,10 @@ export interface GhlAccount {
   accountId: string | null;
   /** Non-null = billed, active number (migration 0002). */
   activatedAt: string | null;
+  /** Message events (0011) — post contact reactions to GHL. Off by default; `false` on a pre-0011 database. */
+  showReactions: boolean;
+  /** Message events (0011) — post contact message deletes to GHL as a notice. Off by default; `false` on a pre-0011 database. */
+  showDeletes: boolean;
 }
 
 /**
@@ -469,8 +473,16 @@ export interface WhatsappInboundMessage {
    * `'missedVideoCall'`); `null` for an ordinary message, and for any row
    * read before 0010 is applied. Optional for the same fixture reason as
    * `mediaStatus`.
+   *
+   * Message events (0011) widen this to `'edit' | 'reaction' | 'delete'`:
+   * rows recording a WhatsApp edit, reaction or delete (see
+   * `targetWaMessageId`).
    */
-  eventKind?: "missed_call" | null;
+  eventKind?: "missed_call" | "edit" | "reaction" | "delete" | null;
+  /** Message events (0011) — for an `edit`/`reaction`/`delete` row, the WhatsApp id of the message it applies to; `null` otherwise and on a row read before 0011. */
+  targetWaMessageId?: string | null;
+  /** Message events (0011) — whether that target message was sent by us (`true`) or the contact (`false`); `null` when unknown or not applicable. */
+  targetFromMe?: boolean | null;
 }
 
 /**
