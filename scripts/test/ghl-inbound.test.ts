@@ -865,13 +865,37 @@ test("drainGhlInboundReplies: a stickiness write that throws never un-pushes the
     },
   };
   const { deps, postCalls } = makeDeps();
-
-  const result = await drainGhlInboundReplies(throwingSticky, deps);
+  // Captured, not printed — keeps the suite output pristine and pins that the
+  // failure is logged rather than swallowed silently.
+  const errors: unknown[][] = [];
+  const realConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args);
+  };
+  let result: Awaited<ReturnType<typeof drainGhlInboundReplies>>;
+  try {
+    result = await drainGhlInboundReplies(throwingSticky, deps);
+  } finally {
+    console.error = realConsoleError;
+  }
 
   assert.equal(result.pushed, 1);
   assert.equal(result.retried, 0);
   assert.equal(postCalls.length, 1);
   assert.equal(rowsById.get(row.id)!.resolution, "ghl_pushed");
+  assert.equal(errors.length, 1);
+  assert.match(String(errors[0][0]), /pushed, but recording the contact's sticky number failed/);
+});
+
+test("drainGhlInboundReplies: the location's number list is read once per location per pass, not once per row", async () => {
+  const rows = [makeRow({ coachId: SECOND_TENANT_ID }), makeRow({ coachId: TENANT_ID }), makeRow({ coachId: SECOND_TENANT_ID })];
+  const { repo, calls } = createFakeRepo([makeAccount()], rows, TWO_NUMBERS);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 3);
+  assert.equal(calls.filter((c) => c.method === "listLocationNumbers").length, 1);
 });
 
 test("drainGhlInboundReplies: with more than one number, the GHL body is prefixed '[<label>] ' or '[Number <slot>] '", async () => {

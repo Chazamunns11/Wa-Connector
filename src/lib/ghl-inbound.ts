@@ -189,7 +189,7 @@ import {
 } from "@/lib/ghl-provider";
 import { inboundNumberPrefix } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
-import type { WhatsappInboundMessage } from "@/lib/types";
+import type { LocationNumber, WhatsappInboundMessage } from "@/lib/types";
 
 /** Repo slice this module needs — `GhlTokenRefreshRepo`'s four methods (shared with `resolveGhlAccessToken`) plus this phase's own four, plus the media plan's signed-URL mint. All sessionless — driven exclusively via `webhookRepo` (the whatsapp-replies poke route and the reminders cron, neither carries a user session). */
 export type GhlInboundRepo = GhlTokenRefreshRepo &
@@ -351,6 +351,11 @@ export async function drainGhlInboundReplies(
   // not a correctness requirement (see this file's step 2 note: the upsert
   // is safe to call twice regardless).
   const contactIdByKey = new Map<string, string>();
+  // Multiple numbers (Task 3) — per-location number list for THIS pass only,
+  // same efficiency-only memo as `contactIdByKey` (a batch is typically many
+  // rows for few locations). Per pass, never longer: a number added, removed
+  // or relabelled shows up on the very next pass.
+  const numbersByLocation = new Map<string, LocationNumber[]>();
   const breaker: CircuitBreakerState = { consecutiveContactUpsertFailures: 0, consecutivePostFailures: 0 };
 
   for (const row of rows) {
@@ -361,7 +366,7 @@ export async function drainGhlInboundReplies(
       break;
     }
     try {
-      await processGhlInboundRow(repo, deps, row, envProviderId, contactIdByKey, result, breaker);
+      await processGhlInboundRow(repo, deps, row, envProviderId, contactIdByKey, numbersByLocation, result, breaker);
     } catch (err) {
       console.error(`[ghl-inbound.drainGhlInboundReplies] row ${row.id} failed unexpectedly (non-fatal):`, err);
       result.retried++;
@@ -378,6 +383,7 @@ async function processGhlInboundRow(
   row: WhatsappInboundMessage,
   envProviderId: string,
   contactIdByKey: Map<string, string>,
+  numbersByLocation: Map<string, LocationNumber[]>,
   result: DrainGhlInboundRepliesResult,
   breaker: CircuitBreakerState
 ): Promise<void> {
@@ -462,7 +468,13 @@ async function processGhlInboundRow(
   // this reply actually arrived on — is what the prefix describes, never
   // `account.tenantId` (the location's DEFAULT number, whichever number the
   // row came from — see `getGhlAccountByTenantId`'s JSDoc).
-  const locationNumbers = await repo.listLocationNumbers(account.locationId);
+  // Memoised per location for this pass (`numbersByLocation`); only a
+  // successful read is cached, so a throw is retried by the next row too.
+  let locationNumbers = numbersByLocation.get(account.locationId);
+  if (!locationNumbers) {
+    locationNumbers = await repo.listLocationNumbers(account.locationId);
+    numbersByLocation.set(account.locationId, locationNumbers);
+  }
   const numberPrefix = inboundNumberPrefix(locationNumbers, row.coachId);
 
   // Step 3 — atomic claim, reused verbatim from the coach drain (see this

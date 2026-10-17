@@ -2364,3 +2364,81 @@ test("listGhlInstalledLocations: an unreachable endpoint returns null, never thr
     assert.equal(result, null);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Multiple numbers (Task 3, review fix 1) — the drain's retry sites pick the
+// same refusal string as the webhook: a row sent from a NON-default number
+// (row.tenantId !== account.tenantId) that the bridge refuses with
+// session_not_connected reports the sticky string; a default-number row
+// keeps today's string.
+// ---------------------------------------------------------------------------
+
+const notConnectedSend: GhlProviderDeps["sendWhatsapp"] = async () => ({ ok: false, code: "session_not_connected", message: "session status is 'disconnected'" });
+
+test("drainGhlOutboundStatuses: a pending_send row from a NON-default number, retried into session_not_connected -> the sticky string", async () => {
+  const repoBundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS });
+  const row = seedAcceptedRow(repoBundle, { tenantId: SECOND_TENANT_ID, sendState: "pending_send", pendingText: "retry me", sendAttempts: 1 });
+  const { deps, statusCalls } = makeDeps({ sendWhatsapp: notConnectedSend });
+
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, deps);
+
+  assert.equal(result.failed, 1);
+  assert.equal(repoBundle.rows.get(row.id)!.refusalReason, STICKY_DISCONNECTED_REASON);
+  assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+});
+
+test("drainGhlOutboundStatuses: a pending_send row from the DEFAULT number, retried into session_not_connected -> today's string, unchanged", async () => {
+  const repoBundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS });
+  const row = seedAcceptedRow(repoBundle, { tenantId: TENANT_ID, sendState: "pending_send", pendingText: "retry me", sendAttempts: 1 });
+  const { deps, statusCalls } = makeDeps({ sendWhatsapp: notConnectedSend });
+
+  await drainGhlOutboundStatuses(repoBundle.repo, deps);
+
+  assert.equal(repoBundle.rows.get(row.id)!.refusalReason, GHL_PROVIDER_REASONS.notConnected);
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notConnected);
+});
+
+/** A multipart row whose text AND attachment parts all went transient at webhook time, so both are pending_send for the drain. */
+async function seedPendingMultipartRow(sticky: Record<string, string>) {
+  const repoBundle = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky });
+  const unreachable = async () => ({ ok: false as const, code: "unreachable", message: "WhatsApp bridge unreachable or timed out." });
+  const { deps } = makeDeps({ sendWhatsapp: unreachable, sendAttachment: unreachable });
+  const outcome = await withMediaOutboundEnabled(() =>
+    handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor({ messageId: "msg-mp-pending", message: "docs", attachments: ["https://x/a.pdf"] }), deps)
+  );
+  assert.deepEqual(outcome, { kind: "pending_retry" }, "fixture bug — expected every part to be left pending_send");
+  const row = [...repoBundle.rows.values()][0];
+  const part = [...repoBundle.attachments.values()][0];
+  return { repoBundle, row, part };
+}
+
+test("drainMultipartRow: text and attachment retries from a NON-default number into session_not_connected -> the sticky string on both parts and in the report", async () => {
+  const { repoBundle, row, part } = await seedPendingMultipartRow(STICKY_TO_SECOND);
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  const { deps, statusCalls } = makeDeps({
+    sendWhatsapp: notConnectedSend,
+    sendAttachment: notConnectedSend as GhlProviderDeps["sendAttachment"],
+  });
+
+  await withMediaOutboundEnabled(() => drainGhlOutboundStatuses(repoBundle.repo, deps));
+
+  assert.equal(repoBundle.rows.get(row.id)!.refusalReason, STICKY_DISCONNECTED_REASON);
+  assert.equal(repoBundle.attachments.get(part.id)!.refusalReason, STICKY_DISCONNECTED_REASON);
+  assert.equal(statusCalls.length, 1);
+  assert.equal(statusCalls[0].errorMessage, STICKY_DISCONNECTED_REASON);
+});
+
+test("drainMultipartRow: the same retries from the DEFAULT number -> today's string, unchanged", async () => {
+  const { repoBundle, row, part } = await seedPendingMultipartRow({});
+  assert.equal(row.tenantId, TENANT_ID);
+  const { deps, statusCalls } = makeDeps({
+    sendWhatsapp: notConnectedSend,
+    sendAttachment: notConnectedSend as GhlProviderDeps["sendAttachment"],
+  });
+
+  await withMediaOutboundEnabled(() => drainGhlOutboundStatuses(repoBundle.repo, deps));
+
+  assert.equal(repoBundle.rows.get(row.id)!.refusalReason, GHL_PROVIDER_REASONS.notConnected);
+  assert.equal(repoBundle.attachments.get(part.id)!.refusalReason, GHL_PROVIDER_REASONS.notConnected);
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notConnected);
+});

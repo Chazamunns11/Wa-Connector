@@ -352,14 +352,30 @@ function mapBridgeFailureReason(code: string): string {
 
 /**
  * `mapBridgeFailureReason`, aware of which number the send went from
- * (multiple numbers, Task 3). The ONLY difference: `session_not_connected`
- * from a non-default number reports `REASON_STICKY_NUMBER_DISCONNECTED`.
- * Every other code — and every code from the default number — maps exactly
- * as before.
+ * (multiple numbers, Task 3) — the ONE "which refusal string" decision,
+ * shared by the webhook path and every drain retry site. The ONLY
+ * difference: `session_not_connected` from a non-default number reports
+ * `REASON_STICKY_NUMBER_DISCONNECTED`. Every other code — and every code
+ * from the default number — maps exactly as before.
+ *
+ * `isDefaultNumber` comes from `SendingNumber.isDefault` at webhook time and
+ * from `isDefaultNumberForRow` in the drain.
  */
-function mapSendFailureReason(code: string, sendingNumber: SendingNumber): string {
-  if (code === "session_not_connected" && !sendingNumber.isDefault) return REASON_STICKY_NUMBER_DISCONNECTED;
+function mapSendFailureReason(code: string, isDefaultNumber: boolean): string {
+  if (code === "session_not_connected" && !isDefaultNumber) return REASON_STICKY_NUMBER_DISCONNECTED;
   return mapBridgeFailureReason(code);
+}
+
+/**
+ * The drain's answer to "was this row sent from the location's default
+ * number?" (multiple numbers, Task 3). `ghl_accounts.tenant_id` mirrors the
+ * CURRENT default (`markDefault` in src/lib/data/supabase.ts writes it), so
+ * a row whose own tenant differs from it went out from a non-default
+ * (sticky) number. With no account at all (structurally shouldn't happen
+ * for a row the drain lists), treat it as the default — today's string.
+ */
+function isDefaultNumberForRow(row: GhlOutboundMessage, account: GhlAccount | null): boolean {
+  return !account || row.tenantId === account.tenantId;
 }
 
 /**
@@ -758,7 +774,7 @@ export async function handleProviderOutboundMessage(
       return { kind: "pending_retry" };
     }
 
-    const reason = mapSendFailureReason(sendResult.code, sendingNumber);
+    const reason = mapSendFailureReason(sendResult.code, sendingNumber.isDefault);
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
     await reportGhlOutcome(repo, deps, account, row, "failed", reason);
     return { kind: "refused", reason };
@@ -997,7 +1013,7 @@ async function handleMediaSplitOutbound(
       anyTransientRetry = true;
       partOutcomes.push({ resolved: false });
     } else {
-      const reason = mapSendFailureReason(sendResult.code, sendingNumber);
+      const reason = mapSendFailureReason(sendResult.code, sendingNumber.isDefault);
       await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
       partOutcomes.push({ resolved: true, sent: false, reason });
     }
@@ -1043,7 +1059,7 @@ async function handleMediaSplitOutbound(
       anyTransientRetry = true;
       partOutcomes.push({ resolved: false });
     } else {
-      const reason = mapSendFailureReason(sendResult.code, sendingNumber);
+      const reason = mapSendFailureReason(sendResult.code, sendingNumber.isDefault);
       await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: reason });
       if (sendResult.code === "media_outbound_disabled" && url) mediaDisabledUrls.push(url);
       partOutcomes.push({ resolved: true, sent: false, reason });
@@ -1333,10 +1349,15 @@ async function drainMultipartRow(
   bridgeStatusByKey: Map<string, { status: string; error: string | null }>,
   result: DrainGhlOutboundStatusesResult
 ): Promise<void> {
-  const textOutcome = await resolveTextPartOutcome(repo, deps, row, bridgeStatusByKey, result);
+  // Read up front (it used to be read only once every part had resolved) —
+  // a part retry below needs it to pick the refusal string (multiple
+  // numbers, Task 3 — `isDefaultNumberForRow`). Reused for the report.
+  const account = await repo.getGhlAccountByLocationId(row.locationId);
+  const isDefaultNumber = isDefaultNumberForRow(row, account);
+  const textOutcome = await resolveTextPartOutcome(repo, deps, row, bridgeStatusByKey, result, isDefaultNumber);
   const attachmentOutcomes: PartOutcome[] = [];
   for (const part of parts) {
-    attachmentOutcomes.push(await resolveAttachmentPartOutcome(repo, deps, row, part, bridgeStatusByKey, result));
+    attachmentOutcomes.push(await resolveAttachmentPartOutcome(repo, deps, row, part, bridgeStatusByKey, result, isDefaultNumber));
   }
 
   const aggregate = aggregatePartOutcomes([textOutcome, ...attachmentOutcomes]);
@@ -1345,7 +1366,6 @@ async function drainMultipartRow(
     return;
   }
 
-  const account = await repo.getGhlAccountByLocationId(row.locationId);
   const status = aggregate.status === "delivered" ? "delivered" : "failed";
   const outcome = await reportGhlOutcome(repo, deps, account, row, status, aggregate.status === "failed" ? aggregate.reason : null);
   if (outcome === "reported") {
@@ -1371,7 +1391,8 @@ async function resolveTextPartOutcome(
   deps: GhlProviderDeps,
   row: GhlOutboundMessage,
   bridgeStatusByKey: Map<string, { status: string; error: string | null }>,
-  result: DrainGhlOutboundStatusesResult
+  result: DrainGhlOutboundStatusesResult,
+  isDefaultNumber: boolean
 ): Promise<PartOutcome> {
   if (row.sendState === "refused") {
     // QA Minor 7 fix — `vacuous: true`: not real delivered content, see
@@ -1390,10 +1411,16 @@ async function resolveTextPartOutcome(
   // same column/bound the legacy `drainPendingSend` uses — reused verbatim
   // here since this IS that same column on this SAME row, just scoped to the
   // text part specifically within a multipart message).
-  return retryTextPart(repo, deps, row, result);
+  return retryTextPart(repo, deps, row, result, isDefaultNumber);
 }
 
-async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage, result: DrainGhlOutboundStatusesResult): Promise<PartOutcome> {
+async function retryTextPart(
+  repo: GhlProviderRepo,
+  deps: GhlProviderDeps,
+  row: GhlOutboundMessage,
+  result: DrainGhlOutboundStatusesResult,
+  isDefaultNumber: boolean
+): Promise<PartOutcome> {
   if (row.sendAttempts >= PENDING_SEND_MAX_ATTEMPTS) {
     // Same finding-4 check as `drainPendingSend`: the send may genuinely
     // have reached the bridge even though every response back to US timed
@@ -1427,7 +1454,7 @@ async function retryTextPart(repo: GhlProviderRepo, deps: GhlProviderDeps, row: 
     result.stillPending++;
     return { resolved: false };
   }
-  const reason = mapBridgeFailureReason(sendResult.code);
+  const reason = mapSendFailureReason(sendResult.code, isDefaultNumber);
   await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
   return { resolved: true, sent: false, reason };
 }
@@ -1451,7 +1478,8 @@ async function resolveAttachmentPartOutcome(
   row: GhlOutboundMessage,
   part: GhlOutboundAttachment,
   bridgeStatusByKey: Map<string, { status: string; error: string | null }>,
-  result: DrainGhlOutboundStatusesResult
+  result: DrainGhlOutboundStatusesResult,
+  isDefaultNumber: boolean
 ): Promise<PartOutcome> {
   if (part.sendState === "refused") {
     return { resolved: true, sent: false, reason: part.refusalReason ?? REASON_GENERIC_REFUSED };
@@ -1502,7 +1530,7 @@ async function resolveAttachmentPartOutcome(
     result.stillPending++;
     return { resolved: false };
   }
-  const reason = mapBridgeFailureReason(sendResult.code);
+  const reason = mapSendFailureReason(sendResult.code, isDefaultNumber);
   await repo.updateGhlOutboundAttachmentSendState(part.id, { sendState: "refused", refusalReason: reason });
   return { resolved: true, sent: false, reason };
 }
@@ -1619,7 +1647,7 @@ async function drainPendingSend(
     return;
   }
 
-  const reason = mapBridgeFailureReason(sendResult.code);
+  const reason = mapSendFailureReason(sendResult.code, isDefaultNumberForRow(row, account));
   await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
   const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", reason);
   if (outcome === "reported") result.failed++;
