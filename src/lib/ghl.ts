@@ -855,6 +855,24 @@ const GHL_GROUP_CONTACT_SUFFIX = " (WhatsApp group)";
 /** GHL contact names are kept to 100 characters, suffix included. */
 const GHL_GROUP_CONTACT_NAME_MAX = 100;
 
+/** `ghlGroupContactKey`'s shape: the JID's digits (`-` kept), `-`, 8 lowercase hex. */
+const GHL_GROUP_CONTACT_KEY_RE = /^[0-9]{1,64}(-[0-9]{1,64})?-[0-9a-f]{8}$/;
+
+/**
+ * The key behind a group contact's placeholder email, PER NUMBER: the group
+ * JID without `@g.us` (its `-` kept, so `12-345` and `123-45` stay distinct;
+ * `-` is valid in an email local part), then `-` and the first 8 hex chars of
+ * sha256(tenantId). The same group seen by two of a location's numbers
+ * therefore gets two GHL contacts, each routed to its own number, rather
+ * than one contact both numbers post into. Hashed so the raw tenant id never
+ * reaches GHL (no tenant id in anything outside the service-role boundary).
+ */
+export function ghlGroupContactKey(groupJid: string, tenantId: string): string {
+  const jidPart = groupJid.replace(/@g\.us$/, "");
+  const tenantPart = createHash("sha256").update(tenantId).digest("hex").slice(0, 8);
+  return `${jidPart}-${tenantPart}`;
+}
+
 /**
  * Opt-in WhatsApp groups — the ONE GHL contact standing for a group (GHL's
  * inbound-message API needs a contact and has no group concept). Same
@@ -870,16 +888,16 @@ const GHL_GROUP_CONTACT_NAME_MAX = 100;
  *     refuse a contact with neither phone nor email — not yet confirmed
  *     against a live location — and it also gives GHL's upsert something to
  *     dedupe on, so a retried create returns the same contact.
- * `groupKey` is the group JID's digits (the bridge's JID with `-` and
- * `@g.us` removed); anything else is refused without a request, so nothing
- * but digits ever reaches the email.
+ * `groupKey` is `ghlGroupContactKey`'s output; anything else is refused
+ * without a request, so only digits, `-` and lowercase hex ever reach the
+ * email.
  */
 export async function upsertGhlGroupContact(
   accessToken: string,
   locationId: string,
   input: { name: string; groupKey: string }
 ): Promise<UpsertGhlContactResult> {
-  if (!/^[0-9]{1,64}$/.test(input.groupKey)) {
+  if (!GHL_GROUP_CONTACT_KEY_RE.test(input.groupKey)) {
     return { ok: false, kind: "rejected", error: "GHL group contact key is not a WhatsApp group id" };
   }
   const groupName = Array.from(input.name.trim())

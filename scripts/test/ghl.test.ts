@@ -22,6 +22,7 @@ import {
   ghlAppId,
   ghlTenantKeyQueryFilters,
   listGhlInstalledLocations,
+  ghlGroupContactKey,
   parseGhlInstalledLocations,
   upsertGhlGroupContact,
   verifyGhlSignature,
@@ -2488,7 +2489,7 @@ function jsonResponse(status: number, body: unknown): Response {
 test("upsertGhlGroupContact: posts name '<group> (WhatsApp group)', the whatsapp-group tag and the placeholder email — never a phone", async () => {
   const { result, requests } = await withCapturedFetch(
     async () => jsonResponse(200, { new: true, contact: { id: "group-contact-1" } }),
-    () => upsertGhlGroupContact("token", "loc-1", { name: "  Run Club  ", groupKey: "120363012345678901" })
+    () => upsertGhlGroupContact("token", "loc-1", { name: "  Run Club  ", groupKey: "120363012345678901-0a1b2c3d" })
   );
   assert.deepEqual(result, { ok: true, contactId: "group-contact-1", isNew: true });
   assert.equal(requests.length, 1);
@@ -2499,7 +2500,7 @@ test("upsertGhlGroupContact: posts name '<group> (WhatsApp group)', the whatsapp
   assert.deepEqual(requests[0].body, {
     locationId: "loc-1",
     name: "Run Club (WhatsApp group)",
-    email: "group-120363012345678901@groups.pingwren.invalid",
+    email: "group-120363012345678901-0a1b2c3d@groups.pingwren.invalid",
     tags: ["whatsapp-group"],
   });
   assert.equal("phone" in (requests[0].body as Record<string, unknown>), false);
@@ -2509,7 +2510,7 @@ test("upsertGhlGroupContact: a long group name is trimmed so the whole contact n
   const longName = "😀".repeat(150);
   const { requests } = await withCapturedFetch(
     async () => jsonResponse(200, { contact: { id: "c" } }),
-    () => upsertGhlGroupContact("token", "loc-1", { name: longName, groupKey: "4477009001231600000000" })
+    () => upsertGhlGroupContact("token", "loc-1", { name: longName, groupKey: "447700900123-1600000000-0a1b2c3d" })
   );
   const name = (requests[0].body as { name: string }).name;
   assert.equal([...name].length, 100);
@@ -2519,33 +2520,55 @@ test("upsertGhlGroupContact: a long group name is trimmed so the whole contact n
 test("upsertGhlGroupContact: same fixed error strings as upsertGhlContact — never the raw body", async () => {
   const rejected = await withCapturedFetch(
     async () => jsonResponse(422, { message: "secret upstream detail" }),
-    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1" })
+    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1-0a1b2c3d" })
   );
   assert.deepEqual(rejected.result, { ok: false, kind: "rejected", error: "GHL contact upsert rejected (HTTP 422)" });
 
-  const limited = await withCapturedFetch(async () => jsonResponse(429, {}), () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1" }));
+  const limited = await withCapturedFetch(async () => jsonResponse(429, {}), () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1-0a1b2c3d" }));
   assert.deepEqual(limited.result, { ok: false, kind: "rate_limited", error: "GHL contact upsert rejected (HTTP 429)" });
 
-  const noId = await withCapturedFetch(async () => jsonResponse(200, { contact: {} }), () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1" }));
+  const noId = await withCapturedFetch(async () => jsonResponse(200, { contact: {} }), () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1-0a1b2c3d" }));
   assert.deepEqual(noId.result, { ok: false, kind: "rejected", error: "GHL contact upsert response had no contact id" });
 
   const thrown = await withCapturedFetch(
     async () => {
       throw new Error("ECONNRESET");
     },
-    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1" })
+    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1-0a1b2c3d" })
   );
   assert.deepEqual(thrown.result, { ok: false, kind: "unreachable", error: "GHL contact upsert request failed" });
 });
 
-test("upsertGhlGroupContact: a groupKey that is not all digits is refused without a request", async () => {
-  const { result, requests } = await withCapturedFetch(
-    async () => jsonResponse(200, { contact: { id: "c" } }),
-    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1203@evil.example" })
-  );
-  assert.equal(requests.length, 0);
-  assert.equal(result.ok, false);
-  assert.equal(!result.ok && result.kind, "rejected");
+test("upsertGhlGroupContact: a groupKey not shaped like ghlGroupContactKey's output is refused without a request", async () => {
+  for (const groupKey of ["1203@evil.example", "120363012345678901", "1-0A1B2C3D", "1-0a1b2c3", "-0a1b2c3d"]) {
+    const { result, requests } = await withCapturedFetch(
+      async () => jsonResponse(200, { contact: { id: "c" } }),
+      () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey })
+    );
+    assert.equal(requests.length, 0, groupKey);
+    assert.equal(!result.ok && result.kind, "rejected", groupKey);
+  }
+});
+
+test("ghlGroupContactKey: JID digits with '-' kept, plus 8 hex of sha256(tenantId) — per number, never the raw tenant id", () => {
+  const tenantA = "22222222-2222-4222-8222-222222222222";
+  const tenantB = "33333333-3333-4333-8333-333333333333";
+  const jid = "120363012345678901@g.us";
+  const hashA = createHash("sha256").update(tenantA).digest("hex").slice(0, 8);
+
+  const keyA = ghlGroupContactKey(jid, tenantA);
+  const keyB = ghlGroupContactKey(jid, tenantB);
+  assert.equal(keyA, `120363012345678901-${hashA}`);
+  assert.notEqual(keyA, keyB, "the same group on two numbers gets two GHL contacts");
+  assert.notEqual(`group-${keyA}@groups.pingwren.invalid`, `group-${keyB}@groups.pingwren.invalid`);
+  for (const [key, tenant] of [[keyA, tenantA], [keyB, tenantB]]) {
+    assert.ok(!key.includes(tenant), "the raw tenant id never appears in the key");
+    assert.ok(!key.includes(tenant.slice(0, 8)), "nor any recognisable piece of it");
+  }
+
+  // '-' kept: old-style JIDs that differ only in where the '-' falls stay distinct.
+  assert.notEqual(ghlGroupContactKey("12-345@g.us", tenantA), ghlGroupContactKey("123-45@g.us", tenantA));
+  assert.equal(ghlGroupContactKey("447700900123-1600000000@g.us", tenantA), `447700900123-1600000000-${hashA}`);
 });
 
 const BRIDGE_COACH = "33333333-3333-4333-8333-333333333333";

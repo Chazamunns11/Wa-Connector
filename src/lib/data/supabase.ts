@@ -763,9 +763,10 @@ export class SupabaseGhlRepository implements GhlRepository {
       .eq("ghl_contact_id", ghlContactId);
     if (error) throw error;
     const groups = ((data ?? []) as WhatsappGroupRow[]).map(mapWhatsappGroup);
-    // Normally one row. Two of the location's numbers in the same group share
-    // one GHL contact (the upsert dedupes on the group's email), so prefer an
-    // enabled group the number is still in, then a stable order.
+    // Normally one row: the group contact's key is per number
+    // (`ghlGroupContactKey`), so the same group on two numbers has two
+    // contacts. A safety net should two rows ever share a contact anyway:
+    // prefer an enabled group the number is still in, then a stable order.
     groups.sort(
       (a, b) =>
         Number(b.enabled) - Number(a.enabled) ||

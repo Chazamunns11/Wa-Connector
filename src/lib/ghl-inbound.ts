@@ -196,6 +196,7 @@ import {
   describeStoredMediaLabel,
   describeTooLargeMediaPlaceholder,
   ghlConversationProviderId,
+  ghlGroupContactKey,
   refreshGhlToken,
   upsertGhlContact,
   upsertGhlGroupContact,
@@ -509,7 +510,7 @@ async function processGhlInboundRow(
   let contactId = group ? group.ghlContactId : (memos.contactIdByKey.get(memoKey) ?? null);
   if (!contactId) {
     const upsert = group
-      ? await deps.upsertGroupContact(accessToken, account.locationId, { name: group.name, groupKey: groupContactKey(group.groupJid) })
+      ? await deps.upsertGroupContact(accessToken, account.locationId, { name: group.name, groupKey: ghlGroupContactKey(group.groupJid, group.tenantId) })
       : await deps.upsertContact(accessToken, account.locationId, row.fromPhone);
     if (!upsert.ok) {
       breaker.consecutiveContactUpsertFailures++;
@@ -525,7 +526,9 @@ async function processGhlInboundRow(
     if (group) {
       // Stored BEFORE anything is posted to it: a throw here leaves the row
       // un-claimed for the next pass, and GHL's upsert dedupes on the group's
-      // placeholder email, so that retry gets the same contact back.
+      // placeholder email, so that retry gets the same contact back. The key
+      // is per number (`ghlGroupContactKey`), so the same group on another of
+      // the location's numbers is a separate contact.
       await repo.setWhatsappGroupContact(group.tenantId, group.groupJid, contactId);
       group.ghlContactId = contactId;
     } else {
@@ -635,11 +638,6 @@ async function findRowGroup(
     groupsByTenant.set(tenantId, groups);
   }
   return groups.find((g) => g.groupJid === groupJid) ?? null;
-}
-
-/** `upsertGhlGroupContact`'s `groupKey`: the JID's digits (`120363…@g.us` -> `120363…`, `4477…-1600…@g.us` -> `4477…1600…`). */
-function groupContactKey(groupJid: string): string {
-  return groupJid.replace(/@g\.us$/, "").replace(/-/g, "");
 }
 
 /** Who wrote a group message: their WhatsApp display name, else their E.164 number. */

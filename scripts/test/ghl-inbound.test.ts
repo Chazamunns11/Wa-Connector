@@ -19,6 +19,7 @@
  * this drain level can never exercise.
  */
 import test, { beforeEach, afterEach } from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 
 import { describeInboundMediaPlaceholder } from "@/lib/ghl";
@@ -974,7 +975,7 @@ test("drainGhlInboundReplies (groups): the first row creates the group contact o
 
   assert.equal(result.pushed, 2);
   assert.deepEqual(groupUpsertCalls, [
-    { accessToken: "access-token-fresh", locationId: LOCATION_ID, name: "Run Club", groupKey: "120363012345678901" },
+    { accessToken: "access-token-fresh", locationId: LOCATION_ID, name: "Run Club", groupKey: `120363012345678901-${createHash("sha256").update(TENANT_ID).digest("hex").slice(0, 8)}` },
   ]);
   assert.equal(groupsByKey.get(`${TENANT_ID}:${GROUP_JID}`)!.ghlContactId, "group-contact-1");
   const storeIndex = calls.findIndex((c) => c.method === "setWhatsappGroupContact");
@@ -1097,4 +1098,25 @@ test("drainGhlInboundReplies (groups): the tenant's group list is read once per 
 
   assert.equal(calls.filter((c) => c.method === "listWhatsappGroups").length, 1);
   assert.equal(groupUpsertCalls.length, 1);
+});
+
+test("drainGhlInboundReplies (groups): the same group on two numbers gets one contact per number — distinct keys, each stored on its own row", async () => {
+  const groups = [makeGroup(), makeGroup({ tenantId: SECOND_TENANT_ID })];
+  const rows = [makeGroupRow({ body: "via main" }), makeGroupRow({ coachId: SECOND_TENANT_ID, body: "via sales" })];
+  const { repo, groupsByKey } = createFakeRepo([makeAccount()], rows, TWO_NUMBERS, groups);
+  let n = 0;
+  const { deps, groupUpsertCalls, postCalls } = makeDeps({
+    upsertGroupContact: async (accessToken, locationId, input) => {
+      groupUpsertCalls.push({ accessToken, locationId, ...input });
+      return { ok: true, contactId: `group-contact-${++n}`, isNew: true };
+    },
+  });
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(groupUpsertCalls.length, 2);
+  assert.notEqual(groupUpsertCalls[0].groupKey, groupUpsertCalls[1].groupKey);
+  assert.equal(groupsByKey.get(`${TENANT_ID}:${GROUP_JID}`)!.ghlContactId, "group-contact-1");
+  assert.equal(groupsByKey.get(`${SECOND_TENANT_ID}:${GROUP_JID}`)!.ghlContactId, "group-contact-2");
+  assert.deepEqual(postCalls.map((c) => c.contactId), ["group-contact-1", "group-contact-2"]);
 });
