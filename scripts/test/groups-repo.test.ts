@@ -149,6 +149,8 @@ test("updateWhatsappGroupMember sets state and reason, and the invite key only w
   assert.equal(seen[0].url.searchParams.get("id"), "eq.m1");
   assert.deepEqual(seen[0].body, { state: "added", last_reason: null });
   assert.deepEqual(seen[1].body, { state: "invite_sent", last_reason: "x", invite_idempotency_key: "k1" });
+  await repo.updateWhatsappGroupMember("m1", { state: "pending", lastReason: null, jobId: JOB });
+  assert.deepEqual(seen[2].body, { state: "pending", last_reason: null, job_id: JOB });
 });
 
 test("listPendingGroupJobIds returns distinct job/group pairs for pending members of the account's groups", async () => {
@@ -172,8 +174,22 @@ test("listAccountsWithPendingGroupMembers covers pending and held-invite members
   respond = () => ({ body: [{ whatsapp_groups: { account_id: ACCOUNT } }, { whatsapp_groups: { account_id: ACCOUNT } }] });
   const out = await new SupabaseGhlRepository().listAccountsWithPendingGroupMembers(10);
   assert.equal(seen[0].url.searchParams.get("state"), "in.(pending,invite_needed)");
-  assert.ok(seen[0].url.searchParams.get("limit"));
+  assert.equal(seen[0].url.searchParams.get("order"), "created_at.asc");
   assert.deepEqual(out, [ACCOUNT]);
+});
+
+test("listAccountsWithPendingGroupMembers pages past one account's backlog so others are not starved", async () => {
+  const OTHER = "55555555-5555-4555-8555-555555555555";
+  let call = 0;
+  respond = () => {
+    call += 1;
+    return call === 1
+      ? { body: Array.from({ length: 200 }, () => ({ whatsapp_groups: { account_id: ACCOUNT } })) }
+      : { body: [{ whatsapp_groups: { account_id: OTHER } }] };
+  };
+  const out = await new SupabaseGhlRepository().listAccountsWithPendingGroupMembers(2);
+  assert.deepEqual(out, [ACCOUNT, OTHER]);
+  assert.equal(seen.length, 2);
 });
 
 test("getWhatsappGroupJob reads the bridge-owned table and maps it", async () => {

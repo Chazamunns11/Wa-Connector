@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ADD_BATCH_MAX,
+  GROUP_ADDS_PER_DAY,
+  GROUP_CREATES_PER_DAY,
   GROUP_MEMBER_CAP,
   REASON_ALREADY_MEMBER,
   REASON_BATCH_TOO_LARGE,
@@ -22,6 +24,7 @@ import {
   memberStateForOutcome,
   parsePastedNumbers,
   planAddMembers,
+  reasonForBridgeFailure,
   reasonMemberCap,
   reconcileJob,
   validateDescription,
@@ -174,4 +177,19 @@ test("reconcileJob interrupted fails remaining pending only", () => {
     { memberId: "m2", state: "failed", reason: REASON_INTERRUPTED },
   ]);
   assert.deepEqual(plan.invites, []);
+});
+
+test("invite-needed copy promises a link to follow, not one already sent", () => {
+  assert.equal(REASON_INVITE_NEEDED, "their privacy settings only allow invites — invite link to follow");
+});
+
+test("bridge refusal for no resolvable participants maps to the no-valid-numbers reason", () => {
+  assert.equal(reasonForBridgeFailure("invalid_participants"), REASON_NO_VALID_NUMBERS);
+});
+
+test("the daily limits shown to customers equal the bridge's configured defaults", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(`${process.cwd()}/services/whatsapp-bridge/src/config.ts`, "utf8");
+  assert.match(src, new RegExp(`"WA_GROUP_CREATES_DAILY_CAP", ${GROUP_CREATES_PER_DAY}\\)`));
+  assert.match(src, new RegExp(`"WA_GROUP_ADDS_DAILY_CAP", ${GROUP_ADDS_PER_DAY}\\)`));
 });

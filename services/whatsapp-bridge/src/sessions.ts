@@ -106,7 +106,7 @@ import { useSupabaseAuthState } from "./auth-state.js";
 import { SessionLock } from "./lock.js";
 import { PendingWrites } from "./pending-writes.js";
 import { SessionPacer } from "./pacing.js";
-import { GroupLimiter, outcomeForParticipantStatus, runAddJob, type AddJobResult } from "./groups.js";
+import { GroupLimiter, outcomeForParticipantStatus, resolvePhones, runAddJob, type AddJobResult } from "./groups.js";
 import { isE164 } from "./phone.js";
 import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
@@ -174,6 +174,7 @@ export type GroupCreateOutcome =
   | { kind: "session_not_connected"; status: SessionStatus }
   | { kind: "group_create_cap_reached"; cap: number }
   | { kind: "lease_unavailable" }
+  | { kind: "invalid_participants" }
   | { kind: "whatsapp_refused" };
 export type GroupAddOutcome =
   | { kind: "queued"; job: GroupJobRecord }
@@ -203,8 +204,16 @@ export function weAreAdminIn(meta: { participants: { id: string; admin?: string 
 }
 
 /** Per-phone outcomes of a group creation: in the returned metadata -> added; never resolved -> not_on_whatsapp; resolved but absent -> invite_needed. */
-export function participantResultsFromCreate(meta: { participants: { id: string }[] }, requested: { phone: string; jid: string | null }[]): AddJobResult[] {
-  const present = new Set(meta.participants.map((p) => jidNormalizedUser(p.id)));
+export function participantResultsFromCreate(
+  meta: { participants: { id: string; phoneNumber?: string }[] },
+  requested: { phone: string; jid: string | null }[]
+): AddJobResult[] {
+  // LID-addressed groups list a participant by @lid with the phone in phoneNumber; accept either form.
+  const present = new Set<string>();
+  for (const p of meta.participants) {
+    present.add(jidNormalizedUser(p.id));
+    if (p.phoneNumber) present.add(jidNormalizedUser(p.phoneNumber));
+  }
   return requested.map(({ phone, jid }) => {
     if (!jid) return { phone, code: "404", outcome: outcomeForParticipantStatus("404") };
     if (present.has(jidNormalizedUser(jid))) return { phone, code: "200", outcome: outcomeForParticipantStatus("200") };
@@ -1520,15 +1529,15 @@ export class SessionManager {
   ): Promise<GroupCreateOutcome> {
     const s = this.connectedSession(coachId);
     if ("notConnected" in s) return { kind: "session_not_connected", status: s.notConnected };
-    if (!s.groupLimiter.reserveCreate()) return { kind: "group_create_cap_reached", cap: this.config.groupCreatesDailyCap };
+    if (s.groupLimiter.remainingCreatesToday() < 1) return { kind: "group_create_cap_reached", cap: this.config.groupCreatesDailyCap };
     const sock = s.sock;
     try {
-      const lookup = (await sock.onWhatsApp(...input.participants)) ?? [];
-      const requested = input.participants.map((phone, i) => {
-        const hit = lookup[i];
-        return { phone, jid: hit && hit.exists !== false && hit.jid ? hit.jid : null };
-      });
+      const resolved = resolvePhones(input.participants, await sock.onWhatsApp(...input.participants));
+      const requested = input.participants.map((phone) => ({ phone, jid: resolved.get(phone) ?? null }));
       const jids = requested.map((r) => r.jid).filter((j): j is string => j !== null);
+      // Nothing to create with: answer before spending one of the day's creates.
+      if (jids.length === 0) return { kind: "invalid_participants" };
+      if (!s.groupLimiter.reserveCreate()) return { kind: "group_create_cap_reached", cap: this.config.groupCreatesDailyCap };
       const meta = await sock.groupCreate(input.subject, jids);
       const jid = meta.id;
       // The group exists from here on; best-effort settings never fail the create.
@@ -1584,7 +1593,8 @@ export class SessionManager {
       let results: AddJobResult[] = [];
       let interrupted = false;
       try {
-        const ran = await runAddJob(sock, session.groupLimiter, job.groupJid, phones, sleep, () => session.status === "connected" && session.sock === sock);
+        const ran = await runAddJob(sock, session.groupLimiter, job.groupJid, phones, sleep, () => session.status === "connected" && session.sock === sock,
+          () => this.log.info({ coachId: session.coachId, jobId: job.id }, "group add result matched via phone_number/lid fallback"));
         results = ran.results;
         interrupted = ran.interrupted;
       } catch (err) {

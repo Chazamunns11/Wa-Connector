@@ -8,7 +8,7 @@ import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { repo } from "@/lib/data";
 import { parseGroupResult } from "@/lib/groups/forms";
-import { REASON_NOT_CONNECTED } from "@/lib/groups/rules";
+import { GROUP_ADDS_PER_DAY, GROUP_CREATES_PER_DAY, REASON_NOT_CONNECTED } from "@/lib/groups/rules";
 import { SITE_ROUTES } from "@/lib/site/routes";
 import { groupsEnabled } from "../deps";
 
@@ -54,7 +54,7 @@ export default async function NewGroupPage({ searchParams }: { searchParams: Pro
       ) : null}
       <p className="mb-6 mt-3 text-ink-dim">
         Only add people who have agreed to be in the group. If someone&apos;s privacy settings block direct adds, they get the invite link as a normal
-        message from this number instead. Each number can create 3 groups and add 50 people a day.
+        message from this number instead. Each number can create {GROUP_CREATES_PER_DAY} groups and add {GROUP_ADDS_PER_DAY} people a day.
       </p>
       <GroupForm numbers={numbers} disabled={!anyUsable} />
     </Container>

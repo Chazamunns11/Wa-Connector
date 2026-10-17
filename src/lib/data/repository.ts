@@ -678,7 +678,7 @@ export interface GhlRepository {
   /** On conflict (group_id, phone) do nothing; returns only the rows actually inserted. */
   insertWhatsappGroupMembers(drafts: WhatsappGroupMemberDraft[]): Promise<WhatsappGroupMember[]>;
   listWhatsappGroupMembers(groupId: string): Promise<WhatsappGroupMember[]>;
-  updateWhatsappGroupMember(id: string, patch: { state: GroupMemberState; lastReason: string | null; inviteIdempotencyKey?: string }): Promise<void>;
+  updateWhatsappGroupMember(id: string, patch: { state: GroupMemberState; lastReason: string | null; inviteIdempotencyKey?: string; jobId?: string | null }): Promise<void>;
   /** Distinct job ids of members still 'pending' in this account's groups. */
   listPendingGroupJobIds(accountId: string): Promise<{ jobId: string; groupId: string }[]>;
   /** Account ids with at least one 'pending' member or held 'invite_needed' member (invite not yet sent), for the cron/poke reconcile (bounded). */

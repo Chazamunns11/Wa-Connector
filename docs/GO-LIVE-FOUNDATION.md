@@ -593,7 +593,7 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_GROUP_ADDS_DAILY_CAP` | No | `50` | People added to groups per number per UTC day, 1 to 500 |
 | `WA_GROUP_CREATES_DAILY_CAP` | No | `3` | Groups created per number per UTC day, 1 to 20 |
 
-That is 28 variables, all read in `config.ts`.
+That is 34 variables, all read in `config.ts`.
 
 ---
 

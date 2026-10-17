@@ -460,6 +460,9 @@ export function createBridgeServer(deps: ServerDeps): Server {
           return true;
         case "lease_unavailable":
           return leaseUnavailable(), true;
+        case "invalid_participants":
+          sendError(res, 422, "invalid_participants", "none of the participants are on WhatsApp");
+          return true;
         case "whatsapp_refused":
           sendError(res, 502, "whatsapp_refused", "WhatsApp refused to create the group");
           return true;

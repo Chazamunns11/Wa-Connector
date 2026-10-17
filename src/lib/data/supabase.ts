@@ -1673,9 +1673,10 @@ export class SupabaseGhlRepository implements GhlRepository {
     return ((data ?? []) as WhatsappGroupMemberRow[]).map(mapWhatsappGroupMember);
   }
 
-  async updateWhatsappGroupMember(id: string, patch: { state: GroupMemberState; lastReason: string | null; inviteIdempotencyKey?: string }) {
+  async updateWhatsappGroupMember(id: string, patch: { state: GroupMemberState; lastReason: string | null; inviteIdempotencyKey?: string; jobId?: string | null }) {
     const update: Record<string, unknown> = { state: patch.state, last_reason: patch.lastReason };
     if (patch.inviteIdempotencyKey !== undefined) update.invite_idempotency_key = patch.inviteIdempotencyKey;
+    if (patch.jobId !== undefined) update.job_id = patch.jobId;
     const supabase = getServiceClient();
     const { error } = await supabase.from("whatsapp_group_members").update(update).eq("id", id);
     if (error) throw error;
@@ -1702,17 +1703,27 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async listAccountsWithPendingGroupMembers(limit = 50) {
     const supabase = getServiceClient();
-    const { data, error } = await supabase
-      .from("whatsapp_group_members")
-      .select("whatsapp_groups!inner(account_id)")
-      .in("state", ["pending", "invite_needed"])
-      .limit(Math.max(1, limit) * 20);
-    if (error) throw error;
+    const want = Math.max(1, limit);
+    const PAGE = 200;
+    const MAX_PAGES = 10;
     const ids = new Set<string>();
-    for (const r of (data ?? []) as unknown as { whatsapp_groups: { account_id: string } | { account_id: string }[] }[]) {
-      const g = Array.isArray(r.whatsapp_groups) ? r.whatsapp_groups[0] : r.whatsapp_groups;
-      if (g?.account_id) ids.add(g.account_id);
-      if (ids.size >= limit) break;
+    // Oldest waiting first, paged until enough distinct accounts: one account with
+    // hundreds of waiting rows cannot starve the others.
+    for (let page = 0; page < MAX_PAGES && ids.size < want; page++) {
+      const { data, error } = await supabase
+        .from("whatsapp_group_members")
+        .select("whatsapp_groups!inner(account_id)")
+        .in("state", ["pending", "invite_needed"])
+        .order("created_at", { ascending: true })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (error) throw error;
+      const rows = (data ?? []) as unknown as { whatsapp_groups: { account_id: string } | { account_id: string }[] }[];
+      for (const r of rows) {
+        const g = Array.isArray(r.whatsapp_groups) ? r.whatsapp_groups[0] : r.whatsapp_groups;
+        if (g?.account_id) ids.add(g.account_id);
+        if (ids.size >= want) break;
+      }
+      if (rows.length < PAGE) break;
     }
     return [...ids];
   }

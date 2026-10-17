@@ -113,6 +113,7 @@ test("POST /groups maps manager outcomes", async () => {
     [{ kind: "session_not_connected", status: "disconnected" }, 409, "session_not_connected"],
     [{ kind: "group_create_cap_reached", cap: 3 }, 429, "group_create_cap_reached"],
     [{ kind: "lease_unavailable" }, 503, "lease_unavailable"],
+    [{ kind: "invalid_participants" }, 422, "invalid_participants"],
     [{ kind: "whatsapp_refused" }, 502, "whatsapp_refused"],
   ];
   for (const [outcome, status, code] of cases) {

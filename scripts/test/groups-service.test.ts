@@ -14,7 +14,7 @@ import {
   type GroupsDeps,
   type GroupsRepo,
 } from "@/lib/groups/service";
-import { REASON_BATCH_TOO_LARGE, REASON_CONSENT_REQUIRED, REASON_GROUPS_DISABLED, REASON_NOT_CONNECTED, REASON_OPTED_OUT } from "@/lib/groups/rules";
+import { REASON_BATCH_TOO_LARGE, REASON_CONSENT_REQUIRED, REASON_GROUPS_DISABLED, REASON_INTERRUPTED, REASON_INVITE_NEEDED, REASON_INVITE_SENT, REASON_NOT_CONNECTED, REASON_OPTED_OUT } from "@/lib/groups/rules";
 import { reasonSubscriptionInactive } from "@/lib/billing/gate";
 import type { BillingStatus, GroupJobOutcome, WhatsappGroup, WhatsappGroupJob, WhatsappGroupMember, WhatsappGroupMemberDraft } from "@/lib/types";
 
@@ -24,13 +24,13 @@ const phone = (n: number) => `+4477009${String(n).padStart(5, "0")}`;
 const cand = (n: number) => ({ phone: phone(n), ghlContactId: `c${n}`, displayName: `Name ${n}` });
 
 function harness(
-  opts: { status?: BillingStatus; session?: "connected" | "disconnected"; enabled?: boolean; optedOut?: string[]; jobs?: WhatsappGroupJob[]; createOutcomes?: Record<string, GroupJobOutcome> } = {},
+  opts: { status?: BillingStatus; session?: "connected" | "disconnected"; enabled?: boolean; optedOut?: string[]; jobs?: WhatsappGroupJob[]; createOutcomes?: Record<string, GroupJobOutcome>; failInsert?: boolean; nullInviteCode?: boolean } = {},
 ) {
   const groups = new Map<string, WhatsappGroup>();
   const members: WhatsappGroupMember[] = [];
   const jobs = new Map((opts.jobs ?? []).map((j) => [j.id, j]));
   const optedOut = new Set(opts.optedOut ?? []);
-  const log = { bridge: [] as string[], texts: [] as { to: string; key: string; text: string }[], notes: [] as string[], posts: new Map<string, number>(), addPhones: [] as string[][], createPhones: [] as string[][] };
+  const log = { bridge: [] as string[], texts: [] as { to: string; key: string; text: string }[], notes: [] as string[], posts: new Map<string, number>(), addPhones: [] as string[][], atAdd: [] as string[][], createPhones: [] as string[][] };
   let seq = 0;
   const account = { id: "acc-1", billingStatus: opts.status ?? "active" };
   const repo = {
@@ -50,6 +50,7 @@ function harness(
       groups.set(id, { ...groups.get(id)!, ...patch });
     },
     insertWhatsappGroupMembers: async (drafts: WhatsappGroupMemberDraft[]) => {
+      if (opts.failInsert) throw new Error("insert failed");
       const out: WhatsappGroupMember[] = [];
       for (const d of drafts) {
         if (members.some((m) => m.groupId === d.groupId && m.phone === d.phone)) continue;
@@ -60,8 +61,9 @@ function harness(
       return out;
     },
     listWhatsappGroupMembers: async (gid: string) => members.filter((m) => m.groupId === gid),
-    updateWhatsappGroupMember: async (id: string, p: { state: WhatsappGroupMember["state"]; lastReason: string | null; inviteIdempotencyKey?: string }) => {
+    updateWhatsappGroupMember: async (id: string, p: { state: WhatsappGroupMember["state"]; lastReason: string | null; inviteIdempotencyKey?: string; jobId?: string | null }) => {
       const m = members.find((x) => x.id === id)!;
+      if (p.jobId !== undefined) m.jobId = p.jobId;
       m.state = p.state;
       m.lastReason = p.lastReason;
       if (p.inviteIdempotencyKey) m.inviteIdempotencyKey = p.inviteIdempotencyKey;
@@ -94,6 +96,7 @@ function harness(
       addParticipants: (async (_c: string, _j: string, phones: string[]) => {
         log.bridge.push("add");
         log.addPhones.push(phones);
+        log.atAdd.push(members.filter((m) => phones.includes(m.phone)).map((m) => `${m.state}:${m.jobId ?? "-"}:${m.consentConfirmedAt}`));
         return { ok: true, job: { id: `job-${log.addPhones.length}`, status: "queued", requestedCount: phones.length } };
       }) as never,
       getJob: (async () => ({ ok: false, code: "internal", message: "" })) as never,
@@ -105,7 +108,7 @@ function harness(
       }) as never,
       getGroup: (async () => {
         log.bridge.push("get");
-        return { ok: true, group: { jid: "120363@g.us", subject: "x", inviteCode: "NEW", participantCount: 9, weAreAdmin: false } };
+        return { ok: true, group: { jid: "120363@g.us", subject: "x", inviteCode: opts.nullInviteCode ? null : "NEW", participantCount: 9, weAreAdmin: false } };
       }) as never,
       revokeInvite: (async () => {
         log.bridge.push("revoke");
@@ -384,4 +387,89 @@ test("reconcileAll: an account with only a held invite (no pending member) is re
   assert.deepEqual(await reconcileAllPendingGroupAccounts(repo, ok.deps), { accounts: 1, invitesSent: 1 });
   assert.deepEqual(ok.log.texts.map((t) => t.to), [phone(7)]);
   assert.ok(!ok.log.notes.join(" ").includes("+4477"));
+});
+
+test("invite_sent is recorded only after the text goes out, with the 'invite link sent' reason", async () => {
+  const h = harness({ createOutcomes: { [phone(2)]: "invite_needed" }, status: "active" });
+  const gid = await seedGroup(h);
+  const lapsed = harness({ status: "paused" as BillingStatus });
+  lapsed.groups.set(gid, h.groups.get(gid)!);
+  await lapsed.repo.insertWhatsappGroupMembers([{ groupId: gid, phone: phone(5), ghlContactId: null, displayName: null, state: "invite_needed", jobId: null, consentConfirmedAt: NOW, addedByProfileId: null, lastReason: REASON_INVITE_NEEDED }]);
+  await reconcileGroupJobs(lapsed.repo, lapsed.deps, "acc-1");
+  assert.equal(lapsed.members[0]!.state, "invite_needed");
+  assert.equal(lapsed.members[0]!.lastReason, REASON_INVITE_NEEDED);
+  const ok = harness();
+  ok.groups.set(gid, h.groups.get(gid)!);
+  lapsed.members.forEach((m) => ok.members.push(m));
+  await reconcileGroupJobs(ok.repo, ok.deps, "acc-1");
+  assert.equal(ok.members[0]!.state, "invite_sent");
+  assert.equal(ok.members[0]!.lastReason, REASON_INVITE_SENT);
+});
+
+test("refresh: a null invite code from the bridge keeps the stored one; refresh is gated like rotate", async () => {
+  const h = harness({ nullInviteCode: true });
+  const gid = await seedGroup(h);
+  assert.deepEqual(await refreshGroup(h.repo, h.deps, session, gid), { ok: true, value: undefined });
+  assert.equal(h.groups.get(gid)!.inviteCode, "ABC123");
+  assert.equal(h.groups.get(gid)!.participantCount, 9);
+
+  const paused = harness({ status: "paused" as BillingStatus });
+  paused.groups.set(gid, h.groups.get(gid)!);
+  assert.deepEqual(await refreshGroup(paused.repo, paused.deps, session, gid), { ok: false, reason: reasonSubscriptionInactive("PingWren") });
+  assert.deepEqual(paused.log.bridge, []);
+});
+
+test("addMembers: member rows (with consent) exist as pending before the bridge is called, then carry the job id", async () => {
+  const h = harness();
+  const gid = await seedGroup(h);
+  const r = await addMembers(h.repo, h.deps, session, { groupId: gid, candidates: [cand(7), cand(8)], consent: true });
+  assert.ok(r.ok);
+  assert.deepEqual(h.log.atAdd, [[`pending:-:${NOW}`, `pending:-:${NOW}`]]);
+  assert.deepEqual(h.members.filter((m) => m.phone !== phone(1)).map((m) => [m.state, m.jobId]), [["pending", "job-1"], ["pending", "job-1"]]);
+});
+
+test("addMembers: if the member insert fails the bridge is never called", async () => {
+  const seed = harness();
+  const gid = await seedGroup(seed);
+  const h = harness({ failInsert: true });
+  h.groups.set(gid, seed.groups.get(gid)!);
+  await assert.rejects(addMembers(h.repo, h.deps, session, { groupId: gid, candidates: [cand(7)], consent: true }));
+  assert.deepEqual(h.log.bridge, []);
+});
+
+test("addMembers: a refused bridge call turns the pending rows into failed with the fixed reason", async () => {
+  const h = harness();
+  const gid = await seedGroup(h);
+  h.deps.bridge.addParticipants = (async () => ({ ok: false, code: "group_add_cap_reached", message: "x" })) as never;
+  const r = await addMembers(h.repo, h.deps, session, { groupId: gid, candidates: [cand(7)], consent: true });
+  assert.equal(r.ok, false);
+  const m = h.members.find((x) => x.phone === phone(7))!;
+  assert.equal(m.state, "failed");
+  assert.equal(m.jobId, null);
+  assert.ok(m.consentConfirmedAt);
+});
+
+test("create: results are written directly, no member is left pending against an in-memory job id", async () => {
+  const h = harness({ createOutcomes: { [phone(2)]: "invite_needed" } });
+  const r = await createGroup(h.repo, h.deps, session, { locationId: "loc-1", subject: "S", description: "", announceOnly: false, adminAddOnly: true, candidates: [cand(1), cand(2)], consent: true });
+  assert.ok(r.ok);
+  assert.deepEqual(h.members.map((m) => [m.state, m.jobId]), [["added", null], ["invite_sent", null]]);
+});
+
+test("reconcile: a pending member whose job never appeared times out to failed; fresh and job-backed ones are left alone", async () => {
+  const h = harness();
+  const gid = await seedGroup(h);
+  const old = "2026-10-17T07:00:00.000Z";
+  const draft = (n: number, jobId: string | null): WhatsappGroupMemberDraft => ({ groupId: gid, phone: phone(n), ghlContactId: null, displayName: null, state: "pending", jobId, consentConfirmedAt: NOW, addedByProfileId: null, lastReason: null });
+  const [orphanNull, orphanJob, fresh, live] = await h.repo.insertWhatsappGroupMembers([draft(11, null), draft(12, "ghost-job"), draft(13, null), draft(14, "job-live")]);
+  h.jobs.set("job-live", { ...doneJob("job-live", []), status: "running" });
+  for (const m of [orphanNull!, orphanJob!, live!]) m.updatedAt = old;
+  await reconcileGroupJobs(h.repo, h.deps, "acc-1");
+  const state = (n: number) => h.members.find((m) => m.phone === phone(n))!;
+  assert.equal(state(11).state, "failed");
+  assert.equal(state(11).lastReason, REASON_INTERRUPTED);
+  assert.equal(state(12).state, "failed");
+  assert.equal(state(13).state, "pending");
+  assert.equal(state(14).state, "pending");
+  assert.equal(fresh!.state, "pending");
 });

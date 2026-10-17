@@ -105,9 +105,42 @@ export class GroupLimiter {
   }
 }
 
+export interface LookupRow {
+  jid: string;
+  exists: boolean;
+}
+
+/** User part of a phone-number jid (device suffix stripped); null for anything that is not `@s.whatsapp.net`. */
+function pnDigits(jid: string | undefined): string | null {
+  if (!jid) return null;
+  const at = jid.indexOf("@");
+  if (at < 0 || jid.slice(at + 1) !== "s.whatsapp.net") return null;
+  const user = jid.slice(0, at).split(":")[0]!;
+  return /^[0-9]+$/.test(user) ? user : null;
+}
+
+/**
+ * Pairs `onWhatsApp` answers back to the phones asked about. Baileys drops
+ * numbers that are not on WhatsApp and returns the server's order, so the
+ * answer is matched by the digits of each returned jid, never by position.
+ * A phone with no matching row (or `exists: false`) maps to `null`.
+ */
+export function resolvePhones(phones: string[], results: LookupRow[] | undefined): Map<string, string | null> {
+  const byDigits = new Map<string, string>();
+  for (const row of results ?? []) {
+    const digits = pnDigits(row.jid);
+    if (digits && row.exists !== false) byDigits.set(digits, row.jid);
+  }
+  return new Map(phones.map((phone) => [phone, byDigits.get(phone.replace(/^\+/, "")) ?? null]));
+}
+
 export interface AddJobSocket {
-  onWhatsApp(...phones: string[]): Promise<{ jid: string; exists: boolean }[] | undefined>;
-  groupParticipantsUpdate(jid: string, participants: string[], action: "add"): Promise<{ status: string; jid: string | undefined }[]>;
+  onWhatsApp(...phones: string[]): Promise<LookupRow[] | undefined>;
+  groupParticipantsUpdate(
+    jid: string,
+    participants: string[],
+    action: "add"
+  ): Promise<{ status: string; jid: string | undefined; content?: { attrs?: Record<string, string> } }[]>;
 }
 
 export interface AddJobResult {
@@ -128,19 +161,21 @@ export async function runAddJob(
   groupJid: string,
   phones: string[],
   sleep: (ms: number) => Promise<void>,
-  isConnected: () => boolean
+  isConnected: () => boolean,
+  onFallbackMatch?: () => void
 ): Promise<{ results: AddJobResult[]; interrupted: boolean }> {
   // Resolve every phone up front (one lookup; the portal caps a job at 50), then
   // batch only the phones WhatsApp says exist. Pairing is by position in the
-  // lookup, never by building a jid from the phone string.
-  const resolved = (await sock.onWhatsApp(...phones)) ?? [];
+  // lookup by the jid WhatsApp returned (see resolvePhones), never by position
+  // and never by building a jid from the phone string.
+  const resolved = resolvePhones(phones, await sock.onWhatsApp(...phones));
   const outcome = new Map<string, AddJobResult>();
   const sendable: { phone: string; jid: string }[] = [];
-  phones.forEach((phone, i) => {
-    const hit = resolved[i];
-    if (!hit || hit.exists === false || !hit.jid) outcome.set(phone, { phone, code: "404", outcome: "not_on_whatsapp" });
-    else sendable.push({ phone, jid: hit.jid });
-  });
+  for (const phone of phones) {
+    const jid = resolved.get(phone);
+    if (!jid) outcome.set(phone, { phone, code: "404", outcome: "not_on_whatsapp" });
+    else sendable.push({ phone, jid });
+  }
   // Results in request order; a phone is emitted once every sendable phone before it has been attempted.
   const results: AddJobResult[] = [];
   let emitted = 0;
@@ -155,9 +190,20 @@ export async function runAddJob(
     const batch = batches[b]!;
     const response = await sock.groupParticipantsUpdate(groupJid, batch.map((x) => x.jid), "add");
     const byJid = new Map<string, string>();
-    for (const row of response) if (row.jid) byJid.set(row.jid, row.status);
+    // LID-addressed groups answer with an @lid jid; the phone is mirrored in the node's attrs.
+    const fallback = new Set<string>();
+    for (const row of response) {
+      if (row.jid) byJid.set(row.jid, row.status);
+      for (const alt of [row.content?.attrs?.phone_number, row.content?.attrs?.lid]) {
+        if (alt && !byJid.has(alt)) {
+          byJid.set(alt, row.status);
+          fallback.add(alt);
+        }
+      }
+    }
     for (const { phone, jid } of batch) {
       const code = byJid.get(jid);
+      if (code !== undefined && !response.some((r) => r.jid === jid)) onFallbackMatch?.();
       outcome.set(phone, code === undefined ? { phone, code: "missing", outcome: "failed" } : { phone, code, outcome: outcomeForParticipantStatus(code) });
     }
     flush();

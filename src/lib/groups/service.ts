@@ -4,6 +4,9 @@ import { resolveGhlAccessToken, type GhlTokenRefreshDeps } from "@/lib/ghl-provi
 import { contactsByTag, searchContacts, tagsFrom } from "@/lib/groups/contacts";
 import {
   CREATE_PARTICIPANTS_MAX,
+  ORPHANED_PENDING_MS,
+  REASON_INTERRUPTED,
+  REASON_INVITE_SENT,
   GROUP_POST_TOKEN_RE,
   REASON_GHL_UNAVAILABLE,
   REASON_INVALID_TOKEN,
@@ -161,7 +164,7 @@ async function sendInvites(repo: GroupsRepo, deps: GroupsDeps, group: WhatsappGr
       idempotencyKey: key,
     });
     if (r.ok) {
-      await repo.updateWhatsappGroupMember(m.id, { state: "invite_sent", lastReason: m.lastReason, inviteIdempotencyKey: key });
+      await repo.updateWhatsappGroupMember(m.id, { state: "invite_sent", lastReason: REASON_INVITE_SENT, inviteIdempotencyKey: key });
       sent += 1;
     } else if (r.code === "session_not_connected" || r.code === "daily_cap_reached" || r.code === "lease_unavailable") {
       break;
@@ -170,7 +173,11 @@ async function sendInvites(repo: GroupsRepo, deps: GroupsDeps, group: WhatsappGr
   return sent;
 }
 
-/** Queue an add job with the bridge and record the people as `pending` against it; failures are recorded honestly as `failed`. */
+/**
+ * Records the people as `pending` (consent row included) BEFORE the bridge is
+ * asked to add anyone, then attaches the job id, or marks them `failed` when the
+ * bridge refuses. A crash in between leaves `pending` rows that reconcile times out.
+ */
 async function queueAdds(
   repo: GroupsRepo,
   deps: GroupsDeps,
@@ -179,20 +186,22 @@ async function queueAdds(
   plan: { toAdd: CandidateMember[]; optedOut: CandidateMember[] },
 ): Promise<string | null> {
   const consentAt = deps.now().toISOString();
-  const drafts: WhatsappGroupMemberDraft[] = plan.optedOut.map((c) =>
-    draftFor(group.id, c, "opted_out", null, REASON_OPTED_OUT, session, consentAt),
-  );
-  let failure: string | null = null;
-  if (plan.toAdd.length > 0) {
-    const r = await deps.bridge.addParticipants(group.tenantId, group.waGroupJid, plan.toAdd.map((c) => c.phone));
-    if (r.ok) {
-      for (const c of plan.toAdd) drafts.push(draftFor(group.id, c, "pending", r.job.id, null, session, consentAt));
-    } else {
-      failure = reasonForBridgeFailure(r.code);
-      for (const c of plan.toAdd) drafts.push(draftFor(group.id, c, "failed", null, failure, session, consentAt));
-    }
+  const drafts: WhatsappGroupMemberDraft[] = [
+    ...plan.optedOut.map((c) => draftFor(group.id, c, "opted_out", null, REASON_OPTED_OUT, session, consentAt)),
+    ...plan.toAdd.map((c) => draftFor(group.id, c, "pending", null, null, session, consentAt)),
+  ];
+  const inserted = drafts.length > 0 ? await repo.insertWhatsappGroupMembers(drafts) : [];
+  if (plan.toAdd.length === 0) return null;
+  const addPhones = new Set(plan.toAdd.map((c) => c.phone));
+  const mine = inserted.filter((m) => m.state === "pending" && addPhones.has(m.phone));
+  if (mine.length === 0) return null;
+  const r = await deps.bridge.addParticipants(group.tenantId, group.waGroupJid, mine.map((m) => m.phone));
+  if (r.ok) {
+    for (const m of mine) await repo.updateWhatsappGroupMember(m.id, { state: "pending", lastReason: null, jobId: r.job.id });
+    return null;
   }
-  if (drafts.length > 0) await repo.insertWhatsappGroupMembers(drafts);
+  const failure = reasonForBridgeFailure(r.code);
+  for (const m of mine) await repo.updateWhatsappGroupMember(m.id, { state: "failed", lastReason: failure });
   return failure;
 }
 
@@ -261,15 +270,10 @@ export async function createGroup(
     createdByProfileId: session.profileId,
   });
 
-  // The create response is applied exactly like a finished add job.
-  const batchId = crypto.randomUUID();
-  const inserted = await repo.insertWhatsappGroupMembers([
-    ...first.map((c) => draftFor(group.id, c, "pending", batchId, null, session, consentAt)),
-    ...plan.optedOut.map((c) => draftFor(group.id, c, "opted_out", null, REASON_OPTED_OUT, session, consentAt)),
-  ]);
+  // The create response is already final: write each person's resulting state directly.
   const byPhone = new Map(created.results.map((r) => [r.phone, r.outcome]));
-  const syntheticJob: WhatsappGroupJob = {
-    id: batchId,
+  const asJob: WhatsappGroupJob = {
+    id: "create",
     coachId: loc.tenantId,
     groupJid: created.group.jid,
     status: "done",
@@ -281,8 +285,15 @@ export async function createGroup(
     createdAt: consentAt,
     finishedAt: consentAt,
   };
-  const reconciled = reconcileJob(syntheticJob, inserted, optedOut);
-  for (const u of reconciled.updates) await repo.updateWhatsappGroupMember(u.memberId, { state: u.state, lastReason: u.reason });
+  const asPending = first.map((c) => ({ id: c.phone, phone: c.phone, state: "pending", jobId: asJob.id }) as WhatsappGroupMember);
+  const finals = new Map(reconcileJob(asJob, asPending, optedOut).updates.map((u) => [u.memberId, u]));
+  await repo.insertWhatsappGroupMembers([
+    ...first.map((c) => {
+      const u = finals.get(c.phone);
+      return draftFor(group.id, c, u?.state ?? "failed", null, u ? u.reason : REASON_INTERRUPTED, session, consentAt);
+    }),
+    ...plan.optedOut.map((c) => draftFor(group.id, c, "opted_out", null, REASON_OPTED_OUT, session, consentAt)),
+  ]);
 
   if (rest.length > 0) await queueAdds(repo, deps, session, group, { toAdd: rest, optedOut: [] });
 
@@ -346,13 +357,15 @@ export async function postToGroup(
 export async function refreshGroup(repo: GroupsRepo, deps: GroupsDeps, session: Session, groupId: string): Promise<ServiceResult<void>> {
   const group = await loadOwnedGroup(repo, session, groupId);
   if (!group) return NOT_FOUND;
-  if (!deps.groupsEnabled) return fail(reasonForBridgeFailure("groups_disabled"));
+  const gate = await gateForLocation(repo, deps, session.accountId, group.locationId);
+  if (gate) return fail(gate);
   const r = await deps.bridge.getGroup(group.tenantId, group.waGroupJid);
   if (!r.ok) return fail(reasonForBridgeFailure(r.code));
   await repo.updateWhatsappGroup(group.id, {
     participantCount: r.group.participantCount,
     weAreAdmin: r.group.weAreAdmin,
-    inviteCode: r.group.inviteCode,
+    // A failed code fetch comes back null; never overwrite a good stored code with it.
+    ...(r.group.inviteCode ? { inviteCode: r.group.inviteCode } : {}),
   });
   return ok(undefined);
 }
@@ -371,6 +384,20 @@ export async function rotateInviteLink(
   if (!r.ok) return fail(reasonForBridgeFailure(r.code));
   await repo.updateWhatsappGroup(group.id, { inviteCode: r.inviteCode });
   return ok({ inviteCode: r.inviteCode });
+}
+
+/** `pending` members with no job id (or a job the bridge has no record of) for longer than the timeout become `failed`. */
+async function failOrphanedPending(repo: GroupsRepo, deps: GroupsDeps, group: WhatsappGroup): Promise<void> {
+  const cutoff = deps.now().getTime() - ORPHANED_PENDING_MS;
+  const jobExists = new Map<string, boolean>();
+  for (const m of await repo.listWhatsappGroupMembers(group.id)) {
+    if (m.state !== "pending" || new Date(m.updatedAt).getTime() > cutoff) continue;
+    if (m.jobId) {
+      if (!jobExists.has(m.jobId)) jobExists.set(m.jobId, (await repo.getWhatsappGroupJob(m.jobId)) !== null);
+      if (jobExists.get(m.jobId)) continue;
+    }
+    await repo.updateWhatsappGroupMember(m.id, { state: "failed", lastReason: REASON_INTERRUPTED });
+  }
 }
 
 /**
@@ -400,6 +427,7 @@ export async function reconcileGroupJobs(
 
   // Includes members left `invite_needed` by an earlier pass that could not send.
   for (const group of await repo.listWhatsappGroupsForAccount(accountId)) {
+    await failOrphanedPending(repo, deps, group);
     const gate = await gateForLocation(repo, deps, accountId, group.locationId);
     result.invitesSent += await sendInvites(repo, deps, group, gate);
   }

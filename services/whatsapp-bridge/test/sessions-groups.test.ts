@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { contentForQueueItem, participantResultsFromCreate, weAreAdminIn } from "../src/sessions.js";
+import { SessionManager, contentForQueueItem, participantResultsFromCreate, weAreAdminIn } from "../src/sessions.js";
+import { GroupLimiter } from "../src/groups.js";
 import type { GroupPostRecord } from "../src/store.js";
 
 test("weAreAdminIn: device suffix is normalised and superadmin counts", () => {
@@ -26,4 +27,32 @@ test("participantResultsFromCreate: in meta is added, unresolved is not_on_whats
 test("contentForQueueItem: a group post is plain text with link previews off", () => {
   const post = { id: "p" } as GroupPostRecord;
   assert.deepEqual(contentForQueueItem({ kind: "group_post", post, text: "hello https://x.test" }), { text: "hello https://x.test", linkPreview: null });
+});
+
+test("participantResultsFromCreate: LID-addressed groups match through phoneNumber, so nobody present is invite_needed", () => {
+  const meta = {
+    participants: [
+      { id: "111@lid", phoneNumber: "447700900101@s.whatsapp.net" },
+      { id: "222@lid", phoneNumber: "447700900102:5@s.whatsapp.net" },
+    ],
+  };
+  const r = participantResultsFromCreate(meta, [
+    { phone: "+447700900101", jid: "447700900101@s.whatsapp.net" },
+    { phone: "+447700900102", jid: "447700900102@s.whatsapp.net" },
+    { phone: "+447700900103", jid: "447700900103@s.whatsapp.net" },
+  ]);
+  assert.deepEqual(r.map((x) => x.outcome), ["added", "added", "invite_needed"]);
+});
+
+test("createGroup: no resolvable participant answers invalid_participants and does not spend a create", async () => {
+  const limiter = new GroupLimiter({ addBatch: 5, addGapMs: 1, addJitterMs: 0, addsDailyCap: 50, createsDailyCap: 3 }, { addsToday: 0, createsToday: 0 });
+  let created = 0;
+  const sock = { onWhatsApp: async () => [], groupCreate: async () => { created++; return {}; } };
+  const mgr = Object.create(SessionManager.prototype) as Record<string, unknown>;
+  mgr.sessions = new Map([["c1", { status: "connected", sock, groupLimiter: limiter }]]);
+  mgr.config = { groupCreatesDailyCap: 3 };
+  const out = await (mgr as unknown as SessionManager).createGroup("c1", { subject: "S", participants: ["+447700900101"], announceOnly: false, adminAddOnly: false });
+  assert.deepEqual(out, { kind: "invalid_participants" });
+  assert.equal(created, 0);
+  assert.equal(limiter.remainingCreatesToday(), 3);
 });

@@ -14,7 +14,7 @@ import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { repo } from "@/lib/data";
 import { parseGroupResult } from "@/lib/groups/forms";
-import { loadGroupView } from "@/lib/groups/service";
+import { loadGroupView, reconcileGroupJobs } from "@/lib/groups/service";
 import { SITE_ROUTES } from "@/lib/site/routes";
 import { addMembersAction, refreshGroupAction } from "../actions";
 import { groupsDeps, groupsEnabled } from "../deps";
@@ -41,7 +41,10 @@ export default async function GroupPage({
       </Container>
     );
   }
-  const view = await loadGroupView(repo, groupsDeps(), session, groupId);
+  const deps = groupsDeps();
+  // Idempotent: applies finished add jobs and sends held invites so the page is current without waiting for the cron.
+  await reconcileGroupJobs(repo, deps, session.accountId).catch(() => undefined);
+  const view = await loadGroupView(repo, deps, session, groupId);
   if (!view) notFound();
   const { group, members, posts, locationName, gateReason } = view;
   const blocked = gateReason !== null;

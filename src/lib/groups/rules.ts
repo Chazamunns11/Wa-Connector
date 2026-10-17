@@ -11,6 +11,11 @@ export const CREATE_PARTICIPANTS_MAX = 5;
 export const SUBJECT_MAX = 100;
 export const DESCRIPTION_MAX = 2048;
 export const POST_TEXT_MAX = 4096;
+/** Per-number daily limits the bridge enforces (its WA_GROUP_* defaults); a test pins them equal. */
+export const GROUP_CREATES_PER_DAY = 3;
+export const GROUP_ADDS_PER_DAY = 50;
+/** A `pending` member whose bridge job never appeared is failed after this long. */
+export const ORPHANED_PENDING_MS = 60 * 60 * 1000;
 
 export const REASON_GROUPS_DISABLED = "WhatsApp groups aren't switched on for this deployment yet";
 export const REASON_NOT_CONNECTED = "This number isn't connected to WhatsApp. Connect it from the dashboard first";
@@ -18,7 +23,8 @@ export const REASON_CONSENT_REQUIRED = "Tick the box to confirm these people hav
 export const REASON_BATCH_TOO_LARGE = `Add up to ${ADD_BATCH_MAX} people at a time`;
 export const REASON_NO_VALID_NUMBERS = "None of those numbers could be read as a phone number";
 export const REASON_OPTED_OUT = "replied STOP to this number — not added";
-export const REASON_INVITE_NEEDED = "their privacy settings only allow invites — invite link sent";
+export const REASON_INVITE_NEEDED = "their privacy settings only allow invites — invite link to follow";
+export const REASON_INVITE_SENT = "their privacy settings only allow invites — invite link sent";
 export const REASON_RECENTLY_LEFT = "left this group recently — WhatsApp won't let them be re-added yet";
 export const REASON_ALREADY_MEMBER = "already in the group";
 export const REASON_NOT_ON_WHATSAPP = "no WhatsApp account on this number";
@@ -185,6 +191,8 @@ export function reasonForBridgeFailure(code: string): string {
       return REASON_SEND_CAP_REACHED;
     case "not_admin":
       return REASON_NOT_ADMIN;
+    case "invalid_participants":
+      return REASON_NO_VALID_NUMBERS;
     default:
       return REASON_BRIDGE_UNAVAILABLE;
   }
