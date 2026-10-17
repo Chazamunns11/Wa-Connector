@@ -169,6 +169,9 @@ function makeHarness(opts: {
   groupMetadataThrows?: boolean;
   enabledGroups?: string[];
   listEnabledGroupJids?: () => Promise<string[]>;
+  /** When set, groupMetadata waits for this before answering — holds a group send in flight. */
+  groupMetadataGate?: Promise<void>;
+  config?: Partial<BridgeConfig>;
 }): Harness {
   const calls: { method: string; args: unknown[] }[] = [];
   let resolveTerminal!: () => void;
@@ -199,6 +202,7 @@ function makeHarness(opts: {
     user: ME,
     groupMetadata: async (jid: string) => {
       calls.push({ method: "groupMetadata", args: [jid] });
+      if (opts.groupMetadataGate) await opts.groupMetadataGate;
       if (opts.groupMetadataThrows) throw new Error("timed out");
       return { id: jid, subject: "x", participants: opts.participants ?? [{ id: "447700900001@s.whatsapp.net" }] };
     },
@@ -206,13 +210,15 @@ function makeHarness(opts: {
       calls.push({ method: "onWhatsApp", args: [phone] });
       return [{ exists: true, jid: `${phone.slice(1)}@s.whatsapp.net` }];
     },
-    sendPresenceUpdate: async () => {},
+    sendPresenceUpdate: async (type: string, jid: string) => {
+      calls.push({ method: "sendPresenceUpdate", args: [type, jid] });
+    },
     sendMessage: async (jid: string, content: unknown) => {
       sent.push({ jid, content });
       return { key: { id: "WAID1" } };
     },
   };
-  const manager = new SessionManager(store, makeConfig(), silentLog);
+  const manager = new SessionManager(store, makeConfig(opts.config), silentLog);
   const session = {
     coachId: TENANT,
     sock,
@@ -230,6 +236,7 @@ function makeHarness(opts: {
     mediaAbuseGate: null,
     enabledGroups: new Set(opts.enabledGroups ?? [GROUP_JID]),
     enabledGroupsLoad: 0,
+    inFlightUnits: 0,
   };
   (manager as unknown as { sessions: Map<string, unknown> }).sessions.set(TENANT, session);
   return { manager, session, calls, terminal, sent };
@@ -268,6 +275,65 @@ test("accept-time reservation: a phone send still costs exactly 1 (the daily_cap
   const h = makeHarness({ sentToday: 9, leaseHeld: false });
   assert.equal((await h.manager.send(TENANT, "+447700900123", "hi", "p-1")).kind, "accepted"); // 9 + 0 + 1 = 10
   assert.deepEqual(await h.manager.send(TENANT, "+447700900124", "hi", "p-2"), { kind: "daily_cap_reached", cap: 10 });
+});
+
+test("accept-time reservation: a send IN FLIGHT (shifted, awaiting groupMetadata) still counts against the cap", async () => {
+  // cap 10, sentToday 1. Group A (5) is shifted off the queue and held at
+  // groupMetadata; without in-flight accounting group C would see 1+0+5=6
+  // and pass, and A+C would then record 11.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const h = makeHarness({ sentToday: 1, groupMetadataGate: gate });
+  assert.equal((await h.manager.sendToGroup(TENANT, GROUP_JID, "a", "g-a")).kind, "accepted");
+  for (let i = 0; i < 20 && !h.calls.some((c) => c.method === "groupMetadata"); i++) await new Promise((r) => setImmediate(r));
+  assert.equal(h.session.queue.length, 0, "A has left the queue");
+  assert.equal((h.session as unknown as { inFlightUnits: number }).inFlightUnits, 5);
+  assert.equal((await h.manager.send(TENANT, "+447700900123", "b", "p-b")).kind, "accepted"); // 1 + 5 + 0 + 1 = 7
+  assert.deepEqual(await h.manager.sendToGroup(TENANT, GROUP_JID, "c", "g-c"), { kind: "daily_cap_reached", cap: 10 }); // 1 + 5 + 1 + 5 = 12 > 10
+  release();
+  await h.terminal;
+  assert.equal(h.session.pacer.sentTodayCount(), 6, "A recorded its 5 units");
+});
+
+test("in-flight units are released on a not-dispatched exit (no leak into later reservations)", async () => {
+  const h = makeHarness({ sentToday: 0, participants: [{ id: "447700900777@s.whatsapp.net" }] });
+  await h.manager.sendToGroup(TENANT, GROUP_JID, "a", "g-a");
+  await h.terminal;
+  for (let i = 0; i < 20 && h.session.draining; i++) await new Promise((r) => setImmediate(r));
+  assert.equal((h.session as unknown as { inFlightUnits: number }).inFlightUnits, 0);
+  assert.equal(h.session.pacer.sentTodayCount(), 0);
+});
+
+test("drain: typing runs for a group text send — composing/paused go to the group JID", async () => {
+  const h = makeHarness({ config: { typingIndicatorEnabled: true, typingMaxMs: 1 } });
+  await h.manager.sendToGroup(TENANT, GROUP_JID, "hi all", "g-1");
+  await h.terminal;
+  const presence = h.calls.filter((c) => c.method === "sendPresenceUpdate").map((c) => c.args);
+  assert.deepEqual(presence, [["composing", GROUP_JID], ["paused", GROUP_JID]]);
+  assert.equal(h.sent[0]?.jid, GROUP_JID);
+});
+
+test("drain: a group send never logs the error message (only its name); a 1:1 send keeps the message", async () => {
+  const lines: Record<string, unknown>[] = [];
+  const capture = pino({ level: "warn" }, { write: (line: string) => void lines.push(JSON.parse(line)) });
+  for (const target of ["group", "phone"] as const) {
+    const h = makeHarness({ config: { typingIndicatorEnabled: true, typingMaxMs: 1 } });
+    const sock = h.session.sock as Record<string, unknown>;
+    sock.sendPresenceUpdate = async () => { throw new TypeError(`presence failed for ${GROUP_JID}`); };
+    sock.sendMessage = async () => { throw new TypeError(`send failed for ${GROUP_JID}`); };
+    (h.manager as unknown as { log: unknown }).log = capture;
+    if (target === "group") await h.manager.sendToGroup(TENANT, GROUP_JID, "hi", "g-1");
+    else await h.manager.send(TENANT, "+447700900123", "hi", "p-1");
+    await h.terminal;
+  }
+  const typing = lines.filter((l) => l.msg === "typing presence update failed — sending anyway");
+  const send = lines.filter((l) => l.msg === "send attempt failed");
+  assert.equal(typing[0]?.err, "TypeError");
+  assert.equal(send[0]?.err, "TypeError");
+  assert.ok(String(typing.at(-1)?.err).includes("presence failed"), "1:1 keeps the message");
+  assert.ok(String(send.at(-1)?.err).includes("send failed"), "1:1 keeps the message");
+  const groupLines = JSON.stringify(lines.slice(0, lines.findIndex((l) => l.msg === "send attempt failed") + 1));
+  assert.ok(!groupLines.includes(GROUP_JID), "no group JID in any group-send log line");
 });
 
 test("drain: a group send where our number is no longer a participant fails NOT dispatched with the fixed string", async () => {
@@ -376,6 +442,22 @@ function storeWithFakeClient() {
   };
   return { store, inserts, touched: () => touched };
 }
+
+test("store.getDailyActivity: a dispatched group row seeds 5 units on restart; undispatched rows count nothing", async () => {
+  const store = new BridgeStore(makeConfig());
+  const rows = [
+    { status: "sent", dispatch_attempted: true, sent_at: "2026-10-17T09:00:00.000Z", created_at: "2026-10-17T08:59:00.000Z", to_phone: "+447700900123", group_jid: null },
+    { status: "sent", dispatch_attempted: true, sent_at: "2026-10-17T09:05:00.000Z", created_at: "2026-10-17T09:04:00.000Z", to_phone: null, group_jid: GROUP_JID },
+    { status: "failed", dispatch_attempted: true, sent_at: null, created_at: "2026-10-17T09:10:00.000Z", to_phone: null, group_jid: GROUP_JID },
+    { status: "failed", dispatch_attempted: false, sent_at: null, created_at: "2026-10-17T09:20:00.000Z", to_phone: null, group_jid: GROUP_JID },
+    // A row read before 0005 has no group_jid key at all — counts 1.
+    { status: "sent", dispatch_attempted: true, sent_at: "2026-10-17T08:00:00.000Z", created_at: "2026-10-17T08:00:00.000Z", to_phone: "+447700900124" },
+  ];
+  (store as unknown as { supabase: unknown }).supabase = {
+    from: () => ({ select: () => ({ eq: () => ({ gte: async () => ({ data: rows, error: null }) }) }) }),
+  };
+  assert.deepEqual(await store.getDailyActivity(TENANT), { attemptCount: 1 + 5 + 5 + 1, lastAttemptAt: "2026-10-17T09:10:00.000Z" });
+});
 
 test("store.recordInboundMessage: a malformed group JID is refused before Supabase is touched", async () => {
   const { store, touched } = storeWithFakeClient();

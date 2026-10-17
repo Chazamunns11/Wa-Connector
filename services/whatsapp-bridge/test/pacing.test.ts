@@ -156,7 +156,7 @@ test("LOCKSTEP (SOURCE-LEVEL): warm-up is only wired when WA_WARMUP_ENABLED is s
 });
 
 test("LOCKSTEP (SOURCE-LEVEL): accept-time cap reservation counts queued UNITS against the pacer's effective (warm-up aware) cap", () => {
-  assert.match(SESSIONS_SRC, /sentTodayCount\(\) \+ queuedUnits\(session\) \+ units > session\.pacer\.effectiveDailyCap\(\)/);
+  assert.match(SESSIONS_SRC, /sentTodayCount\(\) \+ session\.inFlightUnits \+ queuedUnits\(session\) \+ units > session\.pacer\.effectiveDailyCap\(\)/);
   assert.doesNotMatch(SESSIONS_SRC, /queue\.length >= session\.pacer\.effectiveDailyCap\(\)/, "queue.length undercounts a queued group send (5 units)");
   assert.doesNotMatch(SESSIONS_SRC, /queue\.length >= this\.config\.dailyCap/);
 });

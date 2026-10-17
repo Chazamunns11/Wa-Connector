@@ -25,7 +25,7 @@
  *
  *   PACED (hard rule 4): each session has its own SessionPacer; the worker
  *   sleeps `msUntilNextSendAllowed()` between dispatches, and `send()` now
- *   reserves budget at ACCEPT time too (`sentTodayCount() + queuedUnits +
+ *   reserves budget at ACCEPT time too (`sentTodayCount() + inFlight + queued +
  *   units`), not only at dispatch time — a burst of N accepts arriving
  *   faster than the pacer can drain (e.g. an hourly cron finding 60 due
  *   steps at once) used to sail straight through the daily cap, because the
@@ -194,6 +194,11 @@ function queuedUnits(session: { queue: readonly QueueItem[] }): number {
   return session.queue.reduce((sum, item) => sum + item.units, 0);
 }
 
+/** What an error log may carry for this row: the message for a 1:1 send (as before), only the error's NAME for a group send — a Baileys message can quote the group JID, and group JIDs are never logged (src/groups.ts). */
+function logSafeError(err: Error, record: MessageRecord): string {
+  return record.groupJid !== null ? err.name : err.message;
+}
+
 /** True iff a ledger row's target is exactly `target` — the idempotency replay/conflict test. A phone row never matches a group target, or the other way round. */
 function sameTarget(record: MessageRecord, target: MessageTarget): boolean {
   return "groupJid" in target ? record.groupJid === target.groupJid : record.groupJid === null && record.toPhone === target.toPhone;
@@ -247,6 +252,8 @@ interface Session {
   enabledGroups: Set<string>;
   /** Generation counter for `loadEnabledGroups` — only the newest load may write `enabledGroups`, so a slow, stale read can never overwrite a fresher one. */
   enabledGroupsLoad: number;
+  /** Cap units of the item the drain worker has shifted off the queue but not yet recorded (`recordSend`) or let go undispatched — counted by the accept-time reservation alongside `queuedUnits`. 0 when nothing is in flight. */
+  inFlightUnits: number;
 }
 
 export type SendOutcome =
@@ -794,6 +801,7 @@ export class SessionManager {
       }),
       enabledGroups: new Set(),
       enabledGroupsLoad: 0,
+      inFlightUnits: 0,
     };
 
     // Re-checked immediately before claiming — shutdown may have begun
@@ -1266,7 +1274,7 @@ export class SessionManager {
    *      reusing the same run id would report "accepted" while the
    *      corrected number is never actually messaged.
    *   3. Daily-cap accounting now reserves budget at ACCEPT time
-   *      (`sentTodayCount() + queuedUnits + units`), not only at dispatch time —
+   *      (`sentTodayCount() + inFlight + queued units + units`), not at dispatch only —
    *      the pacer's counter previously only advanced on dispatch (45-75s
    *      apart), so a burst of due sends arriving together (e.g. an hourly
    *      cron finding 60 due steps at once) could all see the same
@@ -1351,9 +1359,10 @@ export class SessionManager {
     // Each part (text OR attachment) is one pacer slot; a 1:1 part is one
     // cap unit (plan §5.6 decision O3 — "the pacer must count what WhatsApp
     // counts"), a group send `GROUP_SEND_CAP_UNITS`. Queued UNITS are
-    // reserved, not queue.length, so a queued group send weighs 5.
+    // reserved, not queue.length, so a queued group send weighs 5 — plus the
+    // item the drain is mid-way through dispatching (`inFlightUnits`).
     const units = isGroup ? GROUP_SEND_CAP_UNITS : 1;
-    if (session.pacer.atDailyCap() || session.pacer.sentTodayCount() + queuedUnits(session) + units > session.pacer.effectiveDailyCap()) {
+    if (session.pacer.atDailyCap() || session.pacer.sentTodayCount() + session.inFlightUnits + queuedUnits(session) + units > session.pacer.effectiveDailyCap()) {
       return { kind: "daily_cap_reached", cap: session.pacer.effectiveDailyCap() };
     }
 
@@ -1399,131 +1408,143 @@ export class SessionManager {
         const item = session.queue.shift();
         if (!item) break;
         const { record, payload, units } = item;
-        const sock = session.sock;
-
-        let claimed: boolean;
+        // In flight from here until `recordSend(units)` moves them into
+        // `sentToday` (same synchronous step) or the item exits undispatched:
+        // the accept-time reservation counts these units too, so the awaits
+        // below (claim, existence/membership check, attachment fetch, typing)
+        // can never open a window where they are counted nowhere. The
+        // `finally` clears them on EVERY exit path, `continue` included.
+        session.inFlightUnits = units;
         try {
-          claimed = await this.store.claimMessage(record.id);
-        } catch (err) {
-          this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "claim failed before dispatch");
-          await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "internal error before dispatch — not sent", false));
-          continue;
-        }
-        if (!claimed) continue; // someone else resolved this row (boot sweep / rival) — never double-send.
+          const sock = session.sock;
 
-        let jid: string | undefined;
-        if (record.groupJid !== null) {
-          // Opt-in group (file header GROUPS). The target is the stored JID
-          // itself — it came from WhatsApp's own group list and passed
-          // `isGroupJid` at accept — so hard rule 3 holds without
-          // `onWhatsApp`. Two checks replace it, both before anything is
-          // dispatched (every failure here is dispatchAttempted=false):
-          //   1. still enabled — the owner may have switched the group off
-          //      since this was accepted ("disabling stops outbound at once");
-          //   2. our number is still a participant (`groupMetadata`).
-          // Never log the group JID or name — ids only.
-          const groupJid = record.groupJid;
-          if (!session.enabledGroups.has(groupJid)) {
-            this.log.warn({ coachId: session.coachId, messageId: record.id }, "group no longer enabled — not dispatched");
-            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, GROUP_SYNC_OFF_REASON, false));
-            continue;
-          }
-          const membership = await checkGroupMembership(sock, groupJid);
-          if (membership.kind === "check_failed") {
-            // Same as a failed existence check: never reached the send API.
-            // The error's name only — its message could quote the JID.
-            this.log.error({ coachId: session.coachId, messageId: record.id, err: membership.err.name }, "group membership check failed");
-            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("existence_check"), false));
-            continue;
-          }
-          if (membership.kind === "not_member") {
-            this.log.warn({ coachId: session.coachId, messageId: record.id }, "number is no longer in the group — not dispatched");
-            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, NOT_IN_GROUP_REASON, false));
-            continue;
-          }
-          jid = groupJid;
-        } else {
-          // Existence check (hard rule 3): ask WhatsApp, and send to the JID
-          // IT returns — never to a JID we built by string concatenation.
+          let claimed: boolean;
           try {
-            // A non-group row always has to_phone (0005's one-target CHECK).
-            const results = await sock.onWhatsApp(record.toPhone ?? "");
-            jid = results?.find((r) => r.exists)?.jid;
+            claimed = await this.store.claimMessage(record.id);
           } catch (err) {
-            // The send API was never reached — safe to reissue under a new key.
-            this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "existence check failed");
-            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("existence_check"), false));
+            this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "claim failed before dispatch");
+            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "internal error before dispatch — not sent", false));
             continue;
           }
-          if (!jid) {
-            await recordNotOnWhatsapp(this.store, this.outboundPoke, record.id);
-            continue;
-          }
-        }
+          if (!claimed) continue; // someone else resolved this row (boot sweep / rival) — never double-send.
 
-        // Media plan (docs/MEDIA-PLAN.md §5.4) — an attachment part resolves
-        // (fetch + sniff + type-cap + map) HERE, after the existence check
-        // and BEFORE `pacer.recordSend()` — a fetch/sniff/cap/type failure
-        // never consumes a pacer slot or a `sendMessage` call, exactly
-        // mirroring the existence-check failure branch just above (never
-        // dispatched -> `dispatchAttempted: false`, safe to reissue).
-        let messageContent: { text: string; linkPreview: null } | Record<string, unknown>;
-        if (payload.kind === "text") {
-          messageContent = buildOutboundTextContent(payload.text);
-        } else {
-          const resolved = await resolveOutboundAttachment(payload.attachment.url, {
-            timeoutMs: this.config.mediaFetchTimeoutMs,
-            caps: {
-              image: this.config.mediaMaxImageBytes,
-              video: this.config.mediaMaxVideoBytes,
-              audio: this.config.mediaMaxAudioBytes,
-              document: this.config.mediaMaxDocumentBytes,
-            },
-          });
-          if (!resolved.ok) {
-            const reason =
-              resolved.reason === "unsupported_type"
-                ? "attachment type is not supported for WhatsApp delivery"
-                : resolved.reason === "too_large_for_type"
-                  ? "attachment exceeds the size limit for its type"
-                  : "attachment could not be fetched";
-            this.log.warn({ coachId: session.coachId, messageId: record.id, reason: resolved.reason }, "outbound attachment resolution failed — not dispatched");
-            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, reason, false));
-            continue;
+          let jid: string | undefined;
+          if (record.groupJid !== null) {
+            // Opt-in group (file header GROUPS). The target is the stored JID
+            // itself — it came from WhatsApp's own group list and passed
+            // `isGroupJid` at accept — so hard rule 3 holds without
+            // `onWhatsApp`. Two checks replace it, both before anything is
+            // dispatched (every failure here is dispatchAttempted=false):
+            //   1. still enabled — the owner may have switched the group off
+            //      since this was accepted ("disabling stops outbound at once");
+            //   2. our number is still a participant (`groupMetadata`).
+            // Never log the group JID or name — ids only.
+            const groupJid = record.groupJid;
+            if (!session.enabledGroups.has(groupJid)) {
+              this.log.warn({ coachId: session.coachId, messageId: record.id }, "group no longer enabled — not dispatched");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, GROUP_SYNC_OFF_REASON, false));
+              continue;
+            }
+            const membership = await checkGroupMembership(sock, groupJid);
+            if (membership.kind === "check_failed") {
+              // Same as a failed existence check: never reached the send API.
+              // The error's name only — its message could quote the JID.
+              this.log.error({ coachId: session.coachId, messageId: record.id, err: membership.err.name }, "group membership check failed");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("existence_check"), false));
+              continue;
+            }
+            if (membership.kind === "not_member") {
+              this.log.warn({ coachId: session.coachId, messageId: record.id }, "number is no longer in the group — not dispatched");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, NOT_IN_GROUP_REASON, false));
+              continue;
+            }
+            jid = groupJid;
+          } else {
+            // Existence check (hard rule 3): ask WhatsApp, and send to the JID
+            // IT returns — never to a JID we built by string concatenation.
+            try {
+              // A non-group row always has to_phone (0005's one-target CHECK).
+              const results = await sock.onWhatsApp(record.toPhone ?? "");
+              jid = results?.find((r) => r.exists)?.jid;
+            } catch (err) {
+              // The send API was never reached — safe to reissue under a new key.
+              this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "existence check failed");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("existence_check"), false));
+              continue;
+            }
+            if (!jid) {
+              await recordNotOnWhatsapp(this.store, this.outboundPoke, record.id);
+              continue;
+            }
           }
-          messageContent = buildBaileysMediaContent(resolved, payload.attachment.fileName);
-        }
 
-        // Typing simulation (src/typing.ts) — "typing…" before a TEXT part,
-        // to the JID WhatsApp returned above (or the group's own JID — a
-        // person typing into a group shows as composing there too). Best effort: presence errors
-        // never fail the send. The socket can drop during the window, so it
-        // is re-checked after: nothing has been dispatched yet, so a drop
-        // here fails the row as NOT attempted (safe to reissue), the same as
-        // the existence-check failure branch above.
-        if (payload.kind === "text") {
-          const typingMs = typingDurationMs(payload.text, { enabled: this.config.typingIndicatorEnabled, maxMs: this.config.typingMaxMs });
-          await simulateTyping(sock, jid, typingMs, sleep, (err) =>
-            this.log.warn({ coachId: session.coachId, messageId: record.id, err: err.message }, "typing presence update failed — sending anyway")
-          );
-          if (session.sock !== sock || session.status !== "connected") {
-            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "session disconnected before sending — not dispatched", false));
-            continue;
+          // Media plan (docs/MEDIA-PLAN.md §5.4) — an attachment part resolves
+          // (fetch + sniff + type-cap + map) HERE, after the existence check
+          // and BEFORE `pacer.recordSend()` — a fetch/sniff/cap/type failure
+          // never consumes a pacer slot or a `sendMessage` call, exactly
+          // mirroring the existence-check failure branch just above (never
+          // dispatched -> `dispatchAttempted: false`, safe to reissue).
+          let messageContent: { text: string; linkPreview: null } | Record<string, unknown>;
+          if (payload.kind === "text") {
+            messageContent = buildOutboundTextContent(payload.text);
+          } else {
+            const resolved = await resolveOutboundAttachment(payload.attachment.url, {
+              timeoutMs: this.config.mediaFetchTimeoutMs,
+              caps: {
+                image: this.config.mediaMaxImageBytes,
+                video: this.config.mediaMaxVideoBytes,
+                audio: this.config.mediaMaxAudioBytes,
+                document: this.config.mediaMaxDocumentBytes,
+              },
+            });
+            if (!resolved.ok) {
+              const reason =
+                resolved.reason === "unsupported_type"
+                  ? "attachment type is not supported for WhatsApp delivery"
+                  : resolved.reason === "too_large_for_type"
+                    ? "attachment exceeds the size limit for its type"
+                    : "attachment could not be fetched";
+              this.log.warn({ coachId: session.coachId, messageId: record.id, reason: resolved.reason }, "outbound attachment resolution failed — not dispatched");
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, reason, false));
+              continue;
+            }
+            messageContent = buildBaileysMediaContent(resolved, payload.attachment.fileName);
           }
-        }
 
-        session.pacer.recordSend(units); // count the ATTEMPT, in cap units (5 for a group) — see pacer JSDoc.
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Baileys' AnyMessageContent union is intentionally not re-imported into media.ts (see buildBaileysMediaContent's own JSDoc); both branches above already produce a shape Baileys accepts.
-          const sent = await sock.sendMessage(jid, messageContent as any);
-          await recordSent(this.store, this.outboundPoke, record.id, sent?.key?.id ?? null);
-        } catch (err) {
-          // sendMessage WAS invoked — the frame may already be with
-          // WhatsApp (e.g. an ack timeout after transmit). Never log the
-          // body or the error object wholesale (Baileys errors can embed
-          // frames) — message + ids only, and only a fixed reason persists.
-          this.log.error({ coachId: session.coachId, messageId: record.id, err: (err as Error).message }, "send attempt failed");
-          await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("send"), true));
+          // Typing simulation (src/typing.ts) — "typing…" before a TEXT part,
+          // to the JID WhatsApp returned above (or the group's own JID — a
+          // person typing into a group shows as composing there too). Best effort: presence errors
+          // never fail the send. The socket can drop during the window, so it
+          // is re-checked after: nothing has been dispatched yet, so a drop
+          // here fails the row as NOT attempted (safe to reissue), the same as
+          // the existence-check failure branch above.
+          if (payload.kind === "text") {
+            const typingMs = typingDurationMs(payload.text, { enabled: this.config.typingIndicatorEnabled, maxMs: this.config.typingMaxMs });
+            await simulateTyping(sock, jid, typingMs, sleep, (err) =>
+              this.log.warn({ coachId: session.coachId, messageId: record.id, err: logSafeError(err, record) }, "typing presence update failed — sending anyway")
+            );
+            if (session.sock !== sock || session.status !== "connected") {
+              await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, "session disconnected before sending — not dispatched", false));
+              continue;
+            }
+          }
+
+          session.pacer.recordSend(units); // count the ATTEMPT, in cap units (5 for a group) — see pacer JSDoc.
+          session.inFlightUnits = 0; // now in sentToday — never count them twice.
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Baileys' AnyMessageContent union is intentionally not re-imported into media.ts (see buildBaileysMediaContent's own JSDoc); both branches above already produce a shape Baileys accepts.
+            const sent = await sock.sendMessage(jid, messageContent as any);
+            await recordSent(this.store, this.outboundPoke, record.id, sent?.key?.id ?? null);
+          } catch (err) {
+            // sendMessage WAS invoked — the frame may already be with
+            // WhatsApp (e.g. an ack timeout after transmit). Never log the
+            // body or the error object wholesale (Baileys errors can embed
+            // frames) — message + ids only, and only a fixed reason persists.
+            this.log.error({ coachId: session.coachId, messageId: record.id, err: logSafeError(err as Error, record) }, "send attempt failed");
+            await this.safely(session.coachId, () => recordFailed(this.store, this.outboundPoke, record.id, mapSendErrorReason("send"), true));
+          }
+        } finally {
+          session.inFlightUnits = 0;
         }
       }
     } finally {

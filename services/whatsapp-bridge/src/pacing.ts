@@ -16,7 +16,7 @@
  *     whatsapp_messages ledger at session start (`store.getDailyActivity`),
  *     so a bridge restart cannot reset a coach's spent budget — and budget
  *     is additionally RESERVED at accept time in sessions.ts's `send()`
- *     (`sentTodayCount() + queuedUnits + units`), not only counted at
+ *     (`sentTodayCount() + inFlight + queued units + units`), not only counted at
  *     dispatch, so a burst of accepts arriving faster than the pacer can
  *     drain cannot overshoot the cap before any of them has actually
  *     dispatched. Units, not sends: a group send costs 5 (src/groups.ts's
