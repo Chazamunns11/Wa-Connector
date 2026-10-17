@@ -31,8 +31,12 @@ import { listWhatsappGroups, refreshWhatsappGroups, sendWhatsappAttachment, send
 import {
   drainGhlOutboundStatuses,
   handleProviderOutboundMessage,
+  APP_MESSAGE_ID_PREFIX,
   GHL_PROVIDER_REASONS,
   GROUP_SEND_CAP_UNITS,
+  isAppOriginatedMessageId,
+  reportGhlOutcome,
+  sendAppOriginatedText,
   type GhlProviderDeps,
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
@@ -3542,4 +3546,76 @@ test("merge hold: an enabled group whose number was linked before and is offline
   assert.equal(row.toPhone, null);
   assert.equal(row.sendState, "held");
   assert.equal(row.pendingText, "hello group");
+});
+
+// ---------------------------------------------------------------------------
+// App-originated sends (group invites) — the normal outbound path, with STOP,
+// billing gate, hold and no GHL status PUT.
+// ---------------------------------------------------------------------------
+
+const APP_INPUT = { tenantId: TENANT_ID, ghlContactId: "ghl-contact-app", toPhone: "+447700900123", text: "Hi Sam, join us: https://chat.whatsapp.com/x" };
+
+test("app-originated: ids carry the pwapp_ prefix and are recognised", () => {
+  assert.equal(APP_MESSAGE_ID_PREFIX, "pwapp_");
+  assert.equal(isAppOriginatedMessageId("pwapp_abc"), true);
+  assert.equal(isAppOriginatedMessageId("ghl-msg-1"), false);
+});
+
+test("app-originated: a STOP on another of the location's numbers refuses the invite", async () => {
+  const { repo, optOuts, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS });
+  optOuts.add(`${SECOND_TENANT_ID}:+447700900123`);
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT });
+  assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOutOtherNumber });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 0);
+  const row = [...rows.values()][0];
+  assert.equal(row.sendState, "refused");
+  assert.equal(row.reportedStatus, "failed");
+});
+
+test("app-originated: sent from the given tenant, not the sticky or default number", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers: TWO_NUMBERS, sticky: { [`${LOCATION_ID}:ghl-contact-app`]: TENANT_ID } });
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT, tenantId: SECOND_TENANT_ID });
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].coachId, SECOND_TENANT_ID);
+  assert.equal(sendCalls[0].text, APP_INPUT.text);
+  const row = [...rows.values()][0];
+  assert.equal(row.tenantId, SECOND_TENANT_ID);
+  assert.ok(isAppOriginatedMessageId(row.ghlMessageId));
+  assert.equal(statusCalls.length, 0);
+});
+
+test("app-originated: number offline (linked before) -> held", async () => {
+  const { repo, rows, sessionsByTenant } = createFakeRepo([makeAccount()]);
+  sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const { deps, statusCalls } = makeDeps(notConnectedSend);
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT });
+  assert.deepEqual(outcome, { kind: "held" });
+  assert.equal([...rows.values()][0].sendState, "held");
+  assert.equal(statusCalls.length, 0);
+});
+
+test("app-originated: billing gate applies and nothing is PUT to GHL", async () => {
+  const { repo, rows } = createFakeRepo([makeAccount()], { status: "cancelled" });
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT });
+  assert.equal(outcome.kind, "refused");
+  assert.match((outcome as { reason: string }).reason, /subscription inactive/);
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 0);
+  assert.equal([...rows.values()][0].reportedStatus, "failed");
+});
+
+test("app-originated: the status drain marks an accepted row reported without calling GHL", async () => {
+  const bundle = createFakeRepo([makeAccount()]);
+  const { deps, statusCalls } = makeDeps();
+  await sendAppOriginatedText(bundle.repo, deps, { account: makeAccount(), ...APP_INPUT });
+  const row = [...bundle.rows.values()][0];
+  const outcome = await reportGhlOutcome(bundle.repo, deps, makeAccount(), row, "delivered", null);
+  assert.equal(outcome, "reported");
+  assert.equal(statusCalls.length, 0);
+  assert.equal(bundle.rows.get(row.id)!.reportedStatus, "delivered");
 });

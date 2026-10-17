@@ -395,3 +395,22 @@ test("merge: a STOP recorded on ANOTHER number of the location refuses the held 
   assert.equal(h.sendCalls.length, 0);
   assert.equal(h.rows.get("row-1")!.refusalReason, GHL_PROVIDER_REASONS.optedOutOtherNumber);
 });
+
+test("app-originated: a held pwapp_ row whose contact has since sent STOP is refused and reported locally, never to GHL", async () => {
+  const s = setup([heldRow(1, 5, { ghlMessageId: "pwapp_abc123" })]);
+  s.optOuts.add(`${TENANT}:+447700900123`);
+  const res = await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.sendCalls.length, 0);
+  assert.equal(s.rows.get("row-1")!.refusalReason, GHL_PROVIDER_REASONS.optedOut);
+  assert.equal(s.rows.get("row-1")!.reportedStatus, "failed");
+  assert.equal(s.statusCalls.length, 0);
+  assert.equal(res.refused, 1);
+});
+
+test("app-originated: a held pwapp_ row released and accepted never PUTs a status to GHL", async () => {
+  const s = setup([heldRow(1, 5, { ghlMessageId: "pwapp_abc123" })]);
+  await releaseHeldOutboundMessages(s.repo, s.deps, NOW, {});
+  assert.equal(s.sendCalls.length, 1);
+  assert.equal(s.rows.get("row-1")!.sendState, "accepted");
+  assert.equal(s.statusCalls.length, 0);
+});

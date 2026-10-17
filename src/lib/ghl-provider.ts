@@ -84,6 +84,7 @@
  * `send_state = 'pending_send'`, cleared the instant a row leaves that state
  * — see that migration's header for the full argument.
  */
+import { randomUUID } from "node:crypto";
 import {
   buildOutboundText,
   deriveAttachmentIdempotencyKey,
@@ -595,6 +596,13 @@ export async function resolveGhlAccessToken(repo: GhlTokenRefreshRepo, deps: Ghl
   return tokens.accessToken;
 }
 
+/** Prefix of the `ghl_message_id` on rows this app originates (not GHL), e.g. group invites. */
+export const APP_MESSAGE_ID_PREFIX = "pwapp_";
+
+export function isAppOriginatedMessageId(id: string): boolean {
+  return id.startsWith(APP_MESSAGE_ID_PREFIX);
+}
+
 /**
  * Report one status outcome to GHL, then stamp the ledger row accordingly.
  * Shared by the webhook's inline refusal path and the drain's own
@@ -610,6 +618,13 @@ export async function reportGhlOutcome(
   status: "delivered" | "failed",
   reason: string | null
 ): Promise<"reported" | "unreported"> {
+  if (isAppOriginatedMessageId(row.ghlMessageId)) {
+    // Sent by this app (a group invite), not by GHL: GHL has no such message
+    // to update. Mark the row reported locally so no pass retries it; any
+    // GHL conversation post is a separate step by the caller.
+    await repo.markGhlOutboundReported(row.id, { reportedStatus: status, reportError: null });
+    return "reported";
+  }
   const accessToken = account ? await resolveGhlAccessToken(repo, deps, account) : null;
   if (!accessToken) {
     // No usable credential right now (needs_reauth, disabled, or an unknown
@@ -971,6 +986,49 @@ export async function continueTextOutbound(
   await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
   await reportGhlOutcome(repo, deps, account, row, "failed", reason);
   return { kind: "refused", reason };
+}
+
+/**
+ * An invite (or any text this app originates) sent as a normal outbound: the
+ * same gate, STOP check (across all of the location's numbers), hold-behind,
+ * pacing and hold/refuse rules as a GHL-originated text, from exactly
+ * `input.tenantId`. The row's `ghlMessageId` is `pwapp_`-prefixed so
+ * `reportGhlOutcome` never PUTs it to GHL; `ghl_outbound_messages` has no
+ * conversation id column, so the contact id is all it records. Never throws:
+ * a repo failure resolves to `{ kind: "error", recorded }`.
+ */
+export async function sendAppOriginatedText(
+  repo: GhlProviderRepo,
+  deps: GhlProviderDeps,
+  input: { account: GhlAccount; tenantId: string; ghlContactId: string; toPhone: string; text: string }
+): Promise<HandleProviderOutboundOutcome> {
+  const { account } = input;
+  const sendingNumber = groupSendingNumber(account, input.tenantId);
+  const ghlMessageId = APP_MESSAGE_ID_PREFIX + randomUUID().replaceAll("-", "");
+  let row: GhlOutboundMessage;
+  try {
+    ({ message: row } = await repo.recordGhlOutboundMessage({
+      locationId: account.locationId,
+      tenantId: sendingNumber.tenantId,
+      ghlMessageId,
+      ghlContactId: input.ghlContactId,
+      idempotencyKey: deriveIdempotencyKey(ghlMessageId),
+      toPhone: input.toPhone,
+      hadAttachments: false,
+      pendingText: input.text,
+    }));
+  } catch (err) {
+    console.error("[ghl-provider] sendAppOriginatedText: could not record the outbound row (nothing sent):", err instanceof Error ? err.name : "unknown");
+    return { kind: "error", recorded: false };
+  }
+  try {
+    const blocked = await refuseIfGatedOrOptedOut(repo, deps, account, row, input.toPhone);
+    if (blocked) return blocked;
+    return await continueTextOutbound(repo, deps, { account, row, target: { to: input.toPhone }, text: input.text, sendingNumber });
+  } catch (err) {
+    console.error(`[ghl-provider] sendAppOriginatedText: post-intake failure for row ${row.id} (row already recorded — the drain owns it from here):`, err instanceof Error ? err.name : "unknown");
+    return { kind: "error", recorded: true };
+  }
 }
 
 /**
