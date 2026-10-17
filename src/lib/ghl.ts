@@ -64,7 +64,7 @@ const API_BASE = "https://services.leadconnectorhq.com";
  * fails loudly (a 4xx from GHL, surfaced via this module's discriminated
  * result) instead of silently drifting with a moving default.
  */
-const API_VERSION = "2021-04-15";
+export const API_VERSION = "2021-04-15";
 
 /**
  * Confirmed 16 Oct 2026 against GoHighLevel's official OpenAPI spec
