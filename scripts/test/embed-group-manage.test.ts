@@ -408,13 +408,25 @@ test("invites in GHL: only accepted invites are posted, once each, with the prov
       alreadyMember: ["c-mem"],
       sent: ["c-a", "c-b"],
       held: ["c-c"],
-      refused: [{ contactId: "c-ref", reason: "This contact has opted out." }],
+      refused: [{ contactId: "c-ref", name: null, reason: "This contact has opted out." }],
       skipped: [{ contactId: "c-x", name: "Xena", reason: "no_phone" }],
       truncated: false,
     },
   });
   assertNoTenantId(result, "invite");
   assertNoPhones(result, "invite");
+});
+
+test("invites: a refused invitee carries their first name from the resolved invitees (null when unknown)", async () => {
+  const refusedResult: SendGroupInvitesResult = { ...NO_SEND, refused: [{ contactId: "c-a", reason: "r1" }, { contactId: "c-zz", reason: "r2" }] };
+  const { repo, deps } = fakes({ sendInvites: async () => refusedResult });
+  const result = await decideGroupManageRequest(repo, deps, CTX, { action: "invite", groupJid: GROUP, contactIds: ["c-a"] });
+  assert.equal(result.status, 200);
+  const invites = (result.body as { invites: { refused: unknown } }).invites;
+  assert.deepEqual(invites.refused, [
+    { contactId: "c-a", name: "Ann", reason: "r1" },
+    { contactId: "c-zz", name: null, reason: "r2" },
+  ]);
 });
 
 test("invites in GHL: the account's own provider id wins over the env one", async () => {

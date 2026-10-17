@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
 import {
@@ -8,6 +8,8 @@ import {
   InviteePicker,
   InviteSummary,
   MANAGE_PATH,
+  errorText,
+  messageOf,
   inviteResultFrom,
   inviteesBody,
   type CallEmbedApi,
@@ -38,13 +40,7 @@ interface GroupDetail {
   members: Member[];
 }
 
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : FALLBACK_ERROR;
-}
-
-function messageOf(json: Record<string, unknown>): string {
-  return typeof json.message === "string" ? json.message : FALLBACK_ERROR;
-}
+type DetailResult = { detail: GroupDetail } | { notAdmin: true } | { error: string };
 
 function memberLabel(m: Member): string {
   return m.phone ? m.phone : "WhatsApp member";
@@ -78,6 +74,8 @@ export function GroupManagePanel({
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+  const [notAdmin, setNotAdmin] = useState(false);
 
   const [nameDraft, setNameDraft] = useState("");
   const [descDraft, setDescDraft] = useState("");
@@ -107,22 +105,26 @@ export function GroupManagePanel({
   );
 
   /** Fetch the group's details. Pure: resolves with the detail or the error text. */
-  const fetchDetail = useCallback(async (): Promise<{ detail: GroupDetail } | { error: string }> => {
+  const fetchDetail = useCallback(async (): Promise<DetailResult> => {
     try {
       const json = await callEmbedApi(MANAGE_PATH, "POST", { slot, action: "detail", groupJid });
       const g = json.group as GroupDetail | undefined;
       if (json.ok === true && g && Array.isArray(g.members)) return { detail: g };
+      if (json.code === "not_admin") return { notAdmin: true };
       return { error: messageOf(json) };
     } catch (err) {
       return { error: errorText(err) };
     }
   }, [callEmbedApi, slot, groupJid]);
 
-  const applyDetail = useCallback((r: { detail: GroupDetail } | { error: string }) => {
+  const applyDetail = useCallback((r: DetailResult) => {
     if ("detail" in r) {
       setDetail(r.detail);
       setNameDraft(r.detail.name);
       setDescDraft(r.detail.description ?? "");
+      setLoadError(null);
+    } else if ("notAdmin" in r) {
+      setNotAdmin(true);
       setLoadError(null);
     } else {
       setLoadError(r.error);
@@ -142,11 +144,17 @@ export function GroupManagePanel({
   }, [fetchDetail, applyDetail]);
 
   async function act(fn: () => Promise<void>) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
     setInfo(null);
-    await fn();
-    setBusy(false);
+    try {
+      await fn();
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
   }
 
   const saveDetails = () =>
@@ -254,7 +262,7 @@ export function GroupManagePanel({
         </Button>
       </div>
 
-      {!detail && !loadError ? <p className="text-xs text-ink-faint">Loading…</p> : null}
+      {!detail && !loadError && !notAdmin ? <p className="text-xs text-ink-faint">Loading…</p> : null}
       {loadError ? (
         <div className="flex flex-col gap-2">
           <p className="text-xs text-loss">{loadError}</p>
@@ -266,7 +274,7 @@ export function GroupManagePanel({
         </div>
       ) : null}
 
-      {detail && !detail.weAreAdmin ? (
+      {notAdmin || (detail && !detail.weAreAdmin) ? (
         <>
           <p className="text-xs text-ink">{NOT_ADMIN_MESSAGE}</p>
           {leaveBlock}

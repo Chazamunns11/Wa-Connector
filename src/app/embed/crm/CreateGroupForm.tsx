@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 
 /** The embed's authenticated call helper, as `CrmEmbedClient` passes it down. */
@@ -27,11 +27,14 @@ function newRequestId(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
 
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : FALLBACK_ERROR;
+/** The only thrown messages that are fixed strings (from `callEmbedApi`); anything else (a parse or network error) gets the fallback. */
+const SAFE_THROWN = ["This page only works inside HighLevel.", "This session has expired"];
+
+export function errorText(err: unknown): string {
+  return err instanceof Error && SAFE_THROWN.some((m) => err.message.startsWith(m)) ? err.message : FALLBACK_ERROR;
 }
 
-function messageOf(json: Record<string, unknown>): string {
+export function messageOf(json: Record<string, unknown>): string {
   return typeof json.message === "string" ? json.message : FALLBACK_ERROR;
 }
 
@@ -73,6 +76,7 @@ export function InviteePicker({
   onChange: (next: Invitees) => void;
   disabled?: boolean;
 }) {
+  const radioName = useId();
   const [text, setText] = useState("");
   const [results, setResults] = useState<ContactResult[] | null>(null);
   const [truncated, setTruncated] = useState(false);
@@ -107,7 +111,7 @@ export function InviteePicker({
         <label className="flex items-center gap-1.5">
           <input
             type="radio"
-            name={`invitee-mode-${slot}`}
+            name={radioName}
             checked={value.mode === "pick"}
             disabled={disabled}
             onChange={() => onChange({ ...value, mode: "pick" })}
@@ -118,7 +122,7 @@ export function InviteePicker({
         <label className="flex items-center gap-1.5">
           <input
             type="radio"
-            name={`invitee-mode-${slot}`}
+            name={radioName}
             checked={value.mode === "tag"}
             disabled={disabled}
             onChange={() => onChange({ ...value, mode: "tag" })}
@@ -219,17 +223,17 @@ export interface InviteResult {
   alreadyMember: string[];
   sent: string[];
   held: string[];
-  refused: { contactId: string; reason: string }[];
+  refused: { contactId: string; name: string | null; reason: string }[];
   skipped: { contactId: string; name: string | null; reason: string }[];
   truncated: boolean;
 }
 
 const SKIP_REASONS: Record<string, string> = {
-  no_phone: "has no phone number in HighLevel.",
-  group_contact: "is a WhatsApp group contact, not a person.",
-  duplicate_phone: "shares a phone number with someone already in this list.",
-  opted_out: "has opted out of messages.",
-  not_found: "wasn't found in HighLevel.",
+  no_phone: "they have no phone number in HighLevel.",
+  group_contact: "they're a WhatsApp group contact.",
+  duplicate_phone: "they share a phone number with another contact.",
+  opted_out: "they've opted out of messages.",
+  not_found: "they weren't found in HighLevel.",
 };
 
 const EMPTY_RESULT: InviteResult = { added: [], alreadyMember: [], sent: [], held: [], refused: [], skipped: [], truncated: false };
@@ -249,7 +253,7 @@ export function InviteSummary({ result, names }: { result: InviteResult; names: 
   const lines: string[] = [];
   if (result.added.length > 0) lines.push(`${result.added.length} added to the group.`);
   if (result.alreadyMember.length > 0) lines.push(`${result.alreadyMember.length} already in the group.`);
-  if (result.sent.length > 0) lines.push(`${result.sent.length} sent an invite link.`);
+  if (result.sent.length > 0) lines.push(`Invite link sent to ${result.sent.length}.`);
   if (result.held.length > 0) lines.push(`${result.held.length} will send when the number reconnects.`);
   return (
     <div className="flex flex-col gap-1 rounded border border-border px-2.5 py-2 text-xs text-ink" role="status">
@@ -259,15 +263,15 @@ export function InviteSummary({ result, names }: { result: InviteResult; names: 
       ))}
       {result.refused.map((r) => (
         <p key={`r-${r.contactId}`} className="text-loss">
-          {who(r.contactId)} wasn&apos;t invited: {r.reason}
+          {who(r.contactId, r.name)} wasn&apos;t invited: {r.reason}
         </p>
       ))}
       {result.skipped.map((s) => (
         <p key={`s-${s.contactId}`} className="text-ink-faint">
-          {who(s.contactId, s.name)} was skipped because they {SKIP_REASONS[s.reason] ?? "couldn't be invited."}
+          {who(s.contactId, s.name)} was skipped: {SKIP_REASONS[s.reason] ?? "they couldn't be invited."}
         </p>
       ))}
-      {result.truncated ? <p className="text-ink-faint">Some contacts weren&apos;t included because the list was too long.</p> : null}
+      {result.truncated ? <p className="text-ink-faint">Only the first 100 contacts were included.</p> : null}
     </div>
   );
 }
@@ -276,9 +280,10 @@ export function InviteSummary({ result, names }: { result: InviteResult; names: 
 // Invite message template (per sub-account).
 // ---------------------------------------------------------------------------
 
-function InviteTemplateEditor({ callEmbedApi }: { callEmbedApi: CallEmbedApi }) {
+function InviteTemplateEditor({ callEmbedApi, onDirtyChange }: { callEmbedApi: CallEmbedApi; onDirtyChange: (dirty: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const [template, setTemplate] = useState<string | null>(null);
+  const savedTemplate = useRef<string | null>(null);
   const [isDefault, setIsDefault] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -292,6 +297,8 @@ function InviteTemplateEditor({ callEmbedApi }: { callEmbedApi: CallEmbedApi }) 
       const json = await callEmbedApi(TEMPLATE_PATH, "POST", body);
       if (json.ok === true && typeof json.template === "string") {
         setTemplate(json.template);
+        savedTemplate.current = json.template;
+        onDirtyChange(false);
         setIsDefault(json.isDefault === true);
         setSaved("template" in body);
       } else {
@@ -331,6 +338,7 @@ function InviteTemplateEditor({ callEmbedApi }: { callEmbedApi: CallEmbedApi }) 
                 disabled={busy}
                 onChange={(e) => {
                   setTemplate(e.target.value);
+                  onDirtyChange(e.target.value !== savedTemplate.current);
                   setSaved(false);
                 }}
                 aria-label="Invite message"
@@ -367,6 +375,7 @@ function InviteTemplateEditor({ callEmbedApi }: { callEmbedApi: CallEmbedApi }) 
 // ---------------------------------------------------------------------------
 
 const REPLAYED_MESSAGE = "This group was already created. Use Invite more to add anyone who was missed.";
+const TEMPLATE_UNSAVED = "Your invite message changes aren't saved — save them first or they won't be used.";
 const MAY_EXIST_SUFFIX = "Check the group list before trying again.";
 
 /**
@@ -387,6 +396,8 @@ export function CreateGroupForm({
   onClose: () => void;
 }) {
   const requestId = useRef<string | null>(null);
+  const inFlight = useRef(false);
+  const [templateDirty, setTemplateDirty] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [invitees, setInvitees] = useState<Invitees>(EMPTY_INVITEES);
@@ -398,10 +409,18 @@ export function CreateGroupForm({
 
   const nameLen = charCount(name.trim());
   const descLen = charCount(description);
-  const canSubmit = nameLen >= 1 && nameLen <= MAX_NAME && descLen <= MAX_DESCRIPTION && !busy;
+  const tagMissing = invitees.mode === "tag" && !invitees.tag.trim();
+  const canSubmit = nameLen >= 1 && nameLen <= MAX_NAME && descLen <= MAX_DESCRIPTION && !tagMissing && !busy;
 
   async function create() {
-    if (!canSubmit) return;
+    if (!canSubmit || inFlight.current) return;
+    if (templateDirty) {
+      setError(null);
+      setNotice(null);
+      setError(TEMPLATE_UNSAVED);
+      return;
+    }
+    inFlight.current = true;
     if (requestId.current === null) requestId.current = newRequestId();
     setBusy(true);
     setError(null);
@@ -437,6 +456,7 @@ export function CreateGroupForm({
       // The request may or may not have arrived: keep the same requestId so a second press is safe.
       setError(errorText(err));
     }
+    inFlight.current = false;
     setBusy(false);
   }
 
@@ -494,7 +514,7 @@ export function CreateGroupForm({
         Add people who&apos;ve messaged this number directly
       </label>
 
-      <InviteTemplateEditor callEmbedApi={callEmbedApi} />
+      <InviteTemplateEditor callEmbedApi={callEmbedApi} onDirtyChange={setTemplateDirty} />
 
       {error ? <p className="text-xs text-loss">{error}</p> : null}
 

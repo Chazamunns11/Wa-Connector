@@ -238,14 +238,16 @@ function invitesView(
   sent: SendGroupInvitesResult,
   skipped: SkippedInvitee[],
   extraAdded: string[],
-  truncated: boolean
+  truncated: boolean,
+  invitees: readonly Invitee[]
 ): Record<string, unknown> {
+  const firstNames = new Map(invitees.map((i) => [i.contactId, i.firstName?.trim() || null]));
   return {
     added: [...extraAdded, ...sent.added],
     alreadyMember: [...sent.alreadyMember],
     sent: sent.delivered.filter((d) => d.outcome !== "held").map((d) => d.contactId),
     held: sent.delivered.filter((d) => d.outcome === "held").map((d) => d.contactId),
-    refused: sent.refused.map((r) => ({ contactId: r.contactId, reason: r.reason })),
+    refused: sent.refused.map((r) => ({ contactId: r.contactId, name: firstNames.get(r.contactId) ?? null, reason: r.reason })),
     skipped: skipped.map((s) => ({ contactId: s.contactId, name: s.name, reason: s.reason })),
     truncated,
   };
@@ -323,7 +325,7 @@ async function handleCreate(repo: GroupManageRepo, deps: GroupManageDeps, ctx: G
   if (alreadyRecorded) {
     return {
       status: 200,
-      body: { ok: true, group: { jid: group.jid, name: group.name }, invites: invitesView(EMPTY_SEND, [], [], false), replayed: true },
+      body: { ok: true, group: { jid: group.jid, name: group.name }, invites: invitesView(EMPTY_SEND, [], [], false, []), replayed: true },
     };
   }
 
@@ -348,7 +350,7 @@ async function handleCreate(repo: GroupManageRepo, deps: GroupManageDeps, ctx: G
     body: {
       ok: true,
       group: { jid: group.jid, name: group.name },
-      invites: invitesView(sent, audience.skipped, firstMember ? [firstMember.contactId] : [], audience.truncated),
+      invites: invitesView(sent, audience.skipped, firstMember ? [firstMember.contactId] : [], audience.truncated, audience.invitees),
     },
   };
 }
@@ -523,7 +525,7 @@ async function handleGroupAction(
       const audience = await resolveAudience(deps, ctx, audienceInput);
       if ("status" in audience) return audience;
       const sent = await inviteAndPost(deps, ctx, group, audience, audience.invitees, directAdd);
-      return { status: 200, body: { ok: true, groupJid: group.jid, invites: invitesView(sent, audience.skipped, [], audience.truncated) } };
+      return { status: 200, body: { ok: true, groupJid: group.jid, invites: invitesView(sent, audience.skipped, [], audience.truncated, audience.invitees) } };
     }
   }
 }
