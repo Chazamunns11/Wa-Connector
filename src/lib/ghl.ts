@@ -846,6 +846,56 @@ export type UpsertGhlContactResult =
  * retry decision.
  */
 export async function upsertGhlContact(accessToken: string, locationId: string, phoneE164: string): Promise<UpsertGhlContactResult> {
+  return postGhlContactUpsert(accessToken, { locationId, phone: phoneE164 });
+}
+
+/** The tag every group contact carries, so a client can leave group contacts out of an "SMS everyone" workflow. */
+export const GHL_GROUP_CONTACT_TAG = "whatsapp-group";
+const GHL_GROUP_CONTACT_SUFFIX = " (WhatsApp group)";
+/** GHL contact names are kept to 100 characters, suffix included. */
+const GHL_GROUP_CONTACT_NAME_MAX = 100;
+
+/**
+ * Opt-in WhatsApp groups — the ONE GHL contact standing for a group (GHL's
+ * inbound-message API needs a contact and has no group concept). Same
+ * endpoint, request conventions and fixed error strings as `upsertGhlContact`
+ * (it shares `postGhlContactUpsert`).
+ *   - name `<group name> (WhatsApp group)`, the group name trimmed by whole
+ *     characters so the total is at most 100;
+ *   - tag `whatsapp-group`;
+ *   - NO phone: a made-up number could collide with a real contact or be
+ *     texted by an SMS step;
+ *   - a placeholder email `group-<groupKey>@groups.pingwren.invalid`
+ *     (`.invalid` can never deliver, RFC 2606). It is there because GHL may
+ *     refuse a contact with neither phone nor email — not yet confirmed
+ *     against a live location — and it also gives GHL's upsert something to
+ *     dedupe on, so a retried create returns the same contact.
+ * `groupKey` is the group JID's digits (the bridge's JID with `-` and
+ * `@g.us` removed); anything else is refused without a request, so nothing
+ * but digits ever reaches the email.
+ */
+export async function upsertGhlGroupContact(
+  accessToken: string,
+  locationId: string,
+  input: { name: string; groupKey: string }
+): Promise<UpsertGhlContactResult> {
+  if (!/^[0-9]{1,64}$/.test(input.groupKey)) {
+    return { ok: false, kind: "rejected", error: "GHL group contact key is not a WhatsApp group id" };
+  }
+  const groupName = Array.from(input.name.trim())
+    .slice(0, GHL_GROUP_CONTACT_NAME_MAX - GHL_GROUP_CONTACT_SUFFIX.length)
+    .join("")
+    .trim();
+  return postGhlContactUpsert(accessToken, {
+    locationId,
+    name: groupName ? `${groupName}${GHL_GROUP_CONTACT_SUFFIX}` : "WhatsApp group",
+    email: `group-${input.groupKey}@groups.pingwren.invalid`,
+    tags: [GHL_GROUP_CONTACT_TAG],
+  });
+}
+
+/** `POST /contacts/upsert` with `payload` — the shared request, response parsing and fixed-string failure mapping behind both contact upserts above. */
+async function postGhlContactUpsert(accessToken: string, payload: Record<string, unknown>): Promise<UpsertGhlContactResult> {
   try {
     const res = await fetch(`${API_BASE}/contacts/upsert`, {
       method: "POST",
@@ -854,7 +904,7 @@ export async function upsertGhlContact(accessToken: string, locationId: string, 
         "Content-Type": "application/json",
         Version: CONTACTS_API_VERSION,
       },
-      body: JSON.stringify({ locationId, phone: phoneE164 }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;

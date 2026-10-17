@@ -21,6 +21,7 @@ import type {
   GhlOutboundSendState,
   LocationNumber,
   Scope,
+  WhatsappGroup,
   WhatsappInboundMessage,
   WhatsappSessionSummary,
 } from "@/lib/types";
@@ -116,6 +117,41 @@ export interface GhlRepository {
     tenantId: string,
     receivedAtIso: string
   ): Promise<void>;
+
+  // -------------------------------------------------------------------------
+  // Opt-in WhatsApp groups (migration 0004): `whatsapp_groups`, one row per
+  // (number, group). Nothing is forwarded to GHL for a group until its row is
+  // `enabled`; `ghl_contact_id` is the one GHL contact standing for the group.
+  // All service-role; a `WhatsappGroup` carries a tenant id.
+  // -------------------------------------------------------------------------
+
+  /** Every group row stored for one number (tenant), enabled or not, ordered by name. */
+  listWhatsappGroups(tenantId: string): Promise<WhatsappGroup[]>;
+
+  /**
+   * Switch a group on or off for one number — upsert on `(tenant_id,
+   * group_jid)`, so the first switch-on creates the row. `groupJid` must match
+   * 0004's CHECK (`^[0-9]+(-[0-9]+)?@g\.us$`) or this throws before any
+   * write; `name` is trimmed to 100 characters. Switching on also clears
+   * `left_at`. Never touches `ghl_contact_id`, so a re-enabled group posts
+   * into its existing GHL contact. The caller asks the bridge to reload its
+   * enabled set afterwards (`refreshWhatsappGroups`).
+   */
+  setWhatsappGroupEnabled(tenantId: string, groupJid: string, name: string, enabled: boolean): Promise<void>;
+
+  /** Stamp `left_at = now()` — the number is no longer in the group (the bridge's "no longer in that group" send failure). Cleared by the next `setWhatsappGroupEnabled(..., true)`. */
+  markWhatsappGroupLeft(tenantId: string, groupJid: string): Promise<void>;
+
+  /**
+   * The group a GHL contact stands for, searched across all of the
+   * location's numbers, or null when the contact is not a group contact.
+   * Returned whether or not the group is enabled, so the caller can refuse a
+   * send to a switched-off group with its fixed string.
+   */
+  getWhatsappGroupByContact(locationId: string, ghlContactId: string): Promise<{ tenantId: string; groupJid: string; enabled: boolean } | null>;
+
+  /** Store the GHL contact created for a group (the inbound drain, before it posts the group's first message). */
+  setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string): Promise<void>;
 
   // -------------------------------------------------------------------------
   // GHL custom conversation provider, Phase 1 (WAGHL replacement —
@@ -428,7 +464,8 @@ export interface GhlRepository {
 
   /**
    * Stamp a CLAIMED GHL-tenant row's terminal outcome — `resolution` is one
-   * of `'ghl_pushed' | 'ghl_rejected' | 'ghl_push_failed' | 'ghl_push_uncertain'`
+   * of `'ghl_pushed' | 'ghl_rejected' | 'ghl_push_failed' | 'ghl_push_uncertain'
+   * | 'group_not_enabled'`
    * (free text, no CHECK — same convention as `resolveWhatsappInboundMessage`).
    * Deliberately a SEPARATE method from `resolveWhatsappInboundMessage`
    * (rather than widening that one's `resolution` union) so the coach

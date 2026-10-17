@@ -82,8 +82,10 @@ export interface BridgeSessionSnapshot {
 export interface BridgeMessage {
   id: string;
   idempotencyKey: string;
-  /** The recipient this row was actually accepted for — compare against the request's `to` to catch an idempotency-key reuse mismatch (see 'idempotency_conflict' below). */
-  toPhone: string;
+  /** The recipient this row was actually accepted for — compare against the request's `to` to catch an idempotency-key reuse mismatch (see 'idempotency_conflict' below). `null` for a group send. */
+  toPhone: string | null;
+  /** Opt-in groups — the group this row was accepted for; `null` (or absent, from a bridge build before groups) for a one-to-one send. */
+  groupJid?: string | null;
   status: "accepted" | "sending" | "sent" | "failed" | "not_on_whatsapp";
   waMessageId: string | null;
   error: string | null;
@@ -104,6 +106,9 @@ export interface BridgeMessage {
  *                             DIFFERENT recipient — choose a new key (422).
  *   'daily_cap_reached'     — pacing cap hit; resumes at UTC midnight (429).
  *   'lease_unavailable'     — bridge mid-redeploy handoff; retry shortly (503).
+ *   'group_not_enabled'     — `groupJid` is malformed or not an enabled group for this number (400).
+ *   'groups_unavailable'    — the bridge could not fetch the number's groups from WhatsApp (502).
+ *   'groups_refresh_failed' — the bridge could not reload its enabled groups; group traffic is paused until a reload succeeds (502).
  *   'internal'              — anything else, including a 2xx response whose
  *                             body didn't match the expected shape (treated
  *                             as a bridge-contract violation, never trusted
@@ -120,14 +125,48 @@ export type BridgeSendResult = { ok: true; replay: boolean; message: BridgeMessa
 export type BridgeMessageResult = { ok: true; message: BridgeMessage } | BridgeFailure;
 export type BridgeOkResult = { ok: true } | BridgeFailure;
 
-export interface SendWhatsappInput {
+/** One of the number's WhatsApp groups, live from the bridge (`GET /sessions/:id/groups`). Shown to the owner; the bridge never stores it. */
+export interface BridgeGroup {
+  jid: string;
+  name: string;
+  /** Member count. */
+  size: number;
+}
+
+export type BridgeGroupsResult = { ok: true; groups: BridgeGroup[] } | BridgeFailure;
+
+/**
+ * The bridge's group-JID shape — byte-identical to its `GROUP_JID_RE`
+ * (services/whatsapp-bridge/src/groups.ts) and to 0004's/0005's CHECKs.
+ */
+export const WHATSAPP_GROUP_JID_RE = /^[0-9]+(-[0-9]+)?@g\.us$/;
+
+/** True iff `jid` is a well-formed WhatsApp group id (`120363…@g.us`, or the older `<creator>-<timestamp>@g.us`). */
+export function isWhatsappGroupJid(jid: string): boolean {
+  return typeof jid === "string" && WHATSAPP_GROUP_JID_RE.test(jid);
+}
+
+/**
+ * One text send. EXACTLY ONE target, enforced by the type (the bridge also
+ * 400s both): `to` for a one-to-one send, or `groupJid` for an enabled group.
+ */
+export type SendWhatsappInput = {
   coachId: string;
-  /** Strict E.164 ONLY (src/lib/phone.ts's contract) — pass `calls.prospectPhone` verbatim; the bridge 422s anything else rather than normalising (see services/whatsapp-bridge/src/phone.ts for why refusal beats repair). */
-  to: string;
   text: string;
   /** Caller-chosen dedupe key, [A-Za-z0-9_-]{1,128} — see this file's IDEMPOTENCY note. */
   idempotencyKey: string;
-}
+} & (
+  | {
+      /** Strict E.164 ONLY (src/lib/phone.ts's contract) — pass `calls.prospectPhone` verbatim; the bridge 422s anything else rather than normalising (see services/whatsapp-bridge/src/phone.ts for why refusal beats repair). */
+      to: string;
+      groupJid?: never;
+    }
+  | {
+      /** A group JID as stored in `whatsapp_groups` (never built by concatenation — bridge hard rule 3). The bridge refuses it with 'group_not_enabled' unless the group is enabled for this number. */
+      groupJid: string;
+      to?: never;
+    }
+);
 
 /**
  * Media plan (docs/MEDIA-PLAN.md §5.3) — the attachment counterpart to
@@ -171,6 +210,10 @@ export interface WhatsappTransport {
   sendAttachment(input: SendWhatsappAttachmentInput): Promise<BridgeSendResult>;
   /** Post-hoc delivery status of a previously accepted send, by the same idempotency key. */
   getMessageStatus(coachId: string, idempotencyKey: string): Promise<BridgeMessageResult>;
+  /** Opt-in groups — the number's groups, live (connected sessions only). */
+  listGroups(coachId: string): Promise<BridgeGroupsResult>;
+  /** Opt-in groups — make the transport reload its enabled-group set after `whatsapp_groups` changed. */
+  refreshGroups(coachId: string): Promise<BridgeOkResult>;
 }
 
 /** `WHATSAPP_BRIDGE_URL` must be https (a plain-http localhost is allowed for local dev only) — see `bridgeEnv`'s JSDoc. */
@@ -200,6 +243,21 @@ function bridgeEnv(): { url: string; secret: string } | null {
 /** Narrows an unknown JSON value to a plausible `BridgeSessionSnapshot` before trusting it — a bridge behind a misbehaving proxy could return 200 with an unexpected body, and blindly casting would hand callers `session: undefined` that later throws deep in a future UI (hard rule 5). */
 function isValidSession(v: unknown): v is BridgeSessionSnapshot {
   return typeof v === "object" && v !== null && typeof (v as { coachId?: unknown }).coachId === "string" && typeof (v as { status?: unknown }).status === "string";
+}
+
+/** Same shape guard as `isValidSession`, for the group list — every entry must look right, or the whole body is treated as a contract violation. */
+function isValidGroupList(v: unknown): v is BridgeGroup[] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (g) =>
+        typeof g === "object" &&
+        g !== null &&
+        typeof (g as { jid?: unknown }).jid === "string" &&
+        typeof (g as { name?: unknown }).name === "string" &&
+        typeof (g as { size?: unknown }).size === "number"
+    )
+  );
 }
 
 /** Same shape guard as `isValidSession`, for message rows. */
@@ -307,7 +365,10 @@ const bridgeTransport: WhatsappTransport = {
   async send(input: SendWhatsappInput): Promise<BridgeSendResult> {
     const res = await bridgeFetch(`/sessions/${encodeURIComponent(input.coachId)}/send`, {
       method: "POST",
-      body: { to: input.to, text: input.text, idempotencyKey: input.idempotencyKey },
+      body:
+        input.groupJid !== undefined
+          ? { groupJid: input.groupJid, text: input.text, idempotencyKey: input.idempotencyKey }
+          : { to: input.to, text: input.text, idempotencyKey: input.idempotencyKey },
     });
     if ("ok" in res) return res;
     if (res.status === 200 || res.status === 202) {
@@ -351,6 +412,25 @@ const bridgeTransport: WhatsappTransport = {
       if (!isValidMessage(res.body.message)) return { ok: false, code: "internal", message: "bridge returned a malformed message body" };
       return { ok: true, message: res.body.message };
     }
+    return toFailure(res.status, res.body);
+  },
+
+  /** `GET /sessions/:coachId/groups` — 409 'session_not_connected' unless the number is linked and open. */
+  async listGroups(coachId: string): Promise<BridgeGroupsResult> {
+    const res = await bridgeFetch(`/sessions/${encodeURIComponent(coachId)}/groups`, { method: "GET" });
+    if ("ok" in res) return res;
+    if (res.status === 200) {
+      if (!isValidGroupList(res.body.groups)) return { ok: false, code: "internal", message: "bridge returned a malformed groups body" };
+      return { ok: true, groups: res.body.groups };
+    }
+    return toFailure(res.status, res.body);
+  },
+
+  /** `POST /sessions/:coachId/groups/refresh` — on failure the bridge pauses group traffic (fail closed) until a later refresh lands. */
+  async refreshGroups(coachId: string): Promise<BridgeOkResult> {
+    const res = await bridgeFetch(`/sessions/${encodeURIComponent(coachId)}/groups/refresh`, { method: "POST" });
+    if ("ok" in res) return res;
+    if (res.status === 200) return { ok: true };
     return toFailure(res.status, res.body);
   },
 };
@@ -405,6 +485,16 @@ export function sendWhatsappAttachment(input: SendWhatsappAttachmentInput): Prom
 /** Post-hoc status of a previously accepted send, by the same idempotency key. */
 export function getWhatsappMessageStatus(coachId: string, idempotencyKey: string): Promise<BridgeMessageResult> {
   return activeTransport.getMessageStatus(coachId, idempotencyKey);
+}
+
+/** Opt-in groups — the number's WhatsApp groups, live from the bridge (connected sessions only). For the owner's group picker; never stored as-is. */
+export function listWhatsappGroups(coachId: string): Promise<BridgeGroupsResult> {
+  return activeTransport.listGroups(coachId);
+}
+
+/** Opt-in groups — call after changing a number's `whatsapp_groups` rows so the bridge reloads which groups it forwards and accepts sends to. */
+export function refreshWhatsappGroups(coachId: string): Promise<BridgeOkResult> {
+  return activeTransport.refreshGroups(coachId);
 }
 
 /**

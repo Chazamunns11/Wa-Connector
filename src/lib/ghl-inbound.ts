@@ -156,6 +156,25 @@
  * ONLY in the text posted to GHL — the DB row's `body` stays `null`
  * regardless (this module never writes to that column).
  *
+ * ============ OPT-IN WHATSAPP GROUPS (0004) ============ A row with a
+ * `groupJid` is a message from a WhatsApp group, `fromPhone` being the member
+ * who wrote it. Resolved via `whatsapp_groups (tenant_id = the ROW's tenant,
+ * group_jid)` — memoised per tenant per pass:
+ *   - no group row, or not `enabled` -> claimed and resolved
+ *     `'group_not_enabled'` (terminal, fixed string), with NO GHL call at all.
+ *     The bridge already drops traffic for groups that are not enabled; this
+ *     is the app-side fence for a group switched off after the row landed.
+ *   - enabled -> posted into the ONE GHL contact standing for the group
+ *     (`ghl_contact_id`). The first row creates it (`upsertGhlGroupContact`,
+ *     pre-claim like the phone upsert, same retry and breaker accounting) and
+ *     stores it (`setWhatsappGroupContact`) BEFORE the claim and post, so
+ *     every later row reuses it. The sender is NEVER upserted as a contact
+ *     (group members did not opt in to the CRM) and no stickiness is
+ *     recorded (a group contact belongs to its group's number).
+ *   - body: `<sender name>: <text>` (the sender's E.164 when WhatsApp gave
+ *     no name), the same prefix in front of a media placeholder/label, and
+ *     the multiple-numbers `[label] ` before it: `[Sales] Jane: hello`.
+ *
  * ============ FIXED REASON STRINGS ONLY (hard constraint, restated) ============
  * Every string this module writes to `push_error` is one of the constants
  * below, or a fixed string `src/lib/ghl.ts` already sanitised to (HTTP
@@ -179,6 +198,7 @@ import {
   ghlConversationProviderId,
   refreshGhlToken,
   upsertGhlContact,
+  upsertGhlGroupContact,
   type AddGhlInboundMessageResult,
   type UpsertGhlContactResult,
 } from "@/lib/ghl";
@@ -189,7 +209,7 @@ import {
 } from "@/lib/ghl-provider";
 import { inboundNumberPrefix } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
-import type { LocationNumber, WhatsappInboundMessage } from "@/lib/types";
+import type { LocationNumber, WhatsappGroup, WhatsappInboundMessage } from "@/lib/types";
 
 /** Repo slice this module needs — `GhlTokenRefreshRepo`'s four methods (shared with `resolveGhlAccessToken`) plus this phase's own four, plus the media plan's signed-URL mint. All sessionless — driven exclusively via `webhookRepo` (the whatsapp-replies poke route and the reminders cron, neither carries a user session). */
 export type GhlInboundRepo = GhlTokenRefreshRepo &
@@ -205,6 +225,9 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     // stickiness (see `processGhlInboundRow`'s steps 4 and 5).
     | "listLocationNumbers"
     | "recordInboundForStickiness"
+    // Opt-in groups (0004) — the row's group, and its GHL contact once made.
+    | "listWhatsappGroups"
+    | "setWhatsappGroupContact"
   >;
 
 /**
@@ -216,6 +239,8 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
  */
 export interface GhlInboundDeps extends GhlTokenRefreshDeps {
   upsertContact: (accessToken: string, locationId: string, phoneE164: string) => Promise<UpsertGhlContactResult>;
+  /** Opt-in groups — creates (or finds) the one GHL contact standing for a group. */
+  upsertGroupContact: (accessToken: string, locationId: string, input: { name: string; groupKey: string }) => Promise<UpsertGhlContactResult>;
   addInboundMessage: (
     accessToken: string,
     input: { contactId: string; conversationProviderId: string; body: string; timestampIso?: string; attachments?: string[] }
@@ -224,6 +249,7 @@ export interface GhlInboundDeps extends GhlTokenRefreshDeps {
 
 export const defaultGhlInboundDeps: GhlInboundDeps = {
   upsertContact: upsertGhlContact,
+  upsertGroupContact: upsertGhlGroupContact,
   addInboundMessage: addGhlInboundMessage,
   refreshToken: refreshGhlToken,
   refreshWaitMs: 1000,
@@ -249,12 +275,18 @@ const CIRCUIT_BREAK_AFTER_CONSECUTIVE_FAILURES = 5;
 const REASON_PUSH_EXHAUSTED = "could not deliver this WhatsApp reply to GHL after repeated attempts";
 const REASON_NO_ACCESS_TOKEN = "no valid GHL access token available to push this reply";
 const REASON_ACCOUNT_NOT_FOUND = "GHL account for this WhatsApp session not found";
+/** Global constraint, verbatim — the same string the outbound side refuses with. */
+const REASON_GROUP_NOT_ENABLED = "WhatsApp group sync is turned off for this group";
 
 export const GHL_INBOUND_REASONS = {
   pushExhausted: REASON_PUSH_EXHAUSTED,
   noAccessToken: REASON_NO_ACCESS_TOKEN,
   accountNotFound: REASON_ACCOUNT_NOT_FOUND,
+  groupNotEnabled: REASON_GROUP_NOT_ENABLED,
 } as const;
+
+/** Terminal resolution for a group row whose group is unknown or switched off — never posted to GHL. */
+export const GROUP_NOT_ENABLED_RESOLUTION = "group_not_enabled";
 
 export interface DrainGhlInboundRepliesResult {
   /** Unprocessed GHL-tenant rows this pass looked at (capped at `DRAIN_BATCH_CAP`) — `0` whenever `blockedUnconfigured` is `true`, since the list is never even read in that case. */
@@ -271,6 +303,8 @@ export interface DrainGhlInboundRepliesResult {
   retried: number;
   /** Rows this pass lost the claim race on (another poke/cron pass already claimed it) — untouched, no error. */
   claimLost: number;
+  /** Group rows whose group is unknown or switched off — `resolution: 'group_not_enabled'`, never posted. */
+  groupNotEnabled: number;
   /** `true` iff `GHL_CONVERSATION_PROVIDER_ID` is unset — see this file's STEP 0 note. Every other counter is `0` when this is `true`. */
   blockedUnconfigured: boolean;
 }
@@ -327,6 +361,7 @@ export async function drainGhlInboundReplies(
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    groupNotEnabled: 0,
     blockedUnconfigured: false,
   };
 
@@ -347,15 +382,7 @@ export async function drainGhlInboundReplies(
   result.candidates = rows.length;
   if (rows.length === 0) return result;
 
-  // Per-(tenant, phone) contact-id memo for THIS pass only — an efficiency,
-  // not a correctness requirement (see this file's step 2 note: the upsert
-  // is safe to call twice regardless).
-  const contactIdByKey = new Map<string, string>();
-  // Multiple numbers (Task 3) — per-location number list for THIS pass only,
-  // same efficiency-only memo as `contactIdByKey` (a batch is typically many
-  // rows for few locations). Per pass, never longer: a number added, removed
-  // or relabelled shows up on the very next pass.
-  const numbersByLocation = new Map<string, LocationNumber[]>();
+  const memos: PassMemos = { contactIdByKey: new Map(), numbersByLocation: new Map(), groupsByTenant: new Map() };
   const breaker: CircuitBreakerState = { consecutiveContactUpsertFailures: 0, consecutivePostFailures: 0 };
 
   for (const row of rows) {
@@ -366,7 +393,7 @@ export async function drainGhlInboundReplies(
       break;
     }
     try {
-      await processGhlInboundRow(repo, deps, row, envProviderId, contactIdByKey, numbersByLocation, result, breaker);
+      await processGhlInboundRow(repo, deps, row, envProviderId, memos, result, breaker);
     } catch (err) {
       console.error(`[ghl-inbound.drainGhlInboundReplies] row ${row.id} failed unexpectedly (non-fatal):`, err);
       result.retried++;
@@ -376,14 +403,28 @@ export async function drainGhlInboundReplies(
   return result;
 }
 
+/**
+ * Per-pass memos, all efficiency-only and never kept beyond one pass (a
+ * number added or relabelled, or a group switched on or off, shows up on the
+ * very next pass). Only successful reads are cached, so a throw is retried by
+ * the next row too.
+ */
+interface PassMemos {
+  /** Per-(tenant, phone) contact id — the upsert is safe to call twice regardless (step 2). */
+  contactIdByKey: Map<string, string>;
+  /** Multiple numbers (Task 3) — per-location number list (a batch is typically many rows for few locations). */
+  numbersByLocation: Map<string, LocationNumber[]>;
+  /** Opt-in groups — per-tenant group rows. A group contact created this pass is written into its entry, so later rows reuse it. */
+  groupsByTenant: Map<string, WhatsappGroup[]>;
+}
+
 /** One row's full pipeline — see this file's header for the sequence and retry table. */
 async function processGhlInboundRow(
   repo: GhlInboundRepo,
   deps: GhlInboundDeps,
   row: WhatsappInboundMessage,
   envProviderId: string,
-  contactIdByKey: Map<string, string>,
-  numbersByLocation: Map<string, LocationNumber[]>,
+  memos: PassMemos,
   result: DrainGhlInboundRepliesResult,
   breaker: CircuitBreakerState
 ): Promise<void> {
@@ -402,6 +443,25 @@ async function processGhlInboundRow(
     await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_push_failed", pushError: REASON_PUSH_EXHAUSTED });
     result.failed++;
     return;
+  }
+
+  // Opt-in groups — resolve the row's group by the ROW's tenant (the number
+  // the message arrived on). Unknown or switched off: never reaches GHL. A
+  // `groupJid` of any value (even an empty string) takes this path, so a
+  // group row can never fall through to the one-to-one path below.
+  let group: WhatsappGroup | null = null;
+  if (row.groupJid != null) {
+    group = await findRowGroup(repo, row.coachId, row.groupJid, memos.groupsByTenant);
+    if (!group || !group.enabled) {
+      const claimed = await repo.claimWhatsappInboundMessage(row.id);
+      if (!claimed) {
+        result.claimLost++;
+        return;
+      }
+      await repo.resolveGhlInboundMessage(row.id, { resolution: GROUP_NOT_ENABLED_RESOLUTION, pushError: REASON_GROUP_NOT_ENABLED });
+      result.groupNotEnabled++;
+      return;
+    }
   }
 
   // PUSH_ATTEMPTS LOST-UPDATE UNDER CONCURRENT PASSES (adversarial-review
@@ -442,11 +502,15 @@ async function processGhlInboundRow(
   // ever sets it (0069), so this is always `envProviderId` in practice.
   const conversationProviderId = account.conversationProviderId ?? envProviderId;
 
-  // Step 2 — upsert contact, PRE-CLAIM, idempotent (plan §Q2/§Q4).
+  // Step 2 — upsert contact, PRE-CLAIM, idempotent (plan §Q2/§Q4). A group
+  // row uses the group's contact instead (created on its first message, and
+  // stored before the claim and post); the sender is never upserted.
   const memoKey = `${row.coachId}:${row.fromPhone}`;
-  let contactId = contactIdByKey.get(memoKey) ?? null;
+  let contactId = group ? group.ghlContactId : (memos.contactIdByKey.get(memoKey) ?? null);
   if (!contactId) {
-    const upsert = await deps.upsertContact(accessToken, account.locationId, row.fromPhone);
+    const upsert = group
+      ? await deps.upsertGroupContact(accessToken, account.locationId, { name: group.name, groupKey: groupContactKey(group.groupJid) })
+      : await deps.upsertContact(accessToken, account.locationId, row.fromPhone);
     if (!upsert.ok) {
       breaker.consecutiveContactUpsertFailures++;
       await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: upsert.error, unclaim: false });
@@ -458,7 +522,15 @@ async function processGhlInboundRow(
     // nothing about the messages endpoint's health.
     breaker.consecutiveContactUpsertFailures = 0;
     contactId = upsert.contactId;
-    contactIdByKey.set(memoKey, contactId);
+    if (group) {
+      // Stored BEFORE anything is posted to it: a throw here leaves the row
+      // un-claimed for the next pass, and GHL's upsert dedupes on the group's
+      // placeholder email, so that retry gets the same contact back.
+      await repo.setWhatsappGroupContact(group.tenantId, group.groupJid, contactId);
+      group.ghlContactId = contactId;
+    } else {
+      memos.contactIdByKey.set(memoKey, contactId);
+    }
   }
 
   // Multiple numbers (Task 3) — read PRE-CLAIM, like the upsert: a failure
@@ -468,12 +540,12 @@ async function processGhlInboundRow(
   // this reply actually arrived on — is what the prefix describes, never
   // `account.tenantId` (the location's DEFAULT number, whichever number the
   // row came from — see `getGhlAccountByTenantId`'s JSDoc).
-  // Memoised per location for this pass (`numbersByLocation`); only a
+  // Memoised per location for this pass (`memos.numbersByLocation`); only a
   // successful read is cached, so a throw is retried by the next row too.
-  let locationNumbers = numbersByLocation.get(account.locationId);
+  let locationNumbers = memos.numbersByLocation.get(account.locationId);
   if (!locationNumbers) {
     locationNumbers = await repo.listLocationNumbers(account.locationId);
-    numbersByLocation.set(account.locationId, locationNumbers);
+    memos.numbersByLocation.set(account.locationId, locationNumbers);
   }
   const numberPrefix = inboundNumberPrefix(locationNumbers, row.coachId);
 
@@ -501,8 +573,9 @@ async function processGhlInboundRow(
     // included), else "" so a single-number location's body is byte-for-byte
     // unchanged. No truncation needed: this module never length-caps the
     // body it posts (GHL takes the reply as-is), and the prefix is at most a
-    // 40-char label (0003's CHECK) plus brackets.
-    body: numberPrefix + body,
+    // 40-char label (0003's CHECK) plus brackets. A group row adds its
+    // sender after it: `[Sales] Jane: hello`.
+    body: numberPrefix + (group ? `${groupSenderLabel(row)}: ` : "") + body,
     timestampIso: row.receivedAt,
     attachments,
   });
@@ -511,7 +584,9 @@ async function processGhlInboundRow(
     breaker.consecutivePostFailures = 0;
     await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_pushed", pushError: null });
     result.pushed++;
-    await recordStickiness(repo, account.locationId, contactId, row);
+    // Not for a group contact: it belongs to its group's number, and the
+    // sender is not a contact at all.
+    if (!group) await recordStickiness(repo, account.locationId, contactId, row);
     return;
   }
 
@@ -545,6 +620,31 @@ async function processGhlInboundRow(
   // re-resolves the token from scratch before retrying.
   await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: post.error, unclaim: true });
   result.retried++;
+}
+
+/** Opt-in groups — the row's `whatsapp_groups` entry for its own tenant, or null. Memoised per tenant for the pass. */
+async function findRowGroup(
+  repo: GhlInboundRepo,
+  tenantId: string,
+  groupJid: string,
+  groupsByTenant: Map<string, WhatsappGroup[]>
+): Promise<WhatsappGroup | null> {
+  let groups = groupsByTenant.get(tenantId);
+  if (!groups) {
+    groups = await repo.listWhatsappGroups(tenantId);
+    groupsByTenant.set(tenantId, groups);
+  }
+  return groups.find((g) => g.groupJid === groupJid) ?? null;
+}
+
+/** `upsertGhlGroupContact`'s `groupKey`: the JID's digits (`120363…@g.us` -> `120363…`, `4477…-1600…@g.us` -> `4477…1600…`). */
+function groupContactKey(groupJid: string): string {
+  return groupJid.replace(/@g\.us$/, "").replace(/-/g, "");
+}
+
+/** Who wrote a group message: their WhatsApp display name, else their E.164 number. */
+function groupSenderLabel(row: WhatsappInboundMessage): string {
+  return row.senderName?.trim() || row.fromPhone;
 }
 
 /**

@@ -30,7 +30,7 @@ import {
   type GhlInboundRepo,
 } from "@/lib/ghl-inbound";
 import { shouldReplaceSticky } from "@/lib/location-numbers";
-import type { GhlAccount, LocationNumber, WhatsappInboundMessage } from "@/lib/types";
+import type { GhlAccount, LocationNumber, WhatsappGroup, WhatsappInboundMessage } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // describeInboundMediaPlaceholder — pure, direct tests (plan §Q6 / test 6).
@@ -147,8 +147,10 @@ interface FakeCall {
 function createFakeRepo(
   accounts: GhlAccount[] = [],
   rows: WhatsappInboundMessage[] = [],
-  numbers: Record<string, LocationNumber[]> = {}
+  numbers: Record<string, LocationNumber[]> = {},
+  groups: WhatsappGroup[] = []
 ) {
+  const groupsByKey = new Map(groups.map((g) => [`${g.tenantId}:${g.groupJid}`, { ...g }]));
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const rowsById = new Map(rows.map((r) => [r.id, { ...r }]));
   const calls: FakeCall[] = [];
@@ -248,9 +250,19 @@ function createFakeRepo(
       if (!shouldReplaceSticky(sticky.get(key)?.lastInboundAt ?? null, receivedAtIso)) return;
       sticky.set(key, { tenantId, lastInboundAt: receivedAtIso });
     },
+    async listWhatsappGroups(tenantId: string) {
+      calls.push({ method: "listWhatsappGroups", args: [tenantId] });
+      return [...groupsByKey.values()].filter((g) => g.tenantId === tenantId).map((g) => ({ ...g }));
+    },
+    async setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string) {
+      calls.push({ method: "setWhatsappGroupContact", args: [tenantId, groupJid, ghlContactId] });
+      const group = groupsByKey.get(`${tenantId}:${groupJid}`);
+      if (!group) throw new Error(`no such group ${groupJid}`);
+      group.ghlContactId = ghlContactId;
+    },
   };
 
-  return { repo, accountsByLocation, rowsById, calls, sticky };
+  return { repo, accountsByLocation, rowsById, calls, sticky, groupsByKey };
 }
 
 /** Media plan test fixture marker — see `createFakeRepo`'s `createWhatsappMediaSignedUrl` fake above. */
@@ -263,16 +275,22 @@ function makeUpsertResult(overrides: Partial<Extract<UpsertGhlContactResult, { o
 function makeDeps(overrides: Partial<GhlInboundDeps> = {}): {
   deps: GhlInboundDeps;
   upsertCalls: { accessToken: string; locationId: string; phoneE164: string }[];
+  groupUpsertCalls: { accessToken: string; locationId: string; name: string; groupKey: string }[];
   postCalls: { accessToken: string; contactId: string; conversationProviderId: string; body: string; timestampIso?: string }[];
   notifyCalls: string[];
 } {
   const upsertCalls: { accessToken: string; locationId: string; phoneE164: string }[] = [];
+  const groupUpsertCalls: { accessToken: string; locationId: string; name: string; groupKey: string }[] = [];
   const postCalls: { accessToken: string; contactId: string; conversationProviderId: string; body: string; timestampIso?: string }[] = [];
   const notifyCalls: string[] = [];
   const deps: GhlInboundDeps = {
     upsertContact: async (accessToken, locationId, phoneE164) => {
       upsertCalls.push({ accessToken, locationId, phoneE164 });
       return makeUpsertResult();
+    },
+    upsertGroupContact: async (accessToken, locationId, input) => {
+      groupUpsertCalls.push({ accessToken, locationId, ...input });
+      return makeUpsertResult({ contactId: "group-contact-1" });
     },
     addInboundMessage: async (accessToken, input) => {
       postCalls.push({ accessToken, ...input });
@@ -285,7 +303,7 @@ function makeDeps(overrides: Partial<GhlInboundDeps> = {}): {
     },
     ...overrides,
   };
-  return { deps, upsertCalls, postCalls, notifyCalls };
+  return { deps, upsertCalls, groupUpsertCalls, postCalls, notifyCalls };
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +325,7 @@ test("drainGhlInboundReplies: GHL_CONVERSATION_PROVIDER_ID unset -> zero repo re
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    groupNotEnabled: 0,
     blockedUnconfigured: true,
   });
   assert.equal(calls.length, 0, "no repo method may be called at all when the provider id is unset");
@@ -691,6 +710,7 @@ test("drainGhlInboundReplies: the LIST call itself throwing -> an all-zero resul
     uncertain: 0,
     retried: 0,
     claimLost: 0,
+    groupNotEnabled: 0,
     blockedUnconfigured: false,
   });
 });
@@ -927,4 +947,154 @@ test("drainGhlInboundReplies: with one number, the GHL body is never prefixed (e
   await drainGhlInboundReplies(repo, deps);
 
   assert.equal(postCalls[0]?.body, "plain");
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in WhatsApp groups (Task 8): a group row posts into ONE GHL contact
+// standing for the group, prefixed with the sender; senders are never
+// contacts; a group that is unknown or switched off never reaches GHL.
+// ---------------------------------------------------------------------------
+
+const GROUP_JID = "120363012345678901@g.us";
+
+function makeGroup(overrides: Partial<WhatsappGroup> = {}): WhatsappGroup {
+  return { tenantId: TENANT_ID, groupJid: GROUP_JID, name: "Run Club", enabled: true, ghlContactId: null, leftAt: null, ...overrides };
+}
+
+function makeGroupRow(overrides: Partial<WhatsappInboundMessage> = {}): WhatsappInboundMessage {
+  return makeRow({ groupJid: GROUP_JID, senderName: "Jane", fromPhone: "+447700900555", body: "hello", ...overrides });
+}
+
+test("drainGhlInboundReplies (groups): the first row creates the group contact once and stores it before posting; a second row reuses it", async () => {
+  const rows = [makeGroupRow({ body: "hello" }), makeGroupRow({ body: "second", senderName: "Sam" })];
+  const { repo, calls, groupsByKey, rowsById } = createFakeRepo([makeAccount()], rows, {}, [makeGroup()]);
+  const { deps, groupUpsertCalls, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 2);
+  assert.deepEqual(groupUpsertCalls, [
+    { accessToken: "access-token-fresh", locationId: LOCATION_ID, name: "Run Club", groupKey: "120363012345678901" },
+  ]);
+  assert.equal(groupsByKey.get(`${TENANT_ID}:${GROUP_JID}`)!.ghlContactId, "group-contact-1");
+  const storeIndex = calls.findIndex((c) => c.method === "setWhatsappGroupContact");
+  const firstClaimIndex = calls.findIndex((c) => c.method === "claimWhatsappInboundMessage");
+  assert.ok(storeIndex >= 0 && storeIndex < firstClaimIndex, "the group contact is stored before the row is claimed and posted");
+  assert.deepEqual(calls[storeIndex].args, [TENANT_ID, GROUP_JID, "group-contact-1"]);
+  assert.deepEqual(postCalls.map((c) => [c.contactId, c.body]), [
+    ["group-contact-1", "Jane: hello"],
+    ["group-contact-1", "Sam: second"],
+  ]);
+  assert.ok([...rowsById.values()].every((r) => r.resolution === "ghl_pushed"));
+});
+
+test("drainGhlInboundReplies (groups): a group that already has a GHL contact reuses it — no contact call at all", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeGroupRow()], {}, [makeGroup({ ghlContactId: "stored-group-contact" })]);
+  const { deps, upsertCalls, groupUpsertCalls, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(groupUpsertCalls.length, 0);
+  assert.equal(upsertCalls.length, 0);
+  assert.equal(calls.filter((c) => c.method === "setWhatsappGroupContact").length, 0);
+  assert.equal(postCalls[0]?.contactId, "stored-group-contact");
+});
+
+test("drainGhlInboundReplies (groups): the sender prefix falls back to the sender's number when the name is null or blank", async () => {
+  const rows = [makeGroupRow({ senderName: null, body: "one" }), makeGroupRow({ senderName: "   ", body: "two" }), makeGroupRow({ senderName: "  Jo  ", body: "three" })];
+  const { repo } = createFakeRepo([makeAccount()], rows, {}, [makeGroup()]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.deepEqual(postCalls.map((c) => c.body), ["+447700900555: one", "+447700900555: two", "Jo: three"]);
+});
+
+test("drainGhlInboundReplies (groups): a group row never upserts the sender as a contact and never records stickiness", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeGroupRow()], {}, [makeGroup()]);
+  const { deps, upsertCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(upsertCalls.length, 0, "senders are not contacts");
+  assert.equal(calls.filter((c) => c.method === "recordInboundForStickiness").length, 0);
+});
+
+test("drainGhlInboundReplies (groups): media rows use the existing media path with the same sender prefix", async () => {
+  const rows = [
+    makeGroupRow({ body: null, messageType: "imageMessage" }),
+    makeGroupRow({ body: null, messageType: "imageMessage", mediaStatus: "stored", mediaPath: "tenant-1/WAGRP1.jpg" }),
+  ];
+  const { repo } = createFakeRepo([makeAccount()], rows, {}, [makeGroup()]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, `Jane: ${describeInboundMediaPlaceholder("imageMessage")}`);
+  assert.equal(postCalls[1]?.body, "Jane: Photo received on WhatsApp");
+  assert.deepEqual((postCalls[1] as unknown as { attachments?: string[] }).attachments, [
+    "https://storage.example.supabase.co/object/sign/wa-media/tenant-1/WAGRP1.jpg?token=fake",
+  ]);
+});
+
+test("drainGhlInboundReplies (groups): with more than one number, the number prefix comes first — '[Sales] Jane: hello'", async () => {
+  const groups = [makeGroup({ tenantId: SECOND_TENANT_ID })];
+  const { repo } = createFakeRepo([makeAccount()], [makeGroupRow({ coachId: SECOND_TENANT_ID })], TWO_NUMBERS, groups);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "[Sales] Jane: hello");
+});
+
+test("drainGhlInboundReplies (groups): a disabled or unknown group never reaches GHL — resolved 'group_not_enabled' with the fixed string", async () => {
+  const disabled = makeGroupRow();
+  const unknown = makeGroupRow({ groupJid: "999999999999@g.us" });
+  // The same JID enabled on ANOTHER tenant must not count for this row's tenant.
+  const groups = [makeGroup({ enabled: false }), makeGroup({ tenantId: SECOND_TENANT_ID, groupJid: "999999999999@g.us" })];
+  const { repo, rowsById } = createFakeRepo([makeAccount()], [disabled, unknown], {}, groups);
+  const { deps, upsertCalls, groupUpsertCalls, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.groupNotEnabled, 2);
+  assert.equal(result.pushed, 0);
+  assert.equal(upsertCalls.length + groupUpsertCalls.length + postCalls.length, 0);
+  for (const row of [disabled, unknown]) {
+    const stored = rowsById.get(row.id)!;
+    assert.notEqual(stored.processedAt, null, "claimed, so it is never listed again");
+    assert.equal(stored.resolution, "group_not_enabled");
+    assert.equal(stored.pushError, GHL_INBOUND_REASONS.groupNotEnabled);
+  }
+  assert.equal(GHL_INBOUND_REASONS.groupNotEnabled, "WhatsApp group sync is turned off for this group");
+});
+
+test("drainGhlInboundReplies (groups): a group-contact create failure is retryable pre-claim — nothing stored, nothing posted", async () => {
+  const row = makeGroupRow();
+  const { repo, rowsById, calls } = createFakeRepo([makeAccount()], [row], {}, [makeGroup()]);
+  const { deps, postCalls } = makeDeps({
+    upsertGroupContact: async () => ({ ok: false, kind: "rate_limited", error: "GHL contact upsert rejected (HTTP 429)" }),
+  });
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.retried, 1);
+  assert.equal(postCalls.length, 0);
+  assert.equal(calls.filter((c) => c.method === "setWhatsappGroupContact").length, 0);
+  const stored = rowsById.get(row.id)!;
+  assert.equal(stored.processedAt, null);
+  assert.equal(stored.pushAttempts, 1);
+  assert.equal(stored.pushError, "GHL contact upsert rejected (HTTP 429)");
+});
+
+test("drainGhlInboundReplies (groups): the tenant's group list is read once per pass, not once per row", async () => {
+  const rows = [makeGroupRow(), makeGroupRow(), makeGroupRow()];
+  const { repo, calls } = createFakeRepo([makeAccount()], rows, {}, [makeGroup()]);
+  const { deps, groupUpsertCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(calls.filter((c) => c.method === "listWhatsappGroups").length, 1);
+  assert.equal(groupUpsertCalls.length, 1);
 });

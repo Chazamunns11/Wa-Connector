@@ -248,7 +248,10 @@ export function buildGhlHealthSnapshot(
       continue;
     }
     const kind = INBOUND_PROBLEM_KIND[row.resolution];
-    if (!kind) continue; // an unrecognised resolution string (shouldn't happen — see this module's header) — ignore rather than guess
+    // Not a problem kind: 'group_not_enabled' (a group row for a group that
+    // is switched off — deliberate, never pushed), or an unrecognised string
+    // (shouldn't happen — see this module's header). Ignore rather than guess.
+    if (!kind) continue;
 
     if (kind === "ghl_push_uncertain") bucket.uncertainCount++;
     else if (kind === "ghl_push_failed") bucket.failedCount++;

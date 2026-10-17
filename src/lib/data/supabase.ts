@@ -23,6 +23,7 @@ import type {
   GhlOutboundSendState,
   LocationNumber,
   Scope,
+  WhatsappGroup,
   WhatsappInboundMessage,
   WhatsappSessionStatus,
   WhatsappSessionSummary,
@@ -40,6 +41,7 @@ import {
   type GhlWaitingHealthRow,
 } from "@/lib/ghl-health";
 import { nextFreeSlot, promoteAfterRemoval, shouldReplaceSticky } from "@/lib/location-numbers";
+import { isWhatsappGroupJid } from "@/lib/whatsapp-bridge";
 import type { GhlRepository } from "./repository";
 
 /**
@@ -120,6 +122,9 @@ interface WhatsappInboundMessageRow {
   media_path?: string | null;
   media_mime?: string | null;
   media_size_bytes?: number | null;
+  /** Opt-in groups (0004) — see `WhatsappInboundMessage.groupJid`/`senderName`. */
+  group_jid?: string | null;
+  sender_name?: string | null;
 }
 
 function mapWhatsappInboundMessage(row: WhatsappInboundMessageRow): WhatsappInboundMessage {
@@ -139,6 +144,8 @@ function mapWhatsappInboundMessage(row: WhatsappInboundMessageRow): WhatsappInbo
     mediaPath: row.media_path ?? null,
     mediaMime: row.media_mime ?? null,
     mediaSizeBytes: row.media_size_bytes ?? null,
+    groupJid: row.group_jid ?? null,
+    senderName: row.sender_name ?? null,
   };
 }
 
@@ -153,8 +160,11 @@ function isFreshPendingMedia(row: WhatsappInboundMessageRow): boolean {
 /** Media plan (docs/MEDIA-PLAN.md §7d/§8) — same bucket name the bridge's own `WA_MEDIA_BUCKET` config defaults to (`services/whatsapp-bridge/src/config.ts`); read from the SAME env var name here so the two never silently drift onto different buckets. */
 const MEDIA_BUCKET = process.env.WA_MEDIA_BUCKET?.trim() || "wa-media";
 
+// `group_jid, sender_name` (0004) sit in the BASE list: 0004's deploy order
+// is "apply before the portal build that reads these", and a group row read
+// without `group_jid` would be pushed as a one-to-one reply from its sender.
 const WHATSAPP_INBOUND_BASE_COLUMNS =
-  "id, coach_id, from_phone, body, message_type, received_at, processed_at, resolution, push_attempts, push_error, created_at";
+  "id, coach_id, from_phone, body, message_type, received_at, processed_at, resolution, push_attempts, push_error, created_at, group_jid, sender_name";
 const WHATSAPP_INBOUND_MEDIA_COLUMNS = "media_status, media_path, media_mime, media_size_bytes";
 
 /**
@@ -424,6 +434,31 @@ function mapLocationNumber(row: LocationNumberRow): LocationNumber {
   return { tenantId: row.tenant_id, slot: row.slot as LocationNumber["slot"], isDefault: row.is_default, label: row.label };
 }
 
+interface WhatsappGroupRow {
+  tenant_id: string;
+  group_jid: string;
+  name: string;
+  enabled: boolean;
+  ghl_contact_id: string | null;
+  left_at: string | null;
+}
+
+const WHATSAPP_GROUP_COLUMNS = "tenant_id, group_jid, name, enabled, ghl_contact_id, left_at";
+
+function mapWhatsappGroup(row: WhatsappGroupRow): WhatsappGroup {
+  return {
+    tenantId: row.tenant_id,
+    groupJid: row.group_jid,
+    name: row.name,
+    enabled: row.enabled,
+    ghlContactId: row.ghl_contact_id,
+    leftAt: row.left_at,
+  };
+}
+
+/** 0004's `char_length(name) <= 100` — trimmed by whole characters (code points, as Postgres counts them), never mid-emoji. */
+const WHATSAPP_GROUP_NAME_MAX = 100;
+
 /** Postgres unique_violation. */
 function isUniqueViolation(error: { code?: string } | null): boolean {
   return error?.code === "23505";
@@ -665,6 +700,89 @@ export class SupabaseGhlRepository implements GhlRepository {
       .eq("location_id", locationId)
       .eq("ghl_contact_id", ghlContactId)
       .lt("last_inbound_at", receivedAtIso);
+    if (error) throw error;
+  }
+
+  async listWhatsappGroups(tenantId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_groups")
+      .select(WHATSAPP_GROUP_COLUMNS)
+      .eq("tenant_id", tenantId)
+      .order("name", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as WhatsappGroupRow[]).map(mapWhatsappGroup);
+  }
+
+  async setWhatsappGroupEnabled(tenantId: string, groupJid: string, name: string, enabled: boolean) {
+    // Bridge hard rule 3: only a JID from WhatsApp's own group list, in the
+    // exact shape 0004's CHECK and the bridge's GROUP_JID_RE accept.
+    if (!isWhatsappGroupJid(groupJid)) throw new Error("setWhatsappGroupEnabled: groupJid is not a WhatsApp group id");
+    const supabase = getServiceClient();
+    const row: Record<string, unknown> = {
+      tenant_id: tenantId,
+      group_jid: groupJid,
+      name: Array.from(name.trim()).slice(0, WHATSAPP_GROUP_NAME_MAX).join(""),
+      enabled,
+    };
+    // Re-enabling a group the number had left clears the "Left" mark;
+    // switching off leaves left_at as it was. ghl_contact_id is never sent,
+    // so the upsert keeps an existing group contact.
+    if (enabled) row.left_at = null;
+    const { error } = await supabase.from("whatsapp_groups").upsert(row, { onConflict: "tenant_id,group_jid" });
+    if (error) throw error;
+  }
+
+  async markWhatsappGroupLeft(tenantId: string, groupJid: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("whatsapp_groups")
+      .update({ left_at: new Date().toISOString() })
+      .eq("tenant_id", tenantId)
+      .eq("group_jid", groupJid);
+    if (error) throw error;
+  }
+
+  async getWhatsappGroupByContact(locationId: string, ghlContactId: string) {
+    const supabase = getServiceClient();
+    // Every number of the location: its ghl_location_numbers rows, plus the
+    // account's own tenant (a location installed before it had any number
+    // row — same fallback as getGhlAccountByTenantId).
+    const [numbers, accountResult] = await Promise.all([
+      this.listLocationNumbers(locationId),
+      supabase.from("ghl_accounts").select("tenant_id").eq("location_id", locationId).maybeSingle(),
+    ]);
+    if (accountResult.error) throw accountResult.error;
+    const tenantIds = new Set(numbers.map((n) => n.tenantId));
+    if (accountResult.data) tenantIds.add((accountResult.data as { tenant_id: string }).tenant_id);
+    if (tenantIds.size === 0) return null;
+    const { data, error } = await supabase
+      .from("whatsapp_groups")
+      .select(WHATSAPP_GROUP_COLUMNS)
+      .in("tenant_id", [...tenantIds])
+      .eq("ghl_contact_id", ghlContactId);
+    if (error) throw error;
+    const groups = ((data ?? []) as WhatsappGroupRow[]).map(mapWhatsappGroup);
+    // Normally one row. Two of the location's numbers in the same group share
+    // one GHL contact (the upsert dedupes on the group's email), so prefer an
+    // enabled group the number is still in, then a stable order.
+    groups.sort(
+      (a, b) =>
+        Number(b.enabled) - Number(a.enabled) ||
+        Number(a.leftAt !== null) - Number(b.leftAt !== null) ||
+        a.tenantId.localeCompare(b.tenantId)
+    );
+    const group = groups[0];
+    return group ? { tenantId: group.tenantId, groupJid: group.groupJid, enabled: group.enabled } : null;
+  }
+
+  async setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("whatsapp_groups")
+      .update({ ghl_contact_id: ghlContactId })
+      .eq("tenant_id", tenantId)
+      .eq("group_jid", groupJid);
     if (error) throw error;
   }
 

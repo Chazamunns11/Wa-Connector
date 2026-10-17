@@ -23,8 +23,10 @@ import {
   ghlTenantKeyQueryFilters,
   listGhlInstalledLocations,
   parseGhlInstalledLocations,
+  upsertGhlGroupContact,
   verifyGhlSignature,
 } from "@/lib/ghl";
+import { listWhatsappGroups, refreshWhatsappGroups, sendWhatsappMessage } from "@/lib/whatsapp-bridge";
 import {
   drainGhlOutboundStatuses,
   handleProviderOutboundMessage,
@@ -2441,4 +2443,208 @@ test("drainMultipartRow: the same retries from the DEFAULT number -> today's str
   assert.equal(repoBundle.rows.get(row.id)!.refusalReason, GHL_PROVIDER_REASONS.notConnected);
   assert.equal(repoBundle.attachments.get(part.id)!.refusalReason, GHL_PROVIDER_REASONS.notConnected);
   assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notConnected);
+});
+
+// ---------------------------------------------------------------------------
+// Opt-in WhatsApp groups (Task 8) — `upsertGhlGroupContact` (src/lib/ghl.ts)
+// and the bridge client's group calls (src/lib/whatsapp-bridge.ts), against a
+// stubbed `fetch` that records each request.
+// ---------------------------------------------------------------------------
+
+interface CapturedRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+async function withCapturedFetch<T>(
+  respond: (req: CapturedRequest) => Promise<Response>,
+  run: () => Promise<T>
+): Promise<{ result: T; requests: CapturedRequest[] }> {
+  const requests: CapturedRequest[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const req: CapturedRequest = {
+      url: String(input),
+      method: init?.method ?? "GET",
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+    };
+    requests.push(req);
+    return respond(req);
+  }) as typeof fetch;
+  try {
+    return { result: await run(), requests };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+test("upsertGhlGroupContact: posts name '<group> (WhatsApp group)', the whatsapp-group tag and the placeholder email — never a phone", async () => {
+  const { result, requests } = await withCapturedFetch(
+    async () => jsonResponse(200, { new: true, contact: { id: "group-contact-1" } }),
+    () => upsertGhlGroupContact("token", "loc-1", { name: "  Run Club  ", groupKey: "120363012345678901" })
+  );
+  assert.deepEqual(result, { ok: true, contactId: "group-contact-1", isNew: true });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://services.leadconnectorhq.com/contacts/upsert");
+  assert.equal(requests[0].method, "POST");
+  assert.equal(requests[0].headers.authorization, "Bearer token");
+  assert.equal(requests[0].headers.version, "2021-07-28");
+  assert.deepEqual(requests[0].body, {
+    locationId: "loc-1",
+    name: "Run Club (WhatsApp group)",
+    email: "group-120363012345678901@groups.pingwren.invalid",
+    tags: ["whatsapp-group"],
+  });
+  assert.equal("phone" in (requests[0].body as Record<string, unknown>), false);
+});
+
+test("upsertGhlGroupContact: a long group name is trimmed so the whole contact name is at most 100 characters", async () => {
+  const longName = "😀".repeat(150);
+  const { requests } = await withCapturedFetch(
+    async () => jsonResponse(200, { contact: { id: "c" } }),
+    () => upsertGhlGroupContact("token", "loc-1", { name: longName, groupKey: "4477009001231600000000" })
+  );
+  const name = (requests[0].body as { name: string }).name;
+  assert.equal([...name].length, 100);
+  assert.ok(name.endsWith("😀 (WhatsApp group)"), "trimmed by whole characters, never mid-emoji");
+});
+
+test("upsertGhlGroupContact: same fixed error strings as upsertGhlContact — never the raw body", async () => {
+  const rejected = await withCapturedFetch(
+    async () => jsonResponse(422, { message: "secret upstream detail" }),
+    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1" })
+  );
+  assert.deepEqual(rejected.result, { ok: false, kind: "rejected", error: "GHL contact upsert rejected (HTTP 422)" });
+
+  const limited = await withCapturedFetch(async () => jsonResponse(429, {}), () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1" }));
+  assert.deepEqual(limited.result, { ok: false, kind: "rate_limited", error: "GHL contact upsert rejected (HTTP 429)" });
+
+  const noId = await withCapturedFetch(async () => jsonResponse(200, { contact: {} }), () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1" }));
+  assert.deepEqual(noId.result, { ok: false, kind: "rejected", error: "GHL contact upsert response had no contact id" });
+
+  const thrown = await withCapturedFetch(
+    async () => {
+      throw new Error("ECONNRESET");
+    },
+    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1" })
+  );
+  assert.deepEqual(thrown.result, { ok: false, kind: "unreachable", error: "GHL contact upsert request failed" });
+});
+
+test("upsertGhlGroupContact: a groupKey that is not all digits is refused without a request", async () => {
+  const { result, requests } = await withCapturedFetch(
+    async () => jsonResponse(200, { contact: { id: "c" } }),
+    () => upsertGhlGroupContact("token", "loc-1", { name: "G", groupKey: "1203@evil.example" })
+  );
+  assert.equal(requests.length, 0);
+  assert.equal(result.ok, false);
+  assert.equal(!result.ok && result.kind, "rejected");
+});
+
+const BRIDGE_COACH = "33333333-3333-4333-8333-333333333333";
+
+async function withBridgeEnv<T>(run: () => Promise<T>): Promise<T> {
+  const saved = { url: process.env.WHATSAPP_BRIDGE_URL, secret: process.env.WHATSAPP_BRIDGE_SECRET };
+  process.env.WHATSAPP_BRIDGE_URL = "https://bridge.example.test";
+  process.env.WHATSAPP_BRIDGE_SECRET = "bridge-secret";
+  try {
+    return await run();
+  } finally {
+    if (saved.url === undefined) delete process.env.WHATSAPP_BRIDGE_URL;
+    else process.env.WHATSAPP_BRIDGE_URL = saved.url;
+    if (saved.secret === undefined) delete process.env.WHATSAPP_BRIDGE_SECRET;
+    else process.env.WHATSAPP_BRIDGE_SECRET = saved.secret;
+  }
+}
+
+test("listWhatsappGroups: GET /sessions/:id/groups -> the groups; malformed entries make the whole body 'internal'", async () => {
+  const groups = [{ jid: "120363012345678901@g.us", name: "Run Club", size: 12 }];
+  const ok = await withBridgeEnv(() => withCapturedFetch(async () => jsonResponse(200, { ok: true, groups }), () => listWhatsappGroups(BRIDGE_COACH)));
+  assert.deepEqual(ok.result, { ok: true, groups });
+  assert.equal(ok.requests[0].url, `https://bridge.example.test/sessions/${BRIDGE_COACH}/groups`);
+  assert.equal(ok.requests[0].method, "GET");
+  assert.equal(ok.requests[0].headers.authorization, "Bearer bridge-secret");
+
+  const malformed = await withBridgeEnv(() =>
+    withCapturedFetch(async () => jsonResponse(200, { ok: true, groups: [{ jid: 1 }] }), () => listWhatsappGroups(BRIDGE_COACH))
+  );
+  assert.equal(malformed.result.ok, false);
+  assert.equal(!malformed.result.ok && malformed.result.code, "internal");
+
+  const notConnected = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(409, { ok: false, error: { code: "session_not_connected", message: "session status is 'disconnected'" } }),
+      () => listWhatsappGroups(BRIDGE_COACH)
+    )
+  );
+  assert.equal(!notConnected.result.ok && notConnected.result.code, "session_not_connected");
+});
+
+test("listWhatsappGroups / refreshWhatsappGroups: unconfigured -> 'unconfigured' with no request", async () => {
+  const saved = { url: process.env.WHATSAPP_BRIDGE_URL, secret: process.env.WHATSAPP_BRIDGE_SECRET };
+  delete process.env.WHATSAPP_BRIDGE_URL;
+  delete process.env.WHATSAPP_BRIDGE_SECRET;
+  try {
+    const { result, requests } = await withCapturedFetch(async () => jsonResponse(200, {}), async () => [
+      await listWhatsappGroups(BRIDGE_COACH),
+      await refreshWhatsappGroups(BRIDGE_COACH),
+    ]);
+    assert.equal(requests.length, 0);
+    for (const r of result) assert.equal(!r.ok && r.code, "unconfigured");
+  } finally {
+    if (saved.url !== undefined) process.env.WHATSAPP_BRIDGE_URL = saved.url;
+    if (saved.secret !== undefined) process.env.WHATSAPP_BRIDGE_SECRET = saved.secret;
+  }
+});
+
+test("refreshWhatsappGroups: POST /sessions/:id/groups/refresh -> ok; a 502 surfaces the bridge's code", async () => {
+  const ok = await withBridgeEnv(() => withCapturedFetch(async () => jsonResponse(200, { ok: true }), () => refreshWhatsappGroups(BRIDGE_COACH)));
+  assert.deepEqual(ok.result, { ok: true });
+  assert.equal(ok.requests[0].url, `https://bridge.example.test/sessions/${BRIDGE_COACH}/groups/refresh`);
+  assert.equal(ok.requests[0].method, "POST");
+
+  const failed = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(502, { ok: false, error: { code: "groups_refresh_failed", message: "could not reload" } }),
+      () => refreshWhatsappGroups(BRIDGE_COACH)
+    )
+  );
+  assert.equal(!failed.result.ok && failed.result.code, "groups_refresh_failed");
+});
+
+test("sendWhatsappMessage: a groupJid input sends { groupJid } and no 'to'; a phone input is unchanged", async () => {
+  const message = {
+    id: "m1",
+    idempotencyKey: "key-1",
+    toPhone: null,
+    groupJid: "120363012345678901@g.us",
+    status: "accepted",
+    waMessageId: null,
+    error: null,
+    createdAt: "2026-10-17T00:00:00.000Z",
+    sentAt: null,
+  };
+  const group = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(202, { ok: true, replay: false, message }),
+      () => sendWhatsappMessage({ coachId: BRIDGE_COACH, groupJid: "120363012345678901@g.us", text: "hi all", idempotencyKey: "key-1" })
+    )
+  );
+  assert.deepEqual(group.requests[0].body, { groupJid: "120363012345678901@g.us", text: "hi all", idempotencyKey: "key-1" });
+  assert.deepEqual(group.result, { ok: true, replay: false, message });
+
+  const phone = await withBridgeEnv(() =>
+    withCapturedFetch(
+      async () => jsonResponse(202, { ok: true, replay: false, message: { ...message, toPhone: "+447700900123", groupJid: null } }),
+      () => sendWhatsappMessage({ coachId: BRIDGE_COACH, to: "+447700900123", text: "hi", idempotencyKey: "key-2" })
+    )
+  );
+  assert.deepEqual(phone.requests[0].body, { to: "+447700900123", text: "hi", idempotencyKey: "key-2" });
 });
