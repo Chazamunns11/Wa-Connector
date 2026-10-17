@@ -13,6 +13,8 @@ Order of work from the design spec (`docs/superpowers/specs/2026-10-12-brand-wha
 | Typing simulation before each text | `services/whatsapp-bridge/src/typing.ts` | On by default |
 | Warm-up for newly linked numbers | `src/pacing.ts`, migration `0002` | Off by default; apply 0002 before deploying the bridge |
 | Public status page | `src/app/status/page.tsx`, `src/lib/public-status.ts` | No customer data, 60s cache |
+| B. Several numbers per sub-account | Built on branch `claude/eloquent-mccarthy-m60n6c`. Plan: `docs/superpowers/plans/2026-10-17-multiple-numbers-and-groups.md` | Migration `0003`. Up to 3 numbers by slot, default plus sticky sending number |
+| E. Groups | Built on the same branch, same plan | Migrations `0004` and `0005`. Opt-in groups, 5 cap units per send. Apply 0003 to 0005 before deploying |
 
 ## Specs written (17 Oct, drafts for review)
 

@@ -69,6 +69,24 @@ Deploy order for the first live run: apply `supabase/migrations/0001_init.sql`
 then every later migration in number order (`0002_…` adds
 `whatsapp_sessions.phone_linked_at`, which `wipeCreds` writes)
 → deploy bridge → set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
+Migrations `0003` (numbers), `0004` (groups) and `0005`
+(`whatsapp_messages.group_jid`, `to_phone` nullable) must all be applied
+before this version of the bridge is deployed.
+
+## Routes added for groups
+
+All need the bearer secret, like every route except `/health`.
+
+| Route | Does |
+| --- | --- |
+| `GET /sessions/:id/groups` | Lists the number's groups live from WhatsApp (`{ groups: [{ jid, name, size }] }`). 409 `session_not_connected` if the session is down, 502 `groups_unavailable` if WhatsApp will not answer. Nothing is stored or logged. |
+| `POST /sessions/:id/groups/refresh` | Reloads the enabled-group set from `whatsapp_groups`. The app calls it after the owner changes a group. 502 `groups_refresh_failed` if the load fails. |
+| `POST /sessions/:id/send` with `groupJid` | Sends to an enabled group. Give exactly one of `to` or `groupJid` (both is 400 `invalid_body`). A `groupJid` that is not in the enabled set is 400 `group_not_enabled`. |
+
+A group send costs **5** daily-cap units (a normal send costs 1), and the
+cap counts in-flight units, so a burst cannot overshoot it. The enabled-group
+set fails closed: it is empty until it loads and after a failed load, so
+group traffic is dropped, inbound and outbound, until a load succeeds.
 
 ## Key rotation (`WA_CREDS_KEY`)
 

@@ -34,3 +34,24 @@ runs on Node 24, and its tests must be run on Node 24.
 stuck for over an hour), and never names a customer or shows counts. Its two
 reads are cached for 60 seconds. Link to it from the marketing site and
 support replies. The logic is in `src/lib/public-status.ts`.
+
+## Numbers and groups
+
+A GHL sub-account can link up to 3 WhatsApp numbers. Each number is its own
+tenant on the bridge, with its own session, pacing and daily cap, and the
+embed and connect pages address them by slot (1 to 3), never by tenant id.
+One number is the default for sending; a contact who has messaged a
+particular number gets replies from that number (sticky). Removing the
+default promotes the lowest remaining slot, and the last number cannot be
+removed. The app routes are `/api/crm/embed/numbers` and
+`/api/crm/embed/groups`.
+
+WhatsApp groups are opt-in. The owner picks which groups to sync; each
+enabled group appears in GHL Conversations as one synthetic contact, and
+messages from groups that were never enabled are not stored. Sending to a
+group contact posts to the group and costs 5 daily-cap units.
+
+Apply migrations `0003` to `0005` (in order, after `0001` and `0002`) before
+deploying the new bridge and app. Details are in
+[`docs/GO-LIVE-FOUNDATION.md`](docs/GO-LIVE-FOUNDATION.md) and
+[`services/whatsapp-bridge/README.md`](services/whatsapp-bridge/README.md).
