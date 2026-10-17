@@ -1323,6 +1323,22 @@ const REACTION_QUOTE_MAX_CODE_POINTS = 80;
 export const EDIT_PREFIX = "✏️ Edited: ";
 export const DELETE_TEXT = "🗑 Deleted a message";
 
+/**
+ * Message events — the reply text of a quoted reply's body. With
+ * WA_INBOUND_EVENTS_ENABLED on, the bridge stores a quoted reply as
+ * `↩ "<quote>"`, a newline, then the reply (the prefix is always one line).
+ * Returns the text after the first newline when the body starts with `↩ `
+ * and has one; otherwise the body unchanged. Pure.
+ */
+export function stripQuotePrefix(body: string): string {
+  if (!body.startsWith("↩ ")) return body;
+  const newline = body.indexOf("\n");
+  return newline === -1 ? body : body.slice(newline + 1);
+}
+
+/** Any run of line breaks (CR, LF, NEL, LS, PS) and the whitespace around it, so it can become one space. */
+const LINE_BREAK_RUN = /\s*[\r\n\u0085\u2028\u2029]+\s*/g;
+
 function cutCodePoints(text: string, max: number): string {
   const points = Array.from(text);
   return points.length <= max ? text : points.slice(0, max).join("");
@@ -1332,6 +1348,8 @@ function cutCodePoints(text: string, max: number): string {
  * Message events — the text posted to GHL for an `edit`, `reaction` or
  * `delete` row. Pure. `originalBody` is the stored body of the message a
  * reaction targets (null when it is gone or was ours); only a reaction reads it.
+ * A reaction's quote is the original's reply text (`stripQuotePrefix`) on
+ * one line, cut to 80 code points.
  * The result is capped at 500 code points, cutting the contact's text, never the prefix.
  */
 export function renderInboundEvent(row: WhatsappInboundMessage, originalBody: string | null): string {
@@ -1343,8 +1361,14 @@ export function renderInboundEvent(row: WhatsappInboundMessage, originalBody: st
   } else {
     const emoji = row.body ?? "";
     if (row.targetFromMe === true) rendered = `${emoji} reacted to your message`;
-    else if (originalBody) rendered = `${emoji} reacted to "${cutCodePoints(originalBody, REACTION_QUOTE_MAX_CODE_POINTS)}"`;
-    else rendered = `${emoji} reacted to a message`;
+    else {
+      // The quote is one line of the contact's own words: a quoted reply's
+      // `↩ "…"` prefix is dropped and line breaks become one space.
+      const quoted = originalBody ? stripQuotePrefix(originalBody).replace(LINE_BREAK_RUN, " ").trim() : "";
+      rendered = quoted
+        ? `${emoji} reacted to "${cutCodePoints(quoted, REACTION_QUOTE_MAX_CODE_POINTS)}"`
+        : `${emoji} reacted to a message`;
+    }
   }
   return cutCodePoints(rendered, INBOUND_EVENT_MAX_CODE_POINTS);
 }

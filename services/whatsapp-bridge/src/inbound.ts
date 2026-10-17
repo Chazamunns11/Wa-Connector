@@ -477,9 +477,13 @@ function editedText(edited: proto.IMessage | null | undefined): string | null {
  *   - protocolMessage MESSAGE_EDIT -> "edit", body = the new text (or
  *     caption). No text at all -> `no_content`.
  *   - an `editedMessage` wrapper -> an edit only when it wraps a
- *     MESSAGE_EDIT protocolMessage (the wire shape), which names the target.
- *     A bare wrapper names no target and stays dropped. Its content is never
- *     unwrapped into a fresh reply.
+ *     MESSAGE_EDIT protocolMessage, which names the target. Baileys' own edit
+ *     builder (`generateWAMessageContent`, lib/Utils/messages.js ~L514) makes
+ *     a bare protocolMessage MESSAGE_EDIT; the `editedMessage` wrapper around
+ *     one is the phone client's wire shape. Both are handled. A wrapper with
+ *     anything else inside (a bare wrapper, a REVOKE, a reaction) names no
+ *     edit target and stays dropped. Its content is never unwrapped into a
+ *     fresh reply.
  *   - any other protocolMessage type, a poll, or an event with no target id
  *     -> `edit_reaction_or_system`, exactly as with events off.
  */
@@ -533,7 +537,7 @@ export function renderQuotePrefix(quoted: proto.IMessage): string {
   const content = normalizeMessageContent(quoted);
   const text = content?.conversation ?? content?.extendedTextMessage?.text ?? null;
   if (text) {
-    const oneLine = stripNul(text).replace(/\s*[\r\n]+\s*/g, " ");
+    const oneLine = stripNul(text).replace(/\s*[\r\n\u0085\u2028\u2029]+\s*/g, " ");
     return `↩ "${Array.from(oneLine).slice(0, MAX_QUOTE_CHARS).join("")}"`;
   }
   const type = content ? getContentType(content) : undefined;

@@ -755,6 +755,11 @@ test("events: a bare editedMessage wrapper with no MESSAGE_EDIT inside names no 
   );
 });
 
+test("events: an editedMessage wrapping a REVOKE, or a reaction, is dropped as edit_reaction_or_system (only a wrapped MESSAGE_EDIT is an edit)", () => {
+  assert.deepEqual(classifyEvent({ editedMessage: { message: revokePayload } }), { kind: "dropped", reason: "edit_reaction_or_system" });
+  assert.deepEqual(classifyEvent({ editedMessage: { message: reactionPayload } }), { kind: "dropped", reason: "edit_reaction_or_system" });
+});
+
 test("events: an edit of a caption carries the new caption as the body", () => {
   const reply = replyOf(
     classifyEvent({ protocolMessage: { type: MESSAGE_EDIT, key: { id: "TARGET3" }, editedMessage: { imageMessage: { caption: "new caption" } } } })
@@ -838,6 +843,10 @@ test("quote: renderQuotePrefix keeps the first 80 code points of the quoted text
 
 test("quote: renderQuotePrefix keeps the prefix on one line", () => {
   assert.equal(renderQuotePrefix({ conversation: "line one\nline two" }), '↩ "line one line two"');
+});
+
+test("quote: renderQuotePrefix also collapses U+0085, U+2028 and U+2029 line breaks", () => {
+  assert.equal(renderQuotePrefix({ conversation: "one\u0085two \u2028 three\u2029four\r\n\u2028five" }), '↩ "one two three four five"');
 });
 
 test("quote: renderQuotePrefix media placeholders", () => {

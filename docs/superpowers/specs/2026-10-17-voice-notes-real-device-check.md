@@ -38,19 +38,27 @@ in the boot log.
 
 ## Inbound events
 
-Set `WA_INBOUND_EVENTS_ENABLED=true` on the bridge. Turn on "Show reactions"
-and "Show deletes" for the test sub-account in the GHL embed. From the
-contact's phone, one at a time:
+Apply migration 0011 and deploy the app first, then set
+`WA_INBOUND_EVENTS_ENABLED=true` on the bridge. Turn on "Show reactions in
+GHL" and "Show deleted-message notices in GHL" for the test sub-account in the
+GHL embed. From the contact's phone, one at a time:
 
 1. Quote one of our messages and reply with text. Check the GHL body starts
    with the quote on its own line. Quote a photo, a voice note and a document
    too.
-2. Edit a message you sent.
-3. React to a message with an emoji.
-4. Remove the reaction. Nothing should post.
-5. Delete a message for everyone.
-6. Switch both embed toggles off and repeat 3 and 5. Nothing should post.
-7. Do 1 to 5 again inside a chat with disappearing messages on.
+2. Edit a message you sent. GHL shows `✏️ Edited: <new text>`.
+3. React to one of our messages with an emoji. GHL shows
+   `<emoji> reacted to your message`.
+4. React to one of the contact's own messages. GHL shows
+   `<emoji> reacted to "<that message>"`, quoting it.
+5. Remove a reaction. Nothing should post.
+6. Delete a message for everyone. GHL shows `🗑 Deleted a message`.
+7. Edit a message to `STOP`. The contact is opted out: a send from GHL to
+   them is refused. Reply `START` to opt back in.
+8. Quote one of our messages and reply `STOP`. The contact is opted out.
+   Reply `START` to opt back in.
+9. Switch both embed toggles off and repeat 3, 4 and 6. Nothing should post.
+10. Do 1 to 6 again inside a chat with disappearing messages on.
 
 Record what GHL shows for each, and whether "Customer replied" workflows fired.
 
@@ -67,8 +75,11 @@ Record what GHL shows for each, and whether "Customer replied" workflows fired.
 | --- | --- |
 | Quoted reply (text, photo, voice note, document) | |
 | Edit | |
-| Reaction (on, then off) | |
+| Reaction to our message (on, then off) | |
+| Reaction to the contact's own message (on, then off) | |
 | Reaction removed | |
 | Delete for everyone (on, then off) | |
+| Edit to STOP opts out | |
+| Quoted reply STOP opts out | |
 | Same, in a disappearing-messages chat | |
 | "Customer replied" fired? | |

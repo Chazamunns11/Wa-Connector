@@ -206,6 +206,7 @@ import {
   type AddGhlInboundMessageResult,
   type UpsertGhlContactResult,
   renderInboundEvent,
+  stripQuotePrefix,
 } from "@/lib/ghl";
 import {
   resolveGhlAccessToken,
@@ -309,7 +310,7 @@ export const GROUP_NOT_ENABLED_RESOLUTION = "group_not_enabled";
 export const MISSED_CALL_STALE_MS = 6 * 60 * 60 * 1000;
 /** Terminal resolution for a missed call older than `MISSED_CALL_STALE_MS` — never posted to GHL. */
 export const MISSED_CALL_STALE_RESOLUTION = "missed_call_stale";
-/** Terminal resolution for a reaction or delete the sub-account has not turned on — never posted to GHL. */
+/** Terminal resolution for a reaction or delete the sub-account has not turned on, or an event row of an unknown kind — never posted to GHL. */
 export const EVENT_SUPPRESSED_RESOLUTION = "event_suppressed";
 
 export interface DrainGhlInboundRepliesResult {
@@ -331,7 +332,7 @@ export interface DrainGhlInboundRepliesResult {
   groupNotEnabled: number;
   /** Missed calls older than `MISSED_CALL_STALE_MS` — `resolution: 'missed_call_stale'`, never posted. */
   staleMissedCalls: number;
-  /** Reactions and deletes the sub-account has not turned on — `resolution: 'event_suppressed'`, never posted. */
+  /** Reactions and deletes the sub-account has not turned on, and event rows of an unknown kind — `resolution: 'event_suppressed'`, never posted. */
   eventsSuppressed: number;
   /** Rows this pass whose text was a STOP-type keyword and recorded an opt-out (idempotent, so a retried row can count again). */
   optedOut: number;
@@ -456,7 +457,8 @@ interface PassMemos {
 
 /**
  * Classify one inbound text and persist the opt-out / opt-in for that
- * (tenant, number). Whole-message keyword match only (`classifyOptOutMessage`).
+ * (tenant, number). Whole-message keyword match only (`classifyOptOutMessage`),
+ * on the reply text of a quoted reply (`stripQuotePrefix`).
  * Idempotent: recording an opt-out twice or clearing an absent one is
  * harmless, so a row retried after a failed GHL push is safe. The message
  * itself is still delivered to GHL by the caller.
@@ -478,7 +480,11 @@ export async function applyOptOutKeyword(
   // Only plain messages and edits (their new text) are text the contact typed
   // as a keyword; a missed call, reaction or delete never is.
   if (row.eventKind && row.eventKind !== "edit") return null;
-  const decision = classifyOptOutMessage(row.body);
+  // An event row of a kind this app doesn't know is never keyword text.
+  if (row.messageType === "event" && row.eventKind !== "edit") return null;
+  // A quoted reply (events on) is `↩ "<quote>"`, a newline, then the reply:
+  // classify the reply, so a quoted "STOP" opts out like a plain one.
+  const decision = classifyOptOutMessage(row.body === null ? null : stripQuotePrefix(row.body));
   if (!decision) return null;
   if (decision.kind === "opt_out") {
     await repo.recordOptOut({ tenantId: row.coachId, phone: row.fromPhone, keyword: decision.keyword, ghlContactId });
@@ -486,6 +492,11 @@ export async function applyOptOutKeyword(
   }
   await repo.clearOptOut(row.coachId, row.fromPhone);
   return "opt_in";
+}
+
+/** The event kinds a `messageType "event"` row may carry that this app renders. */
+function isKnownEventKind(kind: WhatsappInboundMessage["eventKind"]): boolean {
+  return kind === "edit" || kind === "reaction" || kind === "delete";
 }
 
 /** One row's full pipeline — see this file's header for the sequence and retry table. */
@@ -526,6 +537,20 @@ async function processGhlInboundRow(
     }
     await repo.resolveGhlInboundMessage(row.id, { resolution: MISSED_CALL_STALE_RESOLUTION, pushError: null });
     result.staleMissedCalls++;
+    return;
+  }
+
+  // An event row (`messageType "event"`) of a kind this app doesn't know
+  // (a newer bridge, or a row read without 0011's columns) is never posted:
+  // posting it would show a reaction or delete as a plain message.
+  if (row.messageType === "event" && !isKnownEventKind(row.eventKind)) {
+    const claimed = await repo.claimWhatsappInboundMessage(row.id);
+    if (!claimed) {
+      result.claimLost++;
+      return;
+    }
+    await repo.resolveGhlInboundMessage(row.id, { resolution: EVENT_SUPPRESSED_RESOLUTION, pushError: null });
+    result.eventsSuppressed++;
     return;
   }
 

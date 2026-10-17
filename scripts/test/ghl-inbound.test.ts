@@ -23,7 +23,8 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { describeInboundMediaPlaceholder, describeMissedCall, renderInboundEvent, MISSED_VIDEO_CALL_TEXT, MISSED_VOICE_CALL_TEXT } from "@/lib/ghl";
+import { describeInboundMediaPlaceholder, describeMissedCall, renderInboundEvent, stripQuotePrefix, MISSED_VIDEO_CALL_TEXT, MISSED_VOICE_CALL_TEXT } from "@/lib/ghl";
+import { optedOutReason, type GhlProviderRepo } from "@/lib/ghl-provider";
 import type { AddGhlInboundMessageResult, UpsertGhlContactResult } from "@/lib/ghl";
 import {
   drainGhlInboundReplies,
@@ -1617,7 +1618,7 @@ test("reaction \"STOP\" is not a keyword", async () => {
   assert.equal(result.optedOut, 0);
 });
 
-test("a suppressed reaction on a needs-no-token path makes no GHL call", async () => {
+test("a suppressed reaction upserts no contact and posts nothing", async () => {
   const row = eventRow("reaction", { body: "👍" });
   const { repo } = createFakeRepo([makeAccount()], [row]);
   const { deps, postCalls, upsertCalls } = makeDeps();
@@ -1626,4 +1627,136 @@ test("a suppressed reaction on a needs-no-token path makes no GHL call", async (
 
   assert.equal(postCalls.length, 0);
   assert.equal(upsertCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Message events — final review fixes.
+// ---------------------------------------------------------------------------
+
+test("stripQuotePrefix: returns the reply after the quote line, else the body unchanged", () => {
+  assert.equal(stripQuotePrefix('↩ "are you free?"\nSTOP'), "STOP");
+  assert.equal(stripQuotePrefix('↩ "a"\nline one\nline two'), "line one\nline two");
+  assert.equal(stripQuotePrefix('↩ (photo)\nyes'), "yes");
+  assert.equal(stripQuotePrefix("↩ no newline"), "↩ no newline");
+  assert.equal(stripQuotePrefix("STOP"), "STOP");
+  assert.equal(stripQuotePrefix('hello\n↩ "x"'), 'hello\n↩ "x"');
+});
+
+test("quoted STOP opts out, and the reply is still posted as stored", async () => {
+  const row = makeRow({ body: '↩ "see you at six"\nSTOP', messageType: "extendedTextMessage" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.optedOut, 1);
+  assert.deepEqual(optOuts.get(`${TENANT_ID}:${PHONE}`), { keyword: "STOP", ghlContactId: null });
+  assert.equal(postCalls[0]?.body, '↩ "see you at six"\nSTOP');
+});
+
+test("quoted START opts back in", async () => {
+  const row = makeRow({ body: '↩ "reply STOP to opt out"\nstart', messageType: "extendedTextMessage" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
+  optOuts.set(`${TENANT_ID}:${PHONE}`, { keyword: "STOP", ghlContactId: null });
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.optedIn, 1);
+  assert.equal(optOuts.size, 0);
+});
+
+test("quoted STOP is stored on the number it arrived on and blocks sends from every number of the location, like plain STOP", async () => {
+  const quoted = makeRow({ coachId: SECOND_TENANT_ID, body: '↩ "your booking"\nSTOP', messageType: "extendedTextMessage" });
+  const plain = makeRow({ coachId: SECOND_TENANT_ID, body: "STOP", fromPhone: "+447700900999" });
+  const { repo, optOuts } = createFakeRepo([makeAccount()], [quoted, plain], TWO_NUMBERS);
+  const { deps } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.optedOut, 2);
+  assert.equal(optOuts.has(`${SECOND_TENANT_ID}:${PHONE}`), true);
+  assert.equal(optOuts.has(`${TENANT_ID}:${PHONE}`), false, "stored on the number it arrived on only");
+  const providerRepo = {
+    isOptedOut: async (tenantId: string, phone: string) => optOuts.has(`${tenantId}:${phone}`),
+    listLocationNumbers: async (locationId: string) => TWO_NUMBERS[locationId] ?? [],
+  } as unknown as GhlProviderRepo;
+  for (const phone of [PHONE, "+447700900999"]) {
+    const fromDefault = await optedOutReason(providerRepo, LOCATION_ID, TENANT_ID, phone);
+    const fromSales = await optedOutReason(providerRepo, LOCATION_ID, SECOND_TENANT_ID, phone);
+    assert.ok(fromDefault, `send from the default number to ${phone} is refused`);
+    assert.ok(fromSales, `send from the number it arrived on to ${phone} is refused`);
+  }
+  assert.equal(
+    await optedOutReason(providerRepo, LOCATION_ID, TENANT_ID, PHONE),
+    await optedOutReason(providerRepo, LOCATION_ID, TENANT_ID, "+447700900999"),
+    "quoted and plain STOP give the same refusal"
+  );
+});
+
+test("an event row with no known eventKind is claimed and resolved event_suppressed, never posted or keyword-checked", async () => {
+  const rows = [
+    makeRow({ messageType: "event", eventKind: null, body: "STOP", receivedAt: freshIso() }),
+    makeRow({ messageType: "event", eventKind: "pin" as unknown as WhatsappInboundMessage["eventKind"], body: "👍", receivedAt: freshIso() }),
+  ];
+  const { repo, rowsById, calls, optOuts } = createFakeRepo([makeAccount({ showReactions: true, showDeletes: true })], rows);
+  const { deps, postCalls, upsertCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 0);
+  assert.equal(upsertCalls.length, 0);
+  assert.equal(result.eventsSuppressed, 2);
+  assert.equal(result.optedOut, 0);
+  assert.equal(optOuts.size, 0);
+  for (const row of rows) {
+    assert.equal(rowsById.get(row.id)!.resolution, "event_suppressed");
+    assert.ok(calls.some((c) => c.method === "claimWhatsappInboundMessage" && c.args[0] === row.id));
+  }
+});
+
+test("a lost claim on the suppression path resolves nothing and counts claimLost", async () => {
+  const rows = [eventRow("reaction", { body: "👍" }), makeRow({ messageType: "event", eventKind: null, receivedAt: freshIso() })];
+  const { repo, rowsById } = createFakeRepo([makeAccount()], rows);
+  const { deps, postCalls } = makeDeps();
+  const claimAlwaysLoses: GhlInboundRepo = { ...repo, claimWhatsappInboundMessage: async () => false };
+
+  const result = await drainGhlInboundReplies(claimAlwaysLoses, deps);
+
+  assert.equal(result.claimLost, 2);
+  assert.equal(result.eventsSuppressed, 0);
+  assert.equal(postCalls.length, 0);
+  for (const row of rows) assert.equal(rowsById.get(row.id)!.resolution, null);
+});
+
+test("a group event row: sender label then the event body, and no keyword check", async () => {
+  const row = makeGroupRow({ messageType: "event", eventKind: "edit", body: "STOP", targetWaMessageId: "WA-TARGET-1", targetFromMe: false });
+  const { repo, optOuts, calls } = createFakeRepo([makeAccount()], [row], {}, [makeGroup()]);
+  const { deps, postCalls, upsertCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(postCalls[0]?.body, "Jane: ✏️ Edited: STOP");
+  assert.equal(postCalls[0]?.contactId, "group-contact-1");
+  assert.equal(upsertCalls.length, 0, "the sender is never upserted");
+  assert.equal(result.optedOut, 0);
+  assert.equal(optOuts.size, 0);
+  assert.equal(calls.some((c) => c.method === "recordOptOut" || c.method === "clearOptOut"), false);
+});
+
+test("renderInboundEvent: a reaction to a quoted reply quotes the reply, not the quote prefix", () => {
+  const out = renderInboundEvent(eventRow("reaction", { body: "👍" }), '↩ "are you free?"\nyes, see you at six');
+  assert.equal(out, '👍 reacted to "yes, see you at six"');
+});
+
+test("renderInboundEvent: a reaction to a multi-line message quotes it on one line", () => {
+  const out = renderInboundEvent(eventRow("reaction", { body: "👍" }), "line one\n\nline two\r\nline three\u2028four");
+  assert.equal(out, '👍 reacted to "line one line two line three four"');
+});
+
+test("renderInboundEvent: a reaction whose rendering passes 500 code points is cut to exactly 500", () => {
+  const out = renderInboundEvent(eventRow("reaction", { body: "😀".repeat(480) }), "see you at six");
+  assert.equal(Array.from(out).length, 500);
+  assert.ok(out.startsWith("😀".repeat(480) + " reacted to "));
 });

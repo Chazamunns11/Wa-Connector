@@ -135,9 +135,12 @@ inbound event rows, and puts a quoted reply's quote in front of its body. The
 app decides what to post to GoHighLevel (reactions and deletes only when the
 sub-account turns them on).
 
-- **Flag:** `WA_INBOUND_EVENTS_ENABLED` (default `false`). Apply migration
-  `0011_message_events.sql` first. Off means today's behaviour exactly: events
-  are dropped and quotes are ignored.
+- **Flag:** `WA_INBOUND_EVENTS_ENABLED` (default `false`). Off means today's
+  behaviour exactly: events are dropped and quotes are ignored.
+- **Deploy order:** apply migration `0011_message_events.sql`, deploy the app,
+  and only then set `WA_INBOUND_EVENTS_ENABLED=true`. Never roll the app back
+  while the flag is on: an older app posts reactions as plain messages. Turn
+  the flag off first.
 - Each event row has its own `wa_message_id` (so redelivery still dedupes),
   `message_type = 'event'`, no media, `event_kind` and `target_wa_message_id`
   (the message it acts on):

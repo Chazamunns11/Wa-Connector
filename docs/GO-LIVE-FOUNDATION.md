@@ -535,10 +535,20 @@ live sessions fight over one WhatsApp account.
 
 ### Edits, reactions, deletes and quoted replies: checks before go-live
 
-Apply migration 0011 first (the bridge's drain query reads its new columns, so
-the bridge fails without it). One flag, off by default:
+Apply migration 0011 first. Without it the app's inbound drain fails on every
+pass, because it selects 0011's new columns. With the flag on and 0011
+missing, the bridge only fails to insert event rows. One flag, off by default:
 
 - `WA_INBOUND_EVENTS_ENABLED` (Railway, bridge)
+
+Deploy order:
+
+1. Apply migration 0011.
+2. Deploy the app.
+3. Only then set `WA_INBOUND_EVENTS_ENABLED=true` on the bridge.
+
+Never roll the app back to a build without message events while the flag is
+on: an older app posts reactions as plain messages. Turn the flag off first.
 
 Leave it off until the event checks in
 `docs/superpowers/specs/2026-10-17-voice-notes-real-device-check.md` pass.
@@ -547,12 +557,14 @@ Rules to know once it is on:
 
 - Edits are posted to GHL. Reactions and deletes are not, unless the
   sub-account switches them on. The two switches are in the GHL embed
-  ("Show reactions", "Show deletes"), apply to that sub-account only, and are
+  ("Show reactions in GHL", "Show deleted-message notices in GHL"), apply to
+  that sub-account only, and are
   off by default. Anything posted as a message fires GHL's "Customer
   replied" workflows.
 - An edit goes through the same STOP and START keyword check as a new
   message, so an edit to STOP opts the contact out and an edit to START opts
-  them back in.
+  them back in. A quoted reply is checked on its reply text, so a quoted
+  reply of STOP opts out too.
 - Event rows never count as the contact having messaged the number, so they
   never make them eligible for a direct group add.
 - A quoted text reply starts with the quote on its own line. A quoted media
