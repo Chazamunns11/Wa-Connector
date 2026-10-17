@@ -133,6 +133,13 @@ export interface BridgeConfig {
   inboundMediaPerTenantDaily: number;
   /** Supabase Storage bucket for inbound media (plan §6.2/§7d). */
   mediaBucket: string;
+  /**
+   * Voice notes (docs/superpowers/plans/2026-10-17-voice-notes.md) — transcode a
+   * non-ogg/opus outbound audio attachment to an ogg/opus voice note with
+   * ffmpeg (src/voice-transcode.ts). Default off; needs ffmpeg with libopus in
+   * the image, probed at boot. Off (or ffmpeg missing) = audio sends as a file.
+   */
+  voiceTranscodeEnabled: boolean;
 }
 
 function required(name: string): string {
@@ -212,6 +219,7 @@ export function loadConfig(): BridgeConfig {
     inboundMediaPerSenderDaily: intWithDefault("WA_INBOUND_MEDIA_PER_SENDER_DAILY", 20),
     inboundMediaPerTenantDaily: intWithDefault("WA_INBOUND_MEDIA_PER_TENANT_DAILY", 300),
     mediaBucket: process.env.WA_MEDIA_BUCKET?.trim() || "wa-media",
+    voiceTranscodeEnabled: boolWithDefault("WA_VOICE_TRANSCODE_ENABLED", false),
   };
 
   if (config.lockTtlMs <= config.lockHeartbeatMs) {

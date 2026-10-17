@@ -33,6 +33,7 @@ const MEDIA_KEYS = [
   "WA_INBOUND_MEDIA_PER_SENDER_DAILY",
   "WA_INBOUND_MEDIA_PER_TENANT_DAILY",
   "WA_MEDIA_BUCKET",
+  "WA_VOICE_TRANSCODE_ENABLED",
 ];
 /** Ratchet-desync fix (src/pending-writes.ts) — the one new shutdown-flush tunable, same "clear before every test" discipline as the media/poke keys above. */
 const SHUTDOWN_FLUSH_KEYS = ["WA_SHUTDOWN_FLUSH_TIMEOUT_MS"];
@@ -305,5 +306,17 @@ test("config: WA_LOCK_TTL_MS just above WA_LOCK_HEARTBEAT_MS boots fine — the 
     const config = loadConfig();
     assert.equal(config.lockHeartbeatMs, 10_000);
     assert.equal(config.lockTtlMs, 10_001);
+  });
+});
+
+test("config: WA_VOICE_TRANSCODE_ENABLED defaults to false, reads true, and refuses anything but true/false", () => {
+  withEnv({}, () => {
+    assert.equal(loadConfig().voiceTranscodeEnabled, false);
+  });
+  withEnv({ WA_VOICE_TRANSCODE_ENABLED: "true" }, () => {
+    assert.equal(loadConfig().voiceTranscodeEnabled, true);
+  });
+  withEnv({ WA_VOICE_TRANSCODE_ENABLED: "yes" }, () => {
+    assert.throws(() => loadConfig(), /WA_VOICE_TRANSCODE_ENABLED must be exactly "true" or "false"/);
   });
 });
