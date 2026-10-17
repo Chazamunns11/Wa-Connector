@@ -60,5 +60,5 @@ If GHL's API can add an **internal note or comment** to a conversation without f
 ## Open questions for planning
 
 1. Can GHL's Conversations API post an internal comment that doesn't fire reply triggers?
-2. What format does GHL's in-app voice recorder produce? **Open until the real-device check is run** (`docs/superpowers/specs/2026-10-17-voice-notes-real-device-check.md`). Record the `mime` from the bridge's `voice transcode` log line for Chrome and for Safari/iPhone here. Expected: webm from Chrome, mp4/m4a from Safari.
+2. What format does GHL's in-app voice recorder produce? **Open until the real-device check is run** (`docs/superpowers/specs/2026-10-17-voice-notes-real-device-check.md`). Record the `mime` from the bridge's `outbound voice note prepared` log line (or `sniffedMime` from the `outbound attachment` line every attachment gets, which also shows an mp4's `ftypBrand`) for Chrome and for Safari/iPhone here. Expected: webm from Chrome, mp4/m4a from Safari.
 3. Do edits of our own outbound messages (made on the phone) need syncing? Proposed: no. `fromMe` stays dropped.

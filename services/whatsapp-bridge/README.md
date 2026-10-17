@@ -103,8 +103,12 @@ waveform. It is off by default.
   `WA_MEDIA_MAX_AUDIO_BYTES` (default 16777216). Oversized input is refused
   before ffmpeg runs. A voice note longer than 15 minutes is not cut short; it
   falls back. ffmpeg reads a private temp file the bridge wrote, never a URL.
-- **Fallback:** any transcode failure (timeout, busy, too long, bad output,
-  ffmpeg missing) sends the original and never fails the message:
+- **ffmpeg missing at boot:** transcoding is off for that run, exactly as with
+  the flag off: webm and wav are refused, everything else goes as before. The
+  fallback below does not apply.
+- **Fallback (ffmpeg was found at boot):** any transcode failure (timeout,
+  busy, too long, bad output, ffmpeg failing on that file) sends the original
+  and never fails the message:
 
   | Input | Flag off | Flag on, transcode fails |
   | --- | --- | --- |
@@ -113,9 +117,13 @@ waveform. It is off by default.
   | mp3 | audio file | audio file |
   | m4a | audio file | audio file |
   | webm, wav | refused | document `voice-note.webm` / `.wav` |
+  | any of these with a video track | as above | document under GHL's own file name (never a voice note) |
 
-- **Logs:** tenant id, message id, mime, outcome and elapsed ms only. Never
-  audio bytes, ffmpeg output or the attachment URL.
+- **Logs:** `outbound voice note prepared` (tenant id, message id, mime,
+  outcome, elapsed ms) for each transcode, and `outbound attachment` (tenant
+  id, message id, sniffed mime, the mp4 `ftypBrand`, kind, ptt) for every
+  attachment sent. Never audio bytes, ffmpeg output, file names or the
+  attachment URL.
 
 Flip order:
 

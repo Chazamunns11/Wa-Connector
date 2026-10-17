@@ -561,7 +561,7 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_VOICE_TRANSCODE_ENABLED` | No | `false` | Send non-opus GHL audio as voice notes via ffmpeg. Turn on only after `ffmpeg -version` works in a Railway shell; see the bridge README, "Voice notes" |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Storage bucket for inbound media |
 
-That is 28 variables, all read in `config.ts`.
+That is 32 variables, all read in `config.ts`.
 
 ---
 
