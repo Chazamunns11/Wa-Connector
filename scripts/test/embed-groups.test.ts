@@ -80,8 +80,8 @@ test("groups list: the live list merged with the stored switches — jid, name, 
     body: {
       ok: true,
       groups: [
-        { jid: GROUP_A, name: "Team chat", size: 12, enabled: false, left: false },
-        { jid: GROUP_B, name: "Clients", size: 40, enabled: true, left: false },
+        { jid: GROUP_A, name: "Team chat", size: 12, enabled: false, left: false, live: true },
+        { jid: GROUP_B, name: "Clients", size: 40, enabled: true, left: false, live: true },
       ],
     },
   });
@@ -98,10 +98,25 @@ test("groups list: a stored group the number has left (no longer in the live lis
   });
   const result = await decideGroupsRequest(repo, deps, TENANT, {});
   assert.equal(result.status, 200);
-  const groups = result.body.ok ? result.body.groups : [];
+  const groups = result.body.ok && "groups" in result.body ? result.body.groups : [];
   assert.deepEqual(groups.map((g) => g.jid), [GROUP_A, GROUP_B, GROUP_LEFT]);
-  assert.deepEqual(groups[2], { jid: GROUP_LEFT, name: "Old crew", size: 0, enabled: true, left: true });
+  assert.deepEqual(groups[2], { jid: GROUP_LEFT, name: "Old crew", size: 0, enabled: true, left: true, live: false });
   assertNoTenantId(result, "list with left");
+});
+
+test("groups list: `left` is exactly leftAt !== null — an enabled stored group merely missing from the live list is not-live, not left", async () => {
+  const missing = "120363000000000004@g.us";
+  const { repo, deps } = fakes({
+    stored: [
+      stored(missing, { enabled: true, name: "Gone quiet" }),
+      // Live, but still carrying an old left mark (rejoined, not yet re-enabled).
+      stored(GROUP_A, { enabled: false, leftAt: "2026-10-01T00:00:00.000Z" }),
+    ],
+  });
+  const result = await decideGroupsRequest(repo, deps, TENANT, {});
+  const groups = result.body.ok && "groups" in result.body ? result.body.groups : [];
+  assert.deepEqual(groups.find((g) => g.jid === missing), { jid: missing, name: "Gone quiet", size: 0, enabled: true, left: false, live: false });
+  assert.deepEqual(groups.find((g) => g.jid === GROUP_A), { jid: GROUP_A, name: "Team chat", size: 12, enabled: false, left: true, live: true });
 });
 
 test("groups list: the number isn't connected -> the not-connected shape, fixed message, no bridge text forwarded", async () => {
@@ -132,18 +147,61 @@ test("groups toggle: enabling stores the LIVE name (never the client's), then re
   const setAt = calls.findIndex((c) => c.startsWith("set:"));
   const refreshAt = calls.indexOf(`refresh:${TENANT}`);
   assert.ok(refreshAt > setAt, `refresh must follow the write: ${calls.join(", ")}`);
-  const groups = result.body.ok ? result.body.groups : [];
+  const groups = result.body.ok && "groups" in result.body ? result.body.groups : [];
   assert.equal(groups.find((g) => g.jid === GROUP_A)?.enabled, true);
   assertNoTenantId(result, "toggle on");
 });
 
-test("groups toggle: disabling writes enabled=false and refreshes", async () => {
-  const { repo, deps, calls } = fakes({ stored: [stored(GROUP_B, { enabled: true })] });
+test("groups toggle OFF: never needs the live list — stored name, enabled=false, then a refresh", async () => {
+  const { repo, deps, calls } = fakes({ stored: [stored(GROUP_B, { enabled: true, name: "Clients (stored)" })] });
+  const result = await decideGroupsRequest(repo, deps, TENANT, { groupJid: GROUP_B, enabled: false });
+  assert.deepEqual(result, { status: 200, body: { ok: true, groupJid: GROUP_B, enabled: false } });
+  assert.ok(!calls.some((c) => c.startsWith("live:")), `switching off must not read the live list: ${calls.join(", ")}`);
+  const setAt = calls.indexOf(`set:${TENANT}:${GROUP_B}:Clients (stored):false`);
+  assert.ok(setAt >= 0, calls.join(", "));
+  assert.ok(calls.indexOf(`refresh:${TENANT}`) > setAt);
+});
+
+test("groups toggle OFF: a stored group the number has LEFT can be switched off (200, stored name, then refresh)", async () => {
+  const { repo, deps, calls, rows } = fakes({
+    stored: [stored(GROUP_LEFT, { enabled: true, name: "Old crew", leftAt: "2026-10-10T00:00:00.000Z" })],
+  });
+  const result = await decideGroupsRequest(repo, deps, TENANT, { slot: 1, groupJid: GROUP_LEFT, enabled: false });
+  assert.equal(result.status, 200);
+  assert.ok(calls.includes(`set:${TENANT}:${GROUP_LEFT}:Old crew:false`), calls.join(", "));
+  assert.ok(calls.includes(`refresh:${TENANT}`));
+  assert.equal(rows.get(GROUP_LEFT)?.enabled, false);
+  assertNoTenantId(result, "off left");
+});
+
+test("groups toggle OFF: works while the number is not connected", async () => {
+  const { repo, deps, calls } = fakes({
+    live: { ok: false, code: "session_not_connected", message: "nope" },
+    stored: [stored(GROUP_B, { enabled: true, name: "Clients" })],
+  });
   const result = await decideGroupsRequest(repo, deps, TENANT, { groupJid: GROUP_B, enabled: false });
   assert.equal(result.status, 200);
   assert.ok(calls.includes(`set:${TENANT}:${GROUP_B}:Clients:false`));
-  assert.ok(calls.includes(`refresh:${TENANT}`));
-  assert.equal(result.body.ok && result.body.groups.find((g) => g.jid === GROUP_B)?.enabled, false);
+});
+
+test("groups toggle OFF: a JID neither stored nor live -> 404 unknown_group, nothing written", async () => {
+  const { repo, deps, calls } = fakes({ stored: [stored(GROUP_B, { enabled: true })] });
+  for (const jid of [GROUP_A, "120363000000000077@g.us"]) {
+    const result = await decideGroupsRequest(repo, deps, TENANT, { groupJid: jid, enabled: false });
+    assert.deepEqual(result, { status: 404, body: UNKNOWN_GROUP }, jid);
+  }
+  assert.ok(!calls.some((c) => c.startsWith("set:") || c.startsWith("refresh:") || c.startsWith("live:")), calls.join(", "));
+});
+
+test("groups toggle OFF: a failed bridge reload is the same 'Saved, but…' 502", async (t) => {
+  t.mock.method(console, "warn", () => {});
+  const { repo, deps } = fakes({
+    stored: [stored(GROUP_B, { enabled: true })],
+    refresh: { ok: false, code: "groups_refresh_failed", message: "x" },
+  });
+  const result = await decideGroupsRequest(repo, deps, TENANT, { groupJid: GROUP_B, enabled: false });
+  assert.equal(result.status, 502);
+  assert.equal(!result.body.ok && result.body.code, "groups_refresh_failed");
 });
 
 test("groups toggle: a groupJid not in the live list -> 404 unknown_group, nothing written, no refresh", async () => {

@@ -345,7 +345,7 @@ const REASON_GROUP_LEFT = "This WhatsApp number is no longer in that group";
  * here only for the media split's best-effort up-front budget check; the
  * bridge's own reservation stays authoritative.
  */
-const GROUP_SEND_CAP_UNITS = 5;
+export const GROUP_SEND_CAP_UNITS = 5;
 
 /**
  * Where one outbound goes (Task 9): a phone, or an enabled group. Spread
@@ -673,9 +673,10 @@ export async function handleProviderOutboundMessage(
   let isNew: boolean;
   let toPhone: string | null;
   // Opt-in groups (Task 9) — `null` only for an unreadable phone; a group
-  // contact's target is its group. `groupSyncOff` marks a switched-off group.
+  // contact's target is its group. `groupRefusal` is set for a switched-off
+  // group, or an enabled group the number has left.
   let target: OutboundTarget | null;
-  let groupSyncOff = false;
+  let groupRefusal: string | null = null;
   let textResult: ReturnType<typeof buildOutboundText>;
   // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — both hoisted so
   // Phase B (below) can reach them; see the assignment site's own comment.
@@ -703,7 +704,10 @@ export async function handleProviderOutboundMessage(
     if (group) {
       toPhone = null;
       target = { groupJid: group.groupJid };
-      groupSyncOff = !group.enabled;
+      // Switched off wins; an enabled group the number has left (left_at
+      // set — the bridge leaves it out of its enabled set) gets the bridge's
+      // own "no longer in that group" string, never "turned off".
+      groupRefusal = !group.enabled ? REASON_GROUP_SYNC_OFF : group.left ? REASON_GROUP_LEFT : null;
     } else {
       const phone = typeof payload.phone === "string" ? payload.phone : null;
       toPhone = normalisePhoneE164(phone, "GB");
@@ -747,7 +751,7 @@ export async function handleProviderOutboundMessage(
       hadAttachments: attachments.length > 0,
       // Only carried forward when we're actually going to attempt a bridge
       // send with it — see this file's pending_text note in the header.
-      pendingText: target && !groupSyncOff && textResult.ok ? textResult.text : null,
+      pendingText: target && groupRefusal === null && textResult.ok ? textResult.text : null,
     }));
   } catch (err) {
     console.error(`[ghl-provider] handleProviderOutboundMessage: pre-intake failure for locationId ${locationId} (no row recorded):`, err);
@@ -773,12 +777,13 @@ export async function handleProviderOutboundMessage(
     // is byte-for-byte the pre-media-plan code path, which is what makes the
     // flags-off regression guarantee true regardless of what
     // `handleMediaSplitOutbound` does.
-    // Opt-in groups (Task 9) — a switched-off group is refused before
-    // anything else, with or without attachments: nothing goes to the group.
-    if (groupSyncOff) {
-      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_GROUP_SYNC_OFF });
-      await reportGhlOutcome(repo, deps, account, row, "failed", REASON_GROUP_SYNC_OFF);
-      return { kind: "refused", reason: REASON_GROUP_SYNC_OFF };
+    // Opt-in groups (Task 9) — a switched-off group, or one the number has
+    // left, is refused before anything else, with or without attachments:
+    // nothing goes to the group.
+    if (groupRefusal !== null) {
+      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: groupRefusal });
+      await reportGhlOutcome(repo, deps, account, row, "failed", groupRefusal);
+      return { kind: "refused", reason: groupRefusal };
     }
 
     if (mediaSplit) {

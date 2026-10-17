@@ -32,6 +32,7 @@ import {
   drainGhlOutboundStatuses,
   handleProviderOutboundMessage,
   GHL_PROVIDER_REASONS,
+  GROUP_SEND_CAP_UNITS,
   type GhlProviderDeps,
   type GhlProviderRepo,
 } from "@/lib/ghl-provider";
@@ -381,7 +382,7 @@ function createFakeRepo(
     numbers?: Record<string, LocationNumber[]>;
     sticky?: Record<string, string>;
     /** Opt-in groups (Task 9) — group contacts, keyed `${locationId}:${ghlContactId}`. */
-    groups?: Record<string, { tenantId: string; groupJid: string; enabled: boolean }>;
+    groups?: Record<string, { tenantId: string; groupJid: string; enabled: boolean; left?: boolean }>;
   } = {}
 ) {
   /** Every `markWhatsappGroupLeft` call, in order (Task 9). */
@@ -416,7 +417,7 @@ function createFakeRepo(
     async getWhatsappGroupByContact(locationId: string, ghlContactId: string) {
       calls.push({ method: "getWhatsappGroupByContact", args: [locationId, ghlContactId] });
       const group = opts.groups?.[`${locationId}:${ghlContactId}`];
-      return group ? { ...group } : null;
+      return group ? { ...group, left: group.left ?? false } : null;
     },
     async markWhatsappGroupLeft(tenantId: string, groupJid: string) {
       calls.push({ method: "markWhatsappGroupLeft", args: [tenantId, groupJid] });
@@ -2737,11 +2738,11 @@ const GROUP_OFF_REASON = "WhatsApp group sync is turned off for this group";
 const GROUP_LEFT_REASON = "This WhatsApp number is no longer in that group";
 
 /** The group lives on the SECOND (non-default) number, while the contact's sticky row points at the default — the group's number must win. */
-function groupRepo(enabled = true) {
+function groupRepo(enabled = true, left = false) {
   return createFakeRepo([makeAccount()], {
     numbers: TWO_NUMBERS,
     sticky: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: TENANT_ID },
-    groups: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: { tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID, enabled } },
+    groups: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: { tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID, enabled, left } },
   });
 }
 
@@ -2953,4 +2954,35 @@ test("groups drain (multipart): an attachment part failing with 'no longer in th
     assert.deepEqual(bundle.groupsLeft, [{ tenantId: SECOND_TENANT_ID, groupJid: GROUP_JID }]);
     assert.equal(row.reportedStatus, "failed");
   });
+});
+
+test("groups outbound: an enabled group the number has LEFT refuses up front with the bridge's 'no longer in that group' string — no send", async () => {
+  const bundle = groupRepo(true, true);
+  const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ messageId: "msg-group-left" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_LEFT_REASON });
+  assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.refusalReason, GROUP_LEFT_REASON);
+  assert.equal(row.pendingText, null);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.equal(statusCalls[0].errorMessage, GROUP_LEFT_REASON);
+});
+
+test("groups outbound: a switched-off group the number has also left still says 'turned off' (the switch wins)", async () => {
+  const bundle = groupRepo(false, true);
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ messageId: "msg-group-off-left" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+  assert.equal(sendCalls.length, 0);
+});
+
+test("groups: the provider's mirrored bridge constants match services/whatsapp-bridge/src/groups.ts byte for byte", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../../services/whatsapp-bridge/src/groups.ts", import.meta.url), "utf8");
+  const units = /export const GROUP_SEND_CAP_UNITS = (\d+);/.exec(source);
+  const reason = /export const NOT_IN_GROUP_REASON = "([^"]*)";/.exec(source);
+  assert.ok(units && reason, "both constants must still be declared in the bridge's groups.ts");
+  assert.equal(GROUP_SEND_CAP_UNITS, Number(units[1]));
+  assert.equal(GHL_PROVIDER_REASONS.groupLeft, reason[1]);
 });

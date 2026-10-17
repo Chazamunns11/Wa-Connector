@@ -146,9 +146,15 @@ export interface GhlRepository {
    * The group a GHL contact stands for, searched across all of the
    * location's numbers, or null when the contact is not a group contact.
    * Returned whether or not the group is enabled, so the caller can refuse a
-   * send to a switched-off group with its fixed string.
+   * send to a switched-off group with its fixed string. `left` is
+   * `left_at IS NOT NULL` (the number is no longer in the group), so a send
+   * to a left group can be refused with the bridge's "no longer in that
+   * group" string rather than "turned off".
    */
-  getWhatsappGroupByContact(locationId: string, ghlContactId: string): Promise<{ tenantId: string; groupJid: string; enabled: boolean } | null>;
+  getWhatsappGroupByContact(
+    locationId: string,
+    ghlContactId: string
+  ): Promise<{ tenantId: string; groupJid: string; enabled: boolean; left: boolean } | null>;
 
   /** Store the GHL contact created for a group (the inbound drain, before it posts the group's first message). */
   setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string): Promise<void>;

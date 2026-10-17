@@ -774,7 +774,7 @@ export class SupabaseGhlRepository implements GhlRepository {
         a.tenantId.localeCompare(b.tenantId)
     );
     const group = groups[0];
-    return group ? { tenantId: group.tenantId, groupJid: group.groupJid, enabled: group.enabled } : null;
+    return group ? { tenantId: group.tenantId, groupJid: group.groupJid, enabled: group.enabled, left: group.leftAt !== null } : null;
   }
 
   async setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string) {

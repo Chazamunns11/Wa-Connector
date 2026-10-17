@@ -662,7 +662,10 @@ interface EmbedGroup {
   name: string;
   size: number;
   enabled: boolean;
+  /** The number is no longer in this group. */
   left: boolean;
+  /** In WhatsApp's own list for this number right now. */
+  live: boolean;
 }
 
 /** Shown once, after the first group is switched on for this number. */
@@ -677,8 +680,10 @@ function groupsFrom(json: Record<string, unknown>): EmbedGroup[] | null {
  * Opt-in groups (Task 9) — one number's WhatsApp groups, collapsed until the
  * owner asks ("Show groups"). Every call posts `{ slot }` (plus the group's
  * JID and the new switch value to change one); the server answers with the
- * whole list each time. Server `message`s are shown verbatim. A group the
- * number has left is shown as "Left", with no switch.
+ * whole list (switching off answers with just that group, which is patched
+ * in place). Server `message`s are shown verbatim. A group missing from
+ * WhatsApp's list right now ("Left", or "Not found right now") has no
+ * switch, but one still syncing gets "Stop syncing".
  */
 function GroupsSection({
   slot,
@@ -694,13 +699,18 @@ function GroupsSection({
   const [error, setError] = useState<string | null>(null);
   const [showHint, setShowHint] = useState(false);
 
-  async function request(body: Record<string, unknown>): Promise<EmbedGroup[] | null> {
+  /** The server's list; `"switched_off"` for a switch-off (which answers without a list, so the row is patched in place); `null` on a refusal. */
+  async function request(body: Record<string, unknown>): Promise<EmbedGroup[] | "switched_off" | null> {
     try {
       const json = await callEmbedApi("/api/crm/embed/groups", "POST", body);
       const list = groupsFrom(json);
       if (list) {
         setError(null);
         return list;
+      }
+      if (json.ok === true && json.enabled === false) {
+        setError(null);
+        return "switched_off";
       }
       setError(typeof json.message === "string" ? json.message : "Something went wrong. Please try again.");
     } catch (err) {
@@ -713,7 +723,7 @@ function GroupsSection({
     setLoading(true);
     const list = await request({ slot });
     setLoading(false);
-    if (list) setGroups(list);
+    if (Array.isArray(list)) setGroups(list);
   }
 
   async function toggle(group: EmbedGroup) {
@@ -722,7 +732,11 @@ function GroupsSection({
     setBusyJid(group.jid);
     const list = await request({ slot, groupJid: group.jid, enabled: enabling });
     setBusyJid(null);
-    if (!list) return;
+    if (list === null) return;
+    if (list === "switched_off") {
+      setGroups((current) => (current ?? []).map((g) => (g.jid === group.jid ? { ...g, enabled: false } : g)));
+      return;
+    }
     setGroups(list);
     if (firstEnable) setShowHint(true);
   }
@@ -767,16 +781,29 @@ function GroupsSection({
                 <li key={group.jid} className="flex items-center justify-between gap-3 py-2">
                   <div className="min-w-0">
                     <p className="truncate text-sm text-ink">{group.name || "Unnamed group"}</p>
-                    {!group.left ? (
+                    {group.live ? (
                       <p className="text-xs text-ink-faint">
                         {group.size} {group.size === 1 ? "member" : "members"}
                       </p>
                     ) : null}
                   </div>
-                  {group.left ? (
-                    <Chip tone="muted" title="This number is no longer in this group">
-                      Left
-                    </Chip>
+                  {!group.live ? (
+                    <div className="flex shrink-0 items-center gap-2">
+                      {group.left ? (
+                        <Chip tone="muted" title="This number is no longer in this group">
+                          Left
+                        </Chip>
+                      ) : (
+                        <Chip tone="warn" title="WhatsApp didn't list this group for this number just now">
+                          Not found right now
+                        </Chip>
+                      )}
+                      {group.enabled ? (
+                        <Button size="sm" variant="ghost" disabled={busyJid !== null} onClick={() => void toggle(group)}>
+                          {busyJid === group.jid ? "Saving…" : "Stop syncing"}
+                        </Button>
+                      ) : null}
+                    </div>
                   ) : (
                     <label className="flex shrink-0 items-center gap-2 text-xs text-ink">
                       <input

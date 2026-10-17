@@ -24,14 +24,22 @@
  * THE LIST is WhatsApp's LIVE list (`listWhatsappGroups` on the bridge —
  * only groups the number is in right now) merged with the stored switches
  * (`whatsapp_groups`). A stored group that is not in the live list and is
- * switched on or marked left is appended as `left: true` (size 0 — the
- * bridge no longer sees it), so the owner can see why it went quiet. Such a
- * group has no switch: toggling only works for a live group.
+ * switched on or marked left is appended with `live: false` (size 0 — the
+ * bridge no longer sees it), so the owner can see why it went quiet and can
+ * still switch it off. `left` is exactly `left_at IS NOT NULL` (the bridge
+ * said the number is no longer in the group); `live: false` without `left`
+ * is "not found right now".
  *
- * THE SWITCH stores the LIVE name (never a client-supplied one), then asks
- * the bridge to reload its enabled set (`refreshGroups`) for THIS tenant. A
- * failed reload answers 502 so the owner tries again; re-sending the same
- * switch is harmless (an upsert, then another reload).
+ * SWITCHING ON needs the group in the live list and stores the LIVE name
+ * (never a client-supplied one). SWITCHING OFF never reads the live list
+ * (controller ruling): it works for a group the number has left, and while
+ * the number is disconnected — the group only has to be stored, and its
+ * stored name is kept. Either way the bridge is then asked to reload its
+ * enabled set (`refreshGroups`) for THIS tenant. A failed reload answers 502
+ * so the owner tries again; re-sending the same switch is harmless (an
+ * upsert, then another reload). Switching on answers with the merged list;
+ * switching off (no live list to merge) answers `{ ok, groupJid, enabled:
+ * false }` and the page updates that one row.
  *
  * ONE METHOD, TWO SHAPES (the embed routes' convention: authenticated POSTs
  * with a JSON body, never a token-bearing GET — see
@@ -57,14 +65,17 @@ export interface EmbedGroupsDeps {
 export interface EmbedGroupView {
   jid: string;
   name: string;
-  /** Member count; 0 for a group the number has left. */
+  /** Member count; 0 for a group not in the live list. */
   size: number;
   enabled: boolean;
+  /** `left_at IS NOT NULL` — the number is no longer in the group. */
   left: boolean;
+  /** In WhatsApp's live list for this number right now. */
+  live: boolean;
 }
 
 export type GroupsRouteResult =
-  | { status: 200; body: { ok: true; groups: EmbedGroupView[] } }
+  | { status: 200; body: { ok: true; groups: EmbedGroupView[] } | { ok: true; groupJid: string; enabled: false } }
   | { status: 400 | 404 | 409 | 502; body: GuardFailureBody };
 
 function failure(status: 400 | 404 | 409 | 502, code: string, message: string): GroupsRouteResult {
@@ -99,22 +110,28 @@ function parseGroupsRequest(body: Record<string, unknown> | null): GroupsRequest
 function mergeGroups(live: BridgeGroup[], stored: WhatsappGroup[]): EmbedGroupView[] {
   const storedByJid = new Map(stored.map((g) => [g.groupJid, g]));
   const liveJids = new Set(live.map((g) => g.jid));
-  const views: EmbedGroupView[] = live.map((g) => ({
-    jid: g.jid,
-    name: g.name,
-    size: g.size,
-    enabled: storedByJid.get(g.jid)?.enabled ?? false,
-    left: false,
-  }));
+  const views: EmbedGroupView[] = live.map((g) => {
+    const row = storedByJid.get(g.jid);
+    return { jid: g.jid, name: g.name, size: g.size, enabled: row?.enabled ?? false, left: row ? row.leftAt !== null : false, live: true };
+  });
   for (const g of stored) {
     if (liveJids.has(g.groupJid) || (!g.enabled && g.leftAt === null)) continue;
-    views.push({ jid: g.groupJid, name: g.name, size: 0, enabled: g.enabled, left: true });
+    views.push({ jid: g.groupJid, name: g.name, size: 0, enabled: g.enabled, left: g.leftAt !== null, live: false });
   }
   return views;
 }
 
 function bridgeFailure(result: { code: string }): GroupsRouteResult {
   return NOT_CONNECTED_CODES.has(result.code) ? NOT_CONNECTED() : GROUPS_UNAVAILABLE();
+}
+
+/** Ask the bridge to reload after a switch; `null` on success, else the fixed 502. */
+async function refreshAfterSwitch(deps: EmbedGroupsDeps, tenantId: string): Promise<GroupsRouteResult | null> {
+  const refreshed = await deps.refreshGroups(tenantId);
+  if (refreshed.ok) return null;
+  // Never logs the tenant id or the bridge's message — the code is enough to act on.
+  console.warn(`[api/crm/embed/groups] bridge reload after a group switch failed with code ${refreshed.code}`);
+  return REFRESH_FAILED();
 }
 
 /** The whole route, for one already-authorised number (`tenantId` from the slot guard). Never echoes a tenant id. */
@@ -127,6 +144,16 @@ export async function decideGroupsRequest(
   const request = parseGroupsRequest(body);
   if (request.kind === "invalid") return INVALID_BODY();
 
+  if (request.kind === "toggle" && !request.enabled) {
+    // Switching off never touches the live list — see this file's header.
+    const row = (await repo.listWhatsappGroups(tenantId)).find((g) => g.groupJid === request.groupJid);
+    if (!row) return UNKNOWN_GROUP();
+    await repo.setWhatsappGroupEnabled(tenantId, row.groupJid, row.name, false);
+    const refreshFailure = await refreshAfterSwitch(deps, tenantId);
+    if (refreshFailure) return refreshFailure;
+    return { status: 200, body: { ok: true, groupJid: row.groupJid, enabled: false } };
+  }
+
   const live = await deps.listLiveGroups(tenantId);
   if (!live.ok) return bridgeFailure(live);
 
@@ -135,13 +162,9 @@ export async function decideGroupsRequest(
     // name stored is WhatsApp's, never the client's.
     const target = live.groups.find((g) => g.jid === request.groupJid);
     if (!target) return UNKNOWN_GROUP();
-    await repo.setWhatsappGroupEnabled(tenantId, target.jid, target.name, request.enabled);
-    const refreshed = await deps.refreshGroups(tenantId);
-    if (!refreshed.ok) {
-      // Never logs the tenant id or the bridge's message — the code is enough to act on.
-      console.warn(`[api/crm/embed/groups] bridge reload after a group switch failed with code ${refreshed.code}`);
-      return REFRESH_FAILED();
-    }
+    await repo.setWhatsappGroupEnabled(tenantId, target.jid, target.name, true);
+    const refreshFailure = await refreshAfterSwitch(deps, tenantId);
+    if (refreshFailure) return refreshFailure;
   }
 
   const stored = await repo.listWhatsappGroups(tenantId);
