@@ -69,7 +69,7 @@ two are filled in a second pass once both domains exist. That is expected.
    service-role only) and the two storage buckets (`wa-media`, private, and
    `client-logos`).
    Then run each later file in `supabase/migrations/` in number order
-   (`0002_whatsapp_sessions_phone_linked_at.sql` onwards), once each. The
+   (`0002_whatsapp_sessions_phone_linked_at.sql`, `0003_ghl_location_numbers.sql`, `0004_whatsapp_groups.sql`, and any after), once each. The
    bridge writes `whatsapp_sessions.phone_linked_at` on every logout, so
    0002 must be applied before the bridge is deployed.
 3. **Project Settings → API**. Note three values for Vercel and Railway:
