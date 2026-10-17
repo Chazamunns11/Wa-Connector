@@ -149,6 +149,9 @@ export type GhlProviderRepo = Pick<
   // Workflow triggers — "not on WhatsApp" fires from the status drain.
   | "listTriggerSubscriptions"
   | "getTenantPhone"
+  // SMS fallback — contacts remembered as not on WhatsApp.
+  | "rememberNotOnWhatsapp"
+  | "isRememberedNotOnWhatsapp"
 >;
 
 /**
@@ -398,6 +401,22 @@ function fireNotOnWhatsapp(repo: GhlProviderRepo, deps: GhlProviderDeps, result:
       message: capTriggerMessage(text),
     });
   });
+}
+
+/** How long a contact stays remembered as not on WhatsApp. */
+export const NOT_ON_WHATSAPP_MEMORY_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Remembers a one-to-one phone as not on WhatsApp for 30 days. Best effort:
+ * never throws or changes the drain result; a group row (no `toPhone`) is skipped.
+ */
+async function rememberNotOnWhatsappBestEffort(repo: GhlProviderRepo, row: GhlOutboundMessage): Promise<void> {
+  if (!row.toPhone) return;
+  try {
+    await repo.rememberNotOnWhatsapp(row.locationId, row.toPhone, new Date(Date.now() + NOT_ON_WHATSAPP_MEMORY_MS).toISOString());
+  } catch {
+    console.error("[ghl-provider] could not remember a not-on-WhatsApp contact (non-fatal)");
+  }
 }
 
 /** The narrow slice `resolveGhlAccessToken` actually touches — see `GhlTokenRefreshRepo`'s identical rationale, just for `deps` instead of `repo`. `GhlProviderDeps` already contains all three, so `defaultGhlProviderDeps` (and every existing call site) keeps typechecking unchanged. */
@@ -1063,6 +1082,38 @@ async function refuseIfGatedOrOptedOut(
   return null;
 }
 
+/** True when the contact is remembered as not on WhatsApp; false on any read error. */
+async function isRememberedNotOnWhatsappSafe(repo: GhlProviderRepo, locationId: string, phone: string): Promise<boolean> {
+  try {
+    return await repo.isRememberedNotOnWhatsapp(locationId, phone, new Date().toISOString());
+  } catch {
+    console.error("[ghl-provider] not-on-WhatsApp memory read failed (sending normally)");
+    return false;
+  }
+}
+
+/**
+ * Fires `whatsapp_not_on_whatsapp` for a send refused from the memory. Not in a
+ * drain: starts the fire in the background on a one-fire pass, never awaited,
+ * so the send response is never held; every error is swallowed.
+ */
+function fireNotOnWhatsappFromSend(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage, text: string): void {
+  try {
+    const pass = newTriggerPass(() => {});
+    startTrigger(pass, async () => {
+      const target = await resolvePassTarget(repo, pass, row.locationId, row.tenantId);
+      if (!target) return true;
+      return fireTriggerBestEffort(repo, deps, row.locationId, "whatsapp_not_on_whatsapp", {
+        ...target,
+        contactId: row.ghlContactId,
+        message: capTriggerMessage(text),
+      });
+    });
+  } catch {
+    // best effort
+  }
+}
+
 /** What `continueTextOutbound` needs to carry a text row through to the bridge. */
 export interface TextOutboundContext {
   account: GhlAccount;
@@ -1102,6 +1153,18 @@ export async function continueTextOutbound(
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
     await reportGhlOutcome(repo, deps, account, row, "failed", reason);
     return { kind: "refused", reason };
+  }
+
+  // SMS fallback: a one-to-one contact remembered as not on WhatsApp is
+  // refused here, with no bridge call, and `whatsapp_not_on_whatsapp` fires so
+  // a workflow can send it by SMS. The STOP check and the billing gate already
+  // ran. A group row has no `toPhone` and ignores the memory. A read error
+  // fails open (sends normally).
+  if (row.toPhone && (await isRememberedNotOnWhatsappSafe(repo, row.locationId, row.toPhone))) {
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: REASON_NOT_ON_WHATSAPP });
+    await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
+    fireNotOnWhatsappFromSend(repo, deps, row, ctx.text);
+    return { kind: "refused", reason: REASON_NOT_ON_WHATSAPP };
   }
 
   // Ordering: older messages for this number still waiting (held) go first,
@@ -1914,7 +1977,10 @@ async function drainMultipartRow(
     if (aggregate.status === "delivered") result.delivered++;
     else {
       result.failed++;
-      if (aggregate.reason === REASON_NOT_ON_WHATSAPP) fireNotOnWhatsapp(repo, deps, result, row, unsentText);
+      if (aggregate.reason === REASON_NOT_ON_WHATSAPP) {
+        await rememberNotOnWhatsappBestEffort(repo, row);
+        fireNotOnWhatsapp(repo, deps, result, row, unsentText);
+      }
     }
   } else {
     result.reportFailed++;
@@ -2331,6 +2397,7 @@ async function drainAcceptedRow(
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
     if (outcome === "reported") {
       result.failed++;
+      await rememberNotOnWhatsappBestEffort(repo, row);
       fireNotOnWhatsapp(repo, deps, result, row, unsentText);
     } else result.reportFailed++;
     return;

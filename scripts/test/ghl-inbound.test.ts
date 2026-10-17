@@ -160,6 +160,7 @@ function createFakeRepo(
   /** Message events — stored original bodies, keyed `tenant:waMessageId`. */
   originals: Map<string, string> = new Map()
 ) {
+  let forgetFails = false;
   const groupsByKey = new Map(groups.map((g) => [`${g.tenantId}:${g.groupJid}`, { ...g }]));
   const accountsByLocation = new Map(accounts.map((a) => [a.locationId, a]));
   const rowsById = new Map(rows.map((r) => [r.id, { ...r }]));
@@ -255,6 +256,10 @@ function createFakeRepo(
       calls.push({ method: "recordOptOut", args: [input] });
       optOuts.set(`${input.tenantId}:${input.phone}`, { keyword: input.keyword, ghlContactId: input.ghlContactId });
     },
+    async forgetNotOnWhatsapp(locationId: string, phone: string) {
+      calls.push({ method: "forgetNotOnWhatsapp", args: [locationId, phone] });
+      if (forgetFails) throw new Error("db down");
+    },
     async clearOptOut(tenantId: string, phone: string) {
       calls.push({ method: "clearOptOut", args: [tenantId, phone] });
       optOuts.delete(`${tenantId}:${phone}`);
@@ -287,7 +292,7 @@ function createFakeRepo(
     },
   };
 
-  return { repo, accountsByLocation, rowsById, calls, sticky, groupsByKey, optOuts };
+  return { repo, accountsByLocation, rowsById, calls, sticky, groupsByKey, optOuts, setForgetFails: (v: boolean) => (forgetFails = v) };
 }
 
 /** Media plan test fixture marker — see `createFakeRepo`'s `createWhatsappMediaSignedUrl` fake above. */
@@ -1961,4 +1966,35 @@ test("triggers: flag off means no phone read and no fire", async () => {
   assert.equal(result.pushed, 1);
   assert.deepEqual(fired, []);
   assert.deepEqual(reads, []);
+});
+
+// ---------------------------------------------------------------------------
+// SMS fallback A: a contact who messages us is forgotten as "not on WhatsApp".
+// ---------------------------------------------------------------------------
+
+test("fallback: inbound from the contact clears the not-on-WhatsApp memory", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeRow({ fromPhone: "+447700900123" })]);
+  const result = await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.equal(result.pushed, 1);
+  assert.deepEqual(calls.filter((c) => c.method === "forgetNotOnWhatsapp").map((c) => c.args), [[LOCATION_ID, "+447700900123"]]);
+});
+
+test("fallback: an event row clears the memory too", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeRow({ body: null, messageType: "event", eventKind: "reaction", fromPhone: "+447700900123" })]);
+  await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.equal(calls.filter((c) => c.method === "forgetNotOnWhatsapp").length, 1);
+});
+
+test("fallback: a group row does not clear the memory", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeGroupRow()], undefined, [makeGroup()]);
+  await drainGhlInboundReplies(repo, makeDeps().deps);
+  assert.equal(calls.some((c) => c.method === "forgetNotOnWhatsapp"), false);
+});
+
+test("fallback: a failing memory clear never fails the row", async () => {
+  const bundle = createFakeRepo([makeAccount()], [makeRow()]);
+  bundle.setForgetFails(true);
+  const result = await drainGhlInboundReplies(bundle.repo, makeDeps().deps);
+  assert.equal(result.pushed, 1);
+  assert.equal(result.retried, 0);
 });

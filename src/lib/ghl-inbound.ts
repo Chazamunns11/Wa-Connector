@@ -250,6 +250,8 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     // Workflow triggers — the number's phone and who subscribed.
     | "getTenantPhone"
     | "listTriggerSubscriptions"
+    // SMS fallback — a contact who messages us is on WhatsApp after all.
+    | "forgetNotOnWhatsapp"
   >;
 
 /**
@@ -625,6 +627,17 @@ async function processGhlInboundRow(
     await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: REASON_ACCOUNT_NOT_FOUND, unclaim: false });
     result.retried++;
     return;
+  }
+
+  // SMS fallback: this phone just messaged us one-to-one (event rows
+  // included), so it is on WhatsApp: forget any "not on WhatsApp" memory.
+  // Best effort, one quick query; never fails or changes the row's outcome.
+  if (!group) {
+    try {
+      await repo.forgetNotOnWhatsapp(account.locationId, row.fromPhone);
+    } catch {
+      console.error("[ghl-inbound] could not clear the not-on-WhatsApp memory (non-fatal)");
+    }
   }
 
   // Reactions and deletes are posted only when the sub-account turned them

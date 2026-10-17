@@ -424,6 +424,9 @@ function createFakeRepo(
   // Reliability (T7): session summaries by tenant and opt-outs keyed `${tenantId}:${phone}`.
   const sessionsByTenant = new Map<string, WhatsappSessionSummary>();
   const optOuts = new Set<string>();
+  /** SMS fallback memory: `${locationId}:${phone}` -> remembered-until ISO. `memoryReadFails` makes the read throw. */
+  const notOnWhatsapp = new Map<string, string>();
+  const memory = { readFails: false };
   let nextId = 1;
   let nextAttachmentId = 1;
   let claimedAt: number | null = null;
@@ -442,6 +445,16 @@ function createFakeRepo(
     async getTenantPhone(tenantId: string) {
       calls.push({ method: "getTenantPhone", args: [tenantId] });
       return sessionsByTenant.get(tenantId)?.phoneNumber ?? null;
+    },
+    async rememberNotOnWhatsapp(locationId: string, phone: string, untilIso: string) {
+      calls.push({ method: "rememberNotOnWhatsapp", args: [locationId, phone, untilIso] });
+      notOnWhatsapp.set(`${locationId}:${phone}`, untilIso);
+    },
+    async isRememberedNotOnWhatsapp(locationId: string, phone: string, nowIso: string) {
+      calls.push({ method: "isRememberedNotOnWhatsapp", args: [locationId, phone, nowIso] });
+      if (memory.readFails) throw new Error("db down");
+      const until = notOnWhatsapp.get(`${locationId}:${phone}`);
+      return until !== undefined && until > nowIso;
     },
     async isOptedOut(tenantId: string, phone: string) {
       calls.push({ method: "isOptedOut", args: [tenantId, phone] });
@@ -621,7 +634,7 @@ function createFakeRepo(
     },
   };
 
-  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls, groupsLeft, sessionsByTenant, optOuts };
+  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls, groupsLeft, sessionsByTenant, optOuts, notOnWhatsapp, memory };
 }
 
 function makeSendResult(overrides: Partial<Extract<BridgeSendResult, { ok: true }>["message"]> = {}): BridgeSendResult {
@@ -3885,4 +3898,101 @@ test("triggers: number lookups are memoised per pass in the status drain", async
   await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
   assert.equal(fired.length, 3);
   assert.equal(repoBundle.calls.filter((c) => c.method === "getTenantPhone").length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// SMS fallback A: remember contacts who aren't on WhatsApp.
+// ---------------------------------------------------------------------------
+
+const MEMORY_KEY = `${LOCATION_ID}:+447700900123`;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test("fallback: not_on_whatsapp is remembered for 30 days", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const row = seedAcceptedRow(repoBundle, { pendingText: "hi" });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const before = Date.now();
+  await drainGhlOutboundStatuses(repoBundle.repo, makeDeps().deps);
+  const until = Date.parse(repoBundle.notOnWhatsapp.get(MEMORY_KEY) ?? "");
+  assert.ok(until >= before + 30 * DAY_MS && until <= Date.now() + 30 * DAY_MS);
+});
+
+test("fallback: a group row's not_on_whatsapp is not remembered", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const row = seedAcceptedRow(repoBundle, { toPhone: null });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  await drainGhlOutboundStatuses(repoBundle.repo, makeDeps().deps);
+  assert.equal(repoBundle.notOnWhatsapp.size, 0);
+});
+
+test("fallback: remembered contact is refused fast without a bridge call and fires the trigger", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  const { fired, fireTrigger } = triggerFake();
+  const { deps, sendCalls, statusCalls } = makeDeps({ fireTrigger });
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor({ message: "see you at 3" }), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.notOnWhatsapp });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls[0].status, "failed");
+  assert.equal(statusCalls[0].errorMessage, GHL_PROVIDER_REASONS.notOnWhatsapp);
+  assert.equal([...repoBundle.rows.values()][0].sendState, "refused");
+  await tick();
+  await tick();
+  assert.deepEqual(fired, [
+    { locationId: LOCATION_ID, key: "whatsapp_not_on_whatsapp", payload: { number: "+447700900999", numberLabel: null, contactId: "ghl-contact-1", message: "see you at 3" } },
+  ]);
+});
+
+test("fallback: an expired memory sends normally", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() - 1000).toISOString());
+  const { deps, sendCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+});
+
+test("fallback: opted-out contact: STOP refusal wins, no fallback trigger", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  repoBundle.optOuts.add(`${TENANT_ID}:+447700900123`);
+  const { fired, fireTrigger } = triggerFake();
+  const { deps, sendCalls } = makeDeps({ fireTrigger });
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "refused", reason: GHL_PROVIDER_REASONS.optedOut });
+  assert.equal(sendCalls.length, 0);
+  await tick();
+  assert.deepEqual(fired, []);
+});
+
+test("fallback: memory read error fails open", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.memory.readFails = true;
+  const { deps, sendCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(repoBundle.repo, samplePayloadFor(), deps);
+  assert.deepEqual(out, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+});
+
+test("fallback: group sends ignore the memory", async () => {
+  const bundle = groupRepo();
+  bundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  const { deps, sendCalls } = makeDeps();
+  const out = await handleProviderOutboundMessage(bundle.repo, groupPayload(), deps);
+  assert.deepEqual(out, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+  assert.equal(bundle.calls.some((c) => c.method === "isRememberedNotOnWhatsapp"), false);
+});
+
+test("fallback: an app-originated send to a remembered contact is refused too", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.notOnWhatsapp.set(MEMORY_KEY, new Date(Date.now() + DAY_MS).toISOString());
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await sendAppOriginatedText(repoBundle.repo, deps, { account: makeAccount(), ...APP_INPUT });
+  assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.notOnWhatsapp });
+  assert.equal(sendCalls.length, 0);
 });
