@@ -17,6 +17,7 @@ import type { Logger } from "pino";
 import { pnJidToE164, resolveSenderE164, type RecordInboundInput } from "./inbound.js";
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
+const MAX_TRACKED_CALLS = 5_000;
 const TERMINAL = new Set<WACallEvent["status"]>(["timeout", "reject", "terminate"]);
 
 export interface MissedCallDeps {
@@ -63,11 +64,20 @@ export class MissedCallTracker {
     this.sweep();
     if (call.isGroup || call.groupJid) return;
 
+    // Only offer / accept / terminal statuses matter; ringing, transport etc. never create state.
+    if (call.status !== "offer" && call.status !== "accept" && !TERMINAL.has(call.status)) return;
+
     const key = `${coachId}:${call.id}`;
     let state = this.calls.get(key);
     if (!state) {
       state = { offer: false, accepted: false, settled: false, touchedAt: this.now() };
       this.calls.set(key, state);
+      // Hard cap: Map iterates in insertion order, so the first key is the oldest.
+      while (this.calls.size > MAX_TRACKED_CALLS) {
+        const oldest = this.calls.keys().next().value;
+        if (oldest === undefined) break;
+        this.calls.delete(oldest);
+      }
     }
     state.touchedAt = this.now();
     if (state.settled) return;
@@ -80,10 +90,11 @@ export class MissedCallTracker {
       state.accepted = true;
       return;
     }
-    if (!TERMINAL.has(call.status)) return;
 
     state.settled = true;
-    if (state.accepted) return;
+    // Missed only if we saw the ring ourselves: after a restart (or a swept
+    // entry) a terminal event alone proves nothing, so fail safe.
+    if (state.accepted || !state.offer) return;
 
     const phone = await this.resolveCaller(call);
     if (!phone) return;

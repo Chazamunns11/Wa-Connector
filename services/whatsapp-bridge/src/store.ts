@@ -23,6 +23,7 @@
  * Nothing in this module logs a value column, in either form.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Logger } from "pino";
 import type { BridgeConfig } from "./config.js";
 import { createCredsCipher, whatsappCredsAad, whatsappKeyAad, type CredsCipher } from "./crypto.js";
 import { isValidWaMessageId } from "./media.js";
@@ -589,10 +590,10 @@ export class BridgeStore {
   /**
    * Has this caller already produced a missed-call row since `sinceIso`?
    * One query on the partial index from migration 0010. On a DB error it
-   * returns false (and logs a fixed string) so a call is never silently
+   * returns false (and logs a fixed string via the passed-in logger) so a call is never silently
    * lost because the check failed; the unique wa_message_id still dedups.
    */
-  async hasRecentMissedCall(coachId: string, phoneE164: string, sinceIso: string): Promise<boolean> {
+  async hasRecentMissedCall(coachId: string, phoneE164: string, sinceIso: string, log?: Pick<Logger, "warn">): Promise<boolean> {
     const { data, error } = await this.supabase
       .from("whatsapp_inbound_messages")
       .select("id")
@@ -602,7 +603,7 @@ export class BridgeStore {
       .gte("received_at", sinceIso)
       .limit(1);
     if (error) {
-      console.warn("[store] hasRecentMissedCall: query failed; treating as no recent call");
+      log?.warn({ code: error.code }, "[store] hasRecentMissedCall: query failed; treating as no recent call");
       return false;
     }
     return (data?.length ?? 0) > 0;

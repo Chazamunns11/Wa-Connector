@@ -1212,7 +1212,7 @@ export class SessionManager {
     if (this.config.missedCallsEnabled) {
       const tracker = new MissedCallTracker({
         resolvePnForLid: (lidJid) => sock.signalRepository.lidMapping.getPNForLID(lidJid),
-        hasRecentMissedCall: (id, phone, since) => this.store.hasRecentMissedCall(id, phone, since),
+        hasRecentMissedCall: (id, phone, since) => this.store.hasRecentMissedCall(id, phone, since, this.log),
         recordInboundMessage: (input) => this.store.recordInboundMessage(input),
         schedulePoke: () => this.poke?.schedule(),
         ownPhone: () => session.phoneNumber,
