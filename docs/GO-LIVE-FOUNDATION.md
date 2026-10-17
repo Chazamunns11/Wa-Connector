@@ -74,9 +74,10 @@ two are filled in a second pass once both domains exist. That is expected.
    (`0002_accounts.sql`, `0003_activation_cap.sql`, `0004_reliability.sql`,
    `0005_whatsapp_sessions_phone_linked_at.sql`, `0006_ghl_location_numbers.sql`,
    `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`,
-   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, `0011_message_events.sql`, `0012_workflow_triggers.sql`, `0013_keep_pending_text_until_reported.sql`, `0014_sms_fallback.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
+   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, `0011_message_events.sql`, `0012_workflow_triggers.sql`, `0013_keep_pending_text_until_reported.sql`, `0014_sms_fallback.sql`, `0015_function_search_path.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
    every logout, so 0005 must be applied before the bridge is deployed.
-   Likewise apply 0001 to 0014 in order before deploying the bridge and the
+   **Status, 17 Oct 2026:** 0001 to 0015 are applied to the live Supabase project `Wa-Connector` (cvqaghghuyxolpcfuzrw) and its schema was checked against these files. 0002 went in as three parts (`0002a`–`0002c`) and skipped its `update profiles` line, which was a no-op on the empty table.
+   Likewise apply 0001 to 0015 in order before deploying the bridge and the
    app: 0002 to 0004 add accounts, activation and held messages / STOP
    opt-outs (see `docs/GO-LIVE-ACCOUNTS.md`), 0006 the several-numbers
    tables, 0007 the group tables, 0008 the `whatsapp_messages.group_jid`
