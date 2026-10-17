@@ -17,7 +17,7 @@ The price figures quoted in the Task 12 and Task 13 sections below (£29, £145,
 
 ## Result
 
-- Exit code **0**. 22 routes x 2 widths = 44 page loads, plus `/admin` asserted by status only.
+- Exit code **0** (current run, site pass). 21 routes x 2 widths = 42 page loads, plus `/admin`, `/dashboard` and `/dashboard/billing` asserted by status only. Older sections below record earlier runs; see "Site pass" at the end for the current result.
 - axe: **0 violations** at any impact on every route (24 rules passed per page; the only `incomplete` results are colour-contrast checks axe could not resolve on SVG diagram text and on headings that sit on a `border-t`, all of which are Ink on Cream).
 - Horizontal scroll: 0 failures. `<h1>`: 0 failures (`/embed/crm` is expected to have none, see finding F2).
 - `/admin` answers **500** without Supabase env (fails closed), as expected.
@@ -114,3 +114,39 @@ Re-run on `claude/adoring-brown-hvwuyz-accounts` after the website branch was me
 - Sign-up: `/signup` says "Start your 7-day free trial", "a card is needed to start, and nothing is charged until the trial ends. The trial covers up to 3 numbers." and the button is "Continue to checkout"; the error state keeps values as before. `/signup/complete?session_id=...` shows "Email me my sign-in link"; without a session id it links to `/login`. `/login?error=checkout` renders "Billing isn't set up yet". No public page renders "Preview", "£29", `signup/checkout` or "sample data"; "Sample" appears only on the labelled sample screens (W31).
 - `/docs/connect`: every quoted app label still exists in `CrmEmbedClient.tsx`, `WhatsappConnectionPanel.tsx` or `ConnectLinkClient.tsx`; a PDF generated from this build has text identical to the committed `public/help/pingwren-how-to-connect.pdf` (A4, 2 pages).
 - Coral text sweep (own visible text inside `.surface-coral`, excluding `.btn-ink` and the phones) on 14 public routes at 375 and 1280: 0 non-Ink colours (9 to 29 elements per page); 0 elements painting any WhatsApp-like green.
+
+## Site pass (Ink header, one scale, features, phones) re-run
+
+Re-run on branch `claude/pingwren-site-pass` after Tasks A to E (HEAD `bba7206` plus the one slip fix below). Production build on port 3301 (`BASE_URL=http://localhost:3301`), no Supabase env. `reducedMotion: reduce` for every screenshot; hero frames also taken with `no-preference`.
+
+- Exit code **0**: 21 routes x 2 widths, axe **0 violations of any impact** (0 serious/critical), **0 horizontal-scroll failures** at 375 and 1280, one `<h1>` on every route except `/embed/crm` (F2), no WhatsApp green or logo.
+- Header: computed background `rgb(27, 31, 42)` (Ink), border-bottom 0, on every route at both widths (including `/login`, `/signup`, `/signup/complete`, 404); footer Ink too. No orange/coral header anywhere.
+- Ink-header crops (top of page, 375x420 and 1280x520): see `ink-header-<slug>-<width>.png` for docs, docs-billing, docs-connect, docs-faq, docs-privacy-and-data, docs-setup, home, legal-privacy, legal-terms, login, not-found, pricing, signup, signup-complete.
+- Phone crops: `hero-phones-375.png`, `hero-phones-1280.png` (reduced motion, finished frame). Hero frames `hero-anim-{start,mid,end}-{375,1280}.png` (animations paused at 0, 900 and 2000 ms; 5 animations running) and `hero-anim-reduced-motion-{375,1280}.png` (0 animations). `home-mobile-menu-open-375.png` is the open menu.
+- Features: the "WhatsApp groups" item shows a "Coming soon" chip and text only (no phone, no figure); the only items with a visual are two-way chat (diagram), the all-clients board. `FEATURES.groupsLive` is false.
+- Pricing, exact: 1 = £14.99, 3 = £44.97, 5 = £74.95, 10 = £79.90, 25 = £199.75; tiers "1 to 9 numbers £14.99 each" and "10 or more £7.99 each". Resale at £50: 1 = £35.01, 5 = £175.05, 10 = £420.10 (£5,041.20 a year), 25 = £1,050.25.
+- Borders and radius on the scale on every page checked (`/`, `/pricing`, `/docs/setup`, `/docs/faq`, `/signup`, `/login`): 2px rules, 3px slabs at 20px radius (24px only on `.slab-lift`, the pricing calculator), 2px inputs at 8px, notes at 12px, pills 999px.
+
+### Band sequence as rendered (same at 375 and 1280)
+
+Every page starts with the Ink header. "Ink top" is `PageTop` (`surface-dark`, 56px top, 48 to 80px bottom). `band` = 64 to 120px vertical padding, `band-tight` = 72px.
+
+| Route | Bands, top to bottom |
+| --- | --- |
+| `/` | Ink hero (`surface-dark hero-band`) > White features (`band hang-pad`) > Coral setup (`surface-coral band`) > White "Read this before you sign up" (`band`) > Mist FAQ (`band bg-raised`) > Coral price strip (`surface-coral band-tight`) > Ink footer |
+| `/pricing` | Ink top > White calculator and included (`band`) > Coral resale (`surface-coral band`) > White trial (`band`) > White GoHighLevel comparison (`band`) > Mist billing questions (`band bg-raised`) > Ink footer |
+| `/docs`, `/docs/setup`, `/docs/billing`, `/docs/privacy-and-data`, `/docs/connect`, `/legal/terms`, `/legal/privacy` | Ink top > White body (`band`) > Ink footer |
+| `/docs/faq` | Ink top > Mist questions (`band bg-raised`) > White (`band-tight`) > Ink footer |
+| `/signup`, `/signup/complete`, `/login` | Ink header only > white card (`max-w-md px-4 py-10 md:py-16`) > Ink footer |
+| 404 | Ink header > white `band-tight` > Ink footer |
+
+### Findings
+
+| # | Severity | Where | Finding |
+| --- | --- | --- | --- |
+| S1 | low, FIXED | `src/components/site/PrintButton.tsx:8` | "Print or save as PDF" used the Ink button on the Ink `PageTop` of `/docs/connect`, so it had no visible shape. Now `siteButton("coral")`. |
+| S2 | info | `src/components/auth/AuthShell.tsx:19` | `/login`, `/signup` and `/signup/complete` have no Ink page-top band, only the header and a white card (the band map says so). Deliberate, noted for consistency. |
+| S3 | info | `src/app/globals.css:1104` | The SMS phone's thread is bottom-anchored, so with one unanswered message most of its screen is empty at 1280. By design (Task E). |
+| S4 | info | `src/app/(site)/docs/page.tsx` and other docs pages | Docs and legal bodies carry the full `.band` padding (up to 120px) under the Ink top, a larger gap than before. Spec-driven (Task A concern 3). |
+
+No leftover orange header, no spacing or border outliers, and no copy or number errors were found beyond S1.

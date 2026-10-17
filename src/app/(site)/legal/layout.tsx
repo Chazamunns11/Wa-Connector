@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-/** Legal pages read dark-on-light, like the docs: header and footer stay dark, the body flips to the light token set. */
+/** Legal pages read dark-on-light under the Ink header; the body stays on the default White ground. */
 export default function LegalLayout({ children }: { children: ReactNode }) {
-  return <div className="surface-light min-h-full bg-bg text-ink">{children}</div>;
+  return <div className="min-h-full bg-bg text-ink">{children}</div>;
 }

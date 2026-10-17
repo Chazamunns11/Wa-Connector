@@ -1,15 +1,14 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { BrandMark } from "@/components/site/BrandMark";
 import { SiteFooter } from "@/components/site/SiteFooter";
-import { Container } from "@/components/site/Container";
+import { SiteHeader } from "@/components/site/SiteHeader";
 import { brandCssVars, brandConfig } from "@/lib/brand-config";
 import { SITE_ROUTES } from "@/lib/site/routes";
 import { signOutAction } from "@/app/login/actions";
 
-const LINK = "inline-flex min-h-11 items-center whitespace-nowrap px-1.5 text-sm sm:px-2 text-ink-dim hover:text-ink";
+const LINK = "inline-flex min-h-11 items-center whitespace-nowrap px-1.5 text-sm font-semibold text-ink hover:underline underline-offset-4 sm:px-2";
 
-/** Account screens: the site shell without the marketing nav. */
+/** Account screens: the same header as the site, with the signed-in links in place of the marketing nav. */
 export default function AppLayout({ children }: { children: ReactNode }) {
   const groupsOn = process.env.GROUPS_ENABLED === "true";
   return (
@@ -17,12 +16,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <a href="#main" className="skip-link">
         Skip to main content
       </a>
-      <header className="surface-dark border-b">
-        <Container className="flex min-h-16 items-center justify-between gap-2">
-          <Link href={SITE_ROUTES.dashboard} className="inline-flex min-h-11 items-center" aria-label={`${brandConfig().name} dashboard`}>
-            <BrandMark surface="dark" size={44} />
-          </Link>
-          <nav aria-label="Account" className="flex items-center gap-1">
+      <SiteHeader
+        accountNav={
+          <>
             <Link href={SITE_ROUTES.dashboard} className={LINK}>
               Dashboard
             </Link>
@@ -39,9 +35,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 Log out
               </button>
             </form>
-          </nav>
-        </Container>
-      </header>
+          </>
+        }
+      />
       <main id="main" className="flex-1">
         {children}
       </main>

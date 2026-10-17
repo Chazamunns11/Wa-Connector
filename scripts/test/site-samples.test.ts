@@ -62,7 +62,7 @@ test("DashboardSample carries the preview dashboard's rows and wording", () => {
   assert.ok(!/LocationTable/.test(t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")), "must not import the interactive table");
 });
 
-test("globals.css defines the Paper ground, rule token, section rule and phone", () => {
+test("globals.css defines the White ground, rule token and phone", () => {
   const css = read("src/app/globals.css");
   // Task 14: Direction B. The last .surface-dark block carries the Coral rule.
   const darkBlocks = css.match(/\.surface-dark \{[^}]*\}/g) ?? [];
@@ -73,7 +73,6 @@ test("globals.css defines the Paper ground, rule token, section rule and phone",
   const second = css.slice(lastRoot, css.indexOf("}", lastRoot));
   assert.match(second, /--color-bg:\s*#FFFFFF/);
   assert.match(second, /--color-rule:\s*#1B1F2A/);
-  assert.match(css, /\.section-rule/);
   assert.match(css, /\.phone\s*\{/);
   assert.match(css, /\.site-body/);
 });

@@ -63,10 +63,10 @@ test("siteButton builds the pill class string", () => {
   assert.equal(siteButton("line", "btn-sm"), "btn btn-line btn-sm");
 });
 
-test("chrome: header is coral, footer is Ink, Cta and forms use the site pills", () => {
+test("chrome: header is Ink, footer is Ink, Cta and forms use the site pills", () => {
   const header = read("src/components/site/SiteHeader.tsx");
-  assert.match(header, /surface-coral/);
-  assert.match(header, /siteButton\("ink"/);
+  assert.match(header, /surface-dark/);
+  assert.match(header, /siteButton\("coral"/);
   assert.ok(!/buttonClasses\(/.test(header));
   assert.match(read("src/components/site/SiteFooter.tsx"), /surface-dark/);
   assert.match(read("src/components/site/Cta.tsx"), /siteButton/);
@@ -84,9 +84,9 @@ test("chrome: header is coral, footer is Ink, Cta and forms use the site pills",
 
 // ---- Task 14B: home page in Direction B ----
 
-test("14B home page: grounds run coral, dark, coral, slab, mist, coral", () => {
+test("14B home page: grounds run dark, white features, coral, slab, mist, coral", () => {
   const p = read("src/app/(site)/page.tsx");
-  const order = ["surface-coral", "surface-dark", "surface-coral", "slab slab-lift", "bg-raised", "surface-coral"];
+  const order = ["surface-dark", "surface-coral", "slab slab-lift", "bg-raised", "surface-coral"];
   let at = -1;
   for (const token of order) {
     const i = p.indexOf(token, at + 1);
@@ -96,14 +96,14 @@ test("14B home page: grounds run coral, dark, coral, slab, mist, coral", () => {
   assert.ok(!p.includes("section-rule"));
   assert.ok(p.indexOf("bg-raised") > p.indexOf("slab slab-lift"), "bg-raised only on the FAQ band");
   const heroSection = p.slice(p.indexOf("<section"), p.indexOf("</section>"));
-  assert.match(heroSection, /surface-coral/);
+  assert.match(heroSection, /surface-dark/);
   const h1 = p.slice(p.indexOf("<h1"), p.indexOf("</h1>"));
-  assert.match(h1, /hero-big/);
-  assert.ok(p.indexOf('id="own-result"') > p.indexOf("copy.disclosure.heading"), "footnote target sits inside the disclosure block");
+  assert.match(h1, /copy\.heroH1/);
+  assert.ok(p.indexOf('id="own-result"') > p.indexOf("copy.reasons.heading"), "footnote target sits inside the Why use us block");
   assert.match(p, /<HowItWorks steps=\{copy\.setup\.steps\} \/>/);
   assert.ok(!/aside=/.test(p));
   assert.match(p, /<CustomerResults/);
-  assert.match(p, /<SafetyThread items=\{copy\.safety\}/);
+  assert.match(p, /<FeatureList/);
   assert.ok(!/Clients read WhatsApp/.test(p));
   assert.ok(!/copy\.safetyIntro/.test(p), "safetyIntro is not rendered (W37)");
 });
@@ -166,7 +166,7 @@ test("14B sales-copy: step 2 carries the path chip; sampleCaption gone; other st
   assert.ok(!("sampleCaption" in c.setup));
   assert.equal(
     c.heroSub,
-    "PingWren takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.",
+    "Set PingWren as the Telephony Provider and the Send SMS steps you already have go out on WhatsApp. When the customer writes back, the reply lands in Conversations.",
   );
   assert.equal(c.faqAllLink, "All the questions, on one page");
   assert.equal(c.priceStrip.terms, "The 7-day trial covers up to 3 numbers. We take a card up front, and you can cancel any time from the billing portal.");

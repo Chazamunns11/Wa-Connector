@@ -20,12 +20,12 @@ export default function FaqPage() {
   return (
     <>
     <PageTop title="Frequently asked questions" />
-    <section className="band bg-raised !pb-[clamp(40px,5vw,64px)]">
+    <section className="band bg-raised">
       <Container>
         <FaqList entries={faqEntries(brand)} />
       </Container>
     </section>
-    <section className="py-10 md:py-14">
+    <section className="band-tight">
       <Container>
         <p className="max-w-[62ch] text-ink-dim">
           Not here? The{" "}

@@ -1,6 +1,6 @@
 /**
  * The three steps as three columns, each under a 3px Coral rule with a giant
- * Coral numeral (Direction B). Numbers stay because this really is a sequence.
+ * numeral in the ground's rule colour (Direction B). Numbers stay because this really is a sequence.
  * Step 2 carries the GoHighLevel path as a chip.
  */
 export function HowItWorks({ steps }: { steps: { title: string; body: string; path?: string }[] }) {
@@ -11,7 +11,7 @@ export function HowItWorks({ steps }: { steps: { title: string; body: string; pa
           <span aria-hidden="true" className="step-num">
             {steps.indexOf(s) + 1}
           </span>
-          <h3 className="mb-2.5 text-[1.35rem] leading-[1.1]">{s.title}</h3>
+          <h3 className="h-item mb-2.5">{s.title}</h3>
           <p className="max-w-[40ch] text-ink-dim">{s.body}</p>
           {s.path ? <span className="path-chip">{s.path}</span> : null}
         </li>

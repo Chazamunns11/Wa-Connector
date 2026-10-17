@@ -40,7 +40,8 @@ test("safety thread is fed by the sales-copy safety items and is not a numbered 
   assert.match(src, /\[paced, held, stop\] = items/);
   assert.match(src, /note\.title/);
   assert.ok(!/<ol/.test(src));
-  assert.match(read("src/app/(site)/page.tsx"), /<SafetyThread items=\{copy\.safety\}/);
+  assert.match(read("src/components/site/FeatureList.tsx"), /featureEntries/);
+  assert.match(read("src/app/(site)/page.tsx"), /<FeatureList/);
 });
 
 test("paced copy says over-cap messages are reported back as not sent", () => {

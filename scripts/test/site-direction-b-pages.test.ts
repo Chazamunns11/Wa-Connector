@@ -7,10 +7,10 @@ import { test } from "node:test";
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 const stripCss = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "");
 
-test("pricing: coral top, slab calculator, ruled comparison, Mist billing band", () => {
+test("pricing: Ink top, slab calculator, ruled comparison, Mist billing band", () => {
   const page = read("src/app/(site)/pricing/page.tsx");
   const firstSection = page.slice(page.indexOf("<section"), page.indexOf("</section>"));
-  assert.match(firstSection, /surface-coral/);
+  assert.match(firstSection, /surface-dark/);
   assert.ok(page.includes("slab"));
   assert.match(page, /<section className="[^"]*bg-raised/);
   assert.ok(!page.includes("section-rule"));
@@ -31,12 +31,12 @@ test("setup guide: disclosure troubleshooting, Ink numerals, slab sample chrome"
   assert.match(read("src/components/site/SetupStep.tsx"), /text-ink[^-]/);
   const css = stripCss(read("src/app/globals.css"));
   const chrome = [...css.matchAll(/\n\.sample-chrome \{([^}]*)\}/g)].map((m) => m[1]).join("\n");
-  assert.match(chrome, /border:\s*3px solid var\(--color-ink\)/);
+  assert.match(chrome, /border:\s*3px solid var\(--color-outline\)/);
   assert.match(chrome, /border-radius:\s*20px/);
 });
 
-test("docs pages: coral top band and slab tiles", () => {
-  assert.ok(read("src/components/site/PageTop.tsx").includes("surface-coral"));
+test("docs pages: Ink top band and slab tiles", () => {
+  assert.ok(read("src/components/site/PageTop.tsx").includes("surface-dark"));
   for (const p of ["docs/page", "docs/faq/page", "docs/billing/page", "docs/privacy-and-data/page", "docs/setup/page"]) {
     assert.ok(read(`src/app/(site)/${p}.tsx`).includes("<PageTop"), `${p} uses PageTop`);
   }
@@ -51,7 +51,7 @@ test("auth forms use the site pills, not ui/Button", () => {
     assert.ok(!s.includes("@/components/ui/Button"), f);
     assert.ok(s.includes('siteButton("coral"'), f);
   }
-  assert.ok(read("src/components/auth/SignupForm.tsx").includes("border-2 border-border-strong"));
+  assert.ok(read("src/components/auth/SignupForm.tsx").includes("border-2 border-outline"));
 });
 
 function walk(dir: string, out: string[] = []): string[] {
