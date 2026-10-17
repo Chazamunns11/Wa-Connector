@@ -110,7 +110,9 @@ import {
 import { resolveSendingTenant, type SendingNumber } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
 import { decideNotConnected, REASON_NUMBER_BANNED, type NotConnectedDecision } from "@/lib/ghl-held-rules";
-import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage } from "@/lib/types";
+import type { TriggerKey } from "@/lib/ghl-trigger-keys";
+import type { TriggerPayloads, TriggerRepo } from "@/lib/ghl-triggers";
+import type { GhlAccount, GhlOutboundAttachment, GhlOutboundAttachmentDraft, GhlOutboundMessage, LocationNumber } from "@/lib/types";
 
 /** Repo slice this module needs — every method it touches is already on `GhlRepository` (Phase 2's extension of Phase 1's interface — see that Pick list's own comment, src/lib/data/index.ts). Both entry points are only ever driven via `webhookRepo` (the webhook route, the poke route, the reminders cron — none carry a user session). */
 export type GhlProviderRepo = Pick<
@@ -143,6 +145,8 @@ export type GhlProviderRepo = Pick<
   // marked so (`noteGroupLeft`).
   | "getWhatsappGroupByContact"
   | "markWhatsappGroupLeft"
+  // Workflow triggers — "not on WhatsApp" fires from the status drain.
+  | "listTriggerSubscriptions"
 >;
 
 /**
@@ -221,6 +225,13 @@ export interface GhlProviderDeps {
    * module-parse time, and never during a test that supplies its own fake.
    */
   notify: (text: string) => void;
+  /**
+   * Workflow triggers: fires one WhatsApp event to the subscribed GHL
+   * workflows. Optional so tests can fake it; unset, the real
+   * `fireWorkflowTrigger` is used (loaded lazily — `ghl-triggers` imports this
+   * module — and it reads the firing flag itself). See `fireTriggerBestEffort`.
+   */
+  fireTrigger?: FireTrigger;
 }
 
 export const defaultGhlProviderDeps: GhlProviderDeps = {
@@ -234,6 +245,81 @@ export const defaultGhlProviderDeps: GhlProviderDeps = {
     void import("@/lib/slack").then((m) => m.notifyText(text));
   },
 };
+
+/** Fires one trigger event; the shape of `fireWorkflowTrigger` (`src/lib/ghl-triggers.ts`). */
+export type FireTrigger = <K extends TriggerKey>(repo: TriggerRepo, locationId: string, key: K, payload: TriggerPayloads[K]) => Promise<unknown>;
+
+/**
+ * Fires a workflow trigger without ever throwing or changing the caller's
+ * outcome. Uses `deps.fireTrigger` when injected, else the real helper (which
+ * does nothing unless `GHL_WORKFLOW_TRIGGERS_ENABLED` is "true"). Logs nothing
+ * itself: the helper logs fixed strings, and a throw here is swallowed.
+ */
+export async function fireTriggerBestEffort<K extends TriggerKey>(
+  repo: TriggerRepo,
+  deps: GhlTokenRefreshDeps & { fireTrigger?: FireTrigger },
+  locationId: string,
+  key: K,
+  payload: TriggerPayloads[K]
+): Promise<void> {
+  try {
+    if (deps.fireTrigger) {
+      await deps.fireTrigger(repo, locationId, key, payload);
+      return;
+    }
+    const triggers = await import("@/lib/ghl-triggers");
+    await triggers.fireWorkflowTrigger(repo, triggers.defaultTriggerDeps(deps), locationId, key, payload);
+  } catch {
+    // Best effort: a trigger can never change a drain result.
+  }
+}
+
+/**
+ * The `number` / `numberLabel` of a trigger payload for `tenantId`'s number, or
+ * null when its phone is unknown or unreadable (the trigger is then skipped).
+ * `memo` caches the phone per tenant for one pass; only a successful read is cached.
+ */
+export async function resolveTriggerNumber(
+  repo: Pick<GhlRepository, "getWhatsappSessionSummary">,
+  tenantId: string,
+  label: string | null | undefined,
+  memo?: Map<string, string>
+): Promise<{ number: string; numberLabel: string | null } | null> {
+  try {
+    let phone = memo?.get(tenantId) ?? null;
+    if (!phone) {
+      phone = (await repo.getWhatsappSessionSummary(tenantId))?.phoneNumber ?? null;
+      if (!phone) return null;
+      memo?.set(tenantId, phone);
+    }
+    return { number: phone, numberLabel: label?.trim() ? label.trim() : null };
+  } catch {
+    return null;
+  }
+}
+
+/** The text we could not send, at most 500 code points. */
+export function capTriggerMessage(text: string | null): string {
+  return text === null ? "" : Array.from(text).slice(0, 500).join("");
+}
+
+/** Fires `whatsapp_not_on_whatsapp` for a row the bridge reported as not on WhatsApp. Never throws. */
+async function fireNotOnWhatsapp(repo: GhlProviderRepo, deps: GhlProviderDeps, row: GhlOutboundMessage): Promise<void> {
+  try {
+    const numbers = await repo.listLocationNumbers(row.locationId);
+    const target = await resolveTriggerNumber(repo, row.tenantId, numbers.find((n) => n.tenantId === row.tenantId)?.label);
+    if (!target) return;
+    // `pendingText` is cleared once a row leaves `pending_send`, so by now it is
+    // normally null and the message is "".
+    await fireTriggerBestEffort(repo, deps, row.locationId, "whatsapp_not_on_whatsapp", {
+      ...target,
+      contactId: row.ghlContactId,
+      message: capTriggerMessage(row.pendingText),
+    });
+  } catch {
+    // never changes the drain result
+  }
+}
 
 /** The narrow slice `resolveGhlAccessToken` actually touches — see `GhlTokenRefreshRepo`'s identical rationale, just for `deps` instead of `repo`. `GhlProviderDeps` already contains all three, so `defaultGhlProviderDeps` (and every existing call site) keeps typechecking unchanged. */
 export type GhlTokenRefreshDeps = Pick<GhlProviderDeps, "refreshToken" | "refreshWaitMs" | "notify">;
@@ -1728,7 +1814,10 @@ async function drainMultipartRow(
   const outcome = await reportGhlOutcome(repo, deps, account, row, status, aggregate.status === "failed" ? aggregate.reason : null);
   if (outcome === "reported") {
     if (aggregate.status === "delivered") result.delivered++;
-    else result.failed++;
+    else {
+      result.failed++;
+      if (aggregate.reason === REASON_NOT_ON_WHATSAPP) await fireNotOnWhatsapp(repo, deps, row);
+    }
   } else {
     result.reportFailed++;
   }
@@ -2143,8 +2232,10 @@ async function drainAcceptedRow(
   }
   if (bridgeMessage.status === "not_on_whatsapp") {
     const outcome = await reportGhlOutcome(repo, deps, account, row, "failed", REASON_NOT_ON_WHATSAPP);
-    if (outcome === "reported") result.failed++;
-    else result.reportFailed++;
+    if (outcome === "reported") {
+      result.failed++;
+      await fireNotOnWhatsapp(repo, deps, row);
+    } else result.reportFailed++;
     return;
   }
   // 'failed' — forward the bridge ledger's own fixed reason (guaranteed a
@@ -2195,7 +2286,16 @@ const READ_RECEIPT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /** Fixed `read_report_error` for a final 4xx refusal of the `read` status. */
 const REASON_GHL_REFUSED_READ = "GHL refused read status";
 
-export type GhlReadReceiptsRepo = GhlTokenRefreshRepo & Pick<GhlRepository, "listGhlOutboundAwaitingRead" | "markGhlOutboundReadReported">;
+export type GhlReadReceiptsRepo = GhlTokenRefreshRepo &
+  Pick<
+    GhlRepository,
+    | "listGhlOutboundAwaitingRead"
+    | "markGhlOutboundReadReported"
+    // Workflow triggers — `whatsapp_message_read` needs the number and who subscribed.
+    | "getWhatsappSessionSummary"
+    | "listLocationNumbers"
+    | "listTriggerSubscriptions"
+  >;
 
 export interface DrainGhlReadReceiptsResult {
   examined: number;
@@ -2217,6 +2317,32 @@ export interface DrainGhlReadReceiptsResult {
  * on. The same wall-clock budget as `drainGhlOutboundStatuses` applies.
  * Never throws; logs fixed strings only.
  */
+/** Fires `whatsapp_message_read` after a successful read PUT. Never throws. */
+async function fireMessageRead(
+  repo: GhlReadReceiptsRepo,
+  deps: GhlProviderDeps,
+  row: GhlOutboundMessage,
+  phoneByTenant: Map<string, string>,
+  numbersByLocation: Map<string, LocationNumber[]>
+): Promise<void> {
+  try {
+    let numbers = numbersByLocation.get(row.locationId);
+    if (!numbers) {
+      numbers = await repo.listLocationNumbers(row.locationId);
+      numbersByLocation.set(row.locationId, numbers);
+    }
+    const target = await resolveTriggerNumber(repo, row.tenantId, numbers.find((n) => n.tenantId === row.tenantId)?.label, phoneByTenant);
+    if (!target) return;
+    await fireTriggerBestEffort(repo, deps, row.locationId, "whatsapp_message_read", {
+      ...target,
+      contactId: row.ghlContactId,
+      messageId: row.ghlMessageId,
+    });
+  } catch {
+    // never changes the drain result
+  }
+}
+
 export async function drainGhlReadReceipts(
   repo: GhlReadReceiptsRepo,
   deps: GhlProviderDeps = defaultGhlProviderDeps
@@ -2237,6 +2363,9 @@ export async function drainGhlReadReceipts(
   const tokenByLocation = new Map<string, string | null>();
   // Locations skipped for the rest of this pass.
   const skippedLocations = new Set<string>();
+  // Workflow triggers: the phone per tenant and the numbers per location, read at most once per pass.
+  const phoneByTenant = new Map<string, string>();
+  const numbersByLocation = new Map<string, LocationNumber[]>();
 
   for (const row of rows) {
     if (Date.now() - startedAtMs >= DRAIN_TIME_BUDGET_MS) {
@@ -2275,6 +2404,7 @@ export async function drainGhlReadReceipts(
       if (put.ok) {
         await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
         result.reported++;
+        await fireMessageRead(repo, deps, row, phoneByTenant, numbersByLocation);
       } else if (put.status === 401 || (put.status !== undefined && put.status >= 500)) {
         // A token problem or a GHL outage: retry next pass, and spare the
         // rest of this location's rows a PUT that would fail the same way.

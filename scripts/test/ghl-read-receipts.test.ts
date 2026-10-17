@@ -254,3 +254,95 @@ test("time budget: stops starting new rows once the pass has run long", async ()
     Date.now = realNow;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Workflow triggers: whatsapp_message_read after a successful read PUT.
+// ---------------------------------------------------------------------------
+
+function withTriggerReads(s: ReturnType<typeof setup>, phone: string | null = "+447700900999") {
+  const sessionReads: string[] = [];
+  const repo = {
+    ...s.repo,
+    async getWhatsappSessionSummary(tenantId: string) { sessionReads.push(tenantId); return phone === null ? null : { phoneNumber: phone }; },
+    async listLocationNumbers() { return [{ tenantId: TENANT, slot: 1, isDefault: true, label: "Sales" }]; },
+    async listTriggerSubscriptions() { return []; },
+  } as unknown as GhlReadReceiptsRepo;
+  return { repo, sessionReads };
+}
+
+function fakeFire(behaviour: "ok" | "throw" = "ok") {
+  const fired: { locationId: string; key: string; payload: unknown }[] = [];
+  const fireTrigger = async (_repo: unknown, locationId: string, key: string, payload: unknown) => {
+    fired.push({ locationId, key, payload });
+    if (behaviour === "throw") throw new Error("boom");
+    return { fired: 1, failed: 0 };
+  };
+  return { fired, fireTrigger };
+}
+
+test("triggers: a successful read PUT fires whatsapp_message_read with GHL's message id", async () => {
+  const s = setup([row(1), row(2)], ["key-1", "key-2"]);
+  const { repo, sessionReads } = withTriggerReads(s);
+  const { fired, fireTrigger } = fakeFire();
+  const r = await drainGhlReadReceipts(repo, { ...s.deps, fireTrigger } as unknown as GhlProviderDeps);
+  assert.equal(r.reported, 2);
+  assert.deepEqual(fired.map((f) => [f.locationId, f.key, f.payload]), [
+    ["loc-1", "whatsapp_message_read", { number: "+447700900999", numberLabel: "Sales", contactId: "c", messageId: "m1" }],
+    ["loc-1", "whatsapp_message_read", { number: "+447700900999", numberLabel: "Sales", contactId: "c", messageId: "m2" }],
+  ]);
+  assert.equal(sessionReads.length, 1, "the phone is read once per tenant per pass");
+});
+
+test("triggers: app-originated, refused, failed and skipped rows fire nothing", async () => {
+  const appRow = row(1, { ghlMessageId: `${APP_MESSAGE_ID_PREFIX}abc` });
+  const refused = setup([appRow, row(2)], ["key-1", "key-2"], { ok: false, error: "bad", status: 422 });
+  const a = withTriggerReads(refused);
+  const fa = fakeFire();
+  await drainGhlReadReceipts(a.repo, { ...refused.deps, fireTrigger: fa.fireTrigger } as unknown as GhlProviderDeps);
+  assert.deepEqual(fa.fired, []);
+
+  const down = setup([row(1)], ["key-1"], { ok: false, error: "x", status: 503 });
+  const b = withTriggerReads(down);
+  const fb = fakeFire();
+  await drainGhlReadReceipts(b.repo, { ...down.deps, fireTrigger: fb.fireTrigger } as unknown as GhlProviderDeps);
+  assert.deepEqual(fb.fired, []);
+});
+
+test("triggers: a throwing fire or an unknown phone never changes the drain result", async () => {
+  const plain = setup([row(1)], ["key-1"]);
+  const expected = await drainGhlReadReceipts(plain.repo, plain.deps);
+
+  const s = setup([row(1)], ["key-1"]);
+  const { repo } = withTriggerReads(s);
+  const f = fakeFire("throw");
+  const r = await drainGhlReadReceipts(repo, { ...s.deps, fireTrigger: f.fireTrigger } as unknown as GhlProviderDeps);
+  assert.deepEqual(r, expected);
+  assert.equal(f.fired.length, 1);
+  assert.notEqual(s.byId.get("row-1")!.readReportedAt, null);
+
+  const noPhone = setup([row(1)], ["key-1"]);
+  const n = withTriggerReads(noPhone, null);
+  const fn = fakeFire();
+  const r2 = await drainGhlReadReceipts(n.repo, { ...noPhone.deps, fireTrigger: fn.fireTrigger } as unknown as GhlProviderDeps);
+  assert.deepEqual(r2, expected);
+  assert.deepEqual(fn.fired, []);
+});
+
+test("triggers: with the flag off the real helper posts nothing anywhere", async () => {
+  const saved = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const realFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  globalThis.fetch = (async () => { fetchCalls++; throw new Error("unexpected fetch"); }) as typeof fetch;
+  try {
+    const s = setup([row(1)], ["key-1"]);
+    const { repo } = withTriggerReads(s);
+    const r = await drainGhlReadReceipts(repo, s.deps); // no fireTrigger: the real helper
+    assert.equal(r.reported, 1);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+    else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
+  }
+});

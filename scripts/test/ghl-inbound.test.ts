@@ -1760,3 +1760,150 @@ test("renderInboundEvent: a reaction whose rendering passes 500 code points is c
   assert.equal(Array.from(out).length, 500);
   assert.ok(out.startsWith("😀".repeat(480) + " reacted to "));
 });
+
+// ---------------------------------------------------------------------------
+// Workflow triggers: fire points after a successful push.
+// ---------------------------------------------------------------------------
+
+type FiredTrigger = { locationId: string; key: string; payload: unknown };
+
+/** The repo plus the two reads the trigger payload needs (the number's phone, and subscriptions). */
+function withTriggerReads(repo: GhlInboundRepo, phone: string | null = "+447700900999"): GhlInboundRepo {
+  return {
+    ...repo,
+    async getWhatsappSessionSummary() {
+      return phone === null ? null : ({ phoneNumber: phone } as never);
+    },
+    async listTriggerSubscriptions() {
+      return [];
+    },
+  } as GhlInboundRepo;
+}
+
+function fireRecorder(behaviour: "ok" | "throw" | "slow" = "ok") {
+  const fired: FiredTrigger[] = [];
+  const fireTrigger: GhlInboundDeps["fireTrigger"] = async (_repo, locationId, key, payload) => {
+    fired.push({ locationId, key, payload });
+    if (behaviour === "throw") throw new Error("boom");
+    if (behaviour === "slow") await new Promise((r) => setTimeout(r, 50));
+    return { fired: 1, failed: 0 };
+  };
+  return { fired, fireTrigger };
+}
+
+const NUMBER_FIELDS = { number: "+447700900999", numberLabel: null };
+
+test("triggers: a plain one-to-one message fires whatsapp_message_received after the push, with no text", async () => {
+  const { repo, rowsById } = createFakeRepo([makeAccount()], [makeRow({ body: "secret text", messageType: "audioMessage" })]);
+  const { fired, fireTrigger } = fireRecorder();
+  const { deps } = makeDeps({ fireTrigger });
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), deps);
+  assert.equal(result.pushed, 1);
+  assert.deepEqual(fired, [
+    { locationId: LOCATION_ID, key: "whatsapp_message_received", payload: { ...NUMBER_FIELDS, messageType: "voice_note", contactId: "contact-1" } },
+  ]);
+  assert.equal(JSON.stringify(fired).includes("secret text"), false);
+  assert.equal([...rowsById.values()][0].resolution, "ghl_pushed");
+});
+
+test("triggers: numberLabel is the number's label when it has one", async () => {
+  const numbers = { [LOCATION_ID]: [{ tenantId: TENANT_ID, slot: 1 as const, isDefault: true, label: "Sales" }] };
+  const { repo } = createFakeRepo([makeAccount()], [makeRow()], numbers);
+  const { fired, fireTrigger } = fireRecorder();
+  await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  assert.equal((fired[0].payload as { numberLabel: string | null }).numberLabel, "Sales");
+});
+
+test("triggers: a missed voice call fires whatsapp_missed_call with isVideo false, a video call true", async () => {
+  const rows = [
+    makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date().toISOString() }),
+    makeRow({ body: null, messageType: "missedVideoCall", eventKind: "missed_call", receivedAt: new Date().toISOString() }),
+  ];
+  const { repo } = createFakeRepo([makeAccount()], rows);
+  const { fired, fireTrigger } = fireRecorder();
+  await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  assert.deepEqual(
+    fired.map((f) => [f.key, f.payload]),
+    [
+      ["whatsapp_missed_call", { ...NUMBER_FIELDS, isVideo: false, contactId: "contact-1" }],
+      ["whatsapp_missed_call", { ...NUMBER_FIELDS, isVideo: true, contactId: "contact-1" }],
+    ]
+  );
+});
+
+test("triggers: group, edit, reaction, delete, stale and suppressed rows fire nothing", async () => {
+  const group: WhatsappGroup = { tenantId: TENANT_ID, groupJid: "g@g.us", name: "Team", enabled: true, ghlContactId: null } as WhatsappGroup;
+  const rows = [
+    makeRow({ groupJid: "g@g.us" }),
+    makeRow({ body: null, messageType: "event", eventKind: "edit", targetWaMessageId: "x", targetFromMe: false } as Partial<WhatsappInboundMessage>),
+    makeRow({ body: null, messageType: "event", eventKind: "reaction", targetWaMessageId: "x", targetFromMe: false } as Partial<WhatsappInboundMessage>),
+    makeRow({ body: null, messageType: "event", eventKind: "delete", targetWaMessageId: "x", targetFromMe: false } as Partial<WhatsappInboundMessage>),
+    makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date(Date.now() - MISSED_CALL_STALE_MS - 60_000).toISOString() }),
+  ];
+  const { repo } = createFakeRepo([makeAccount({ showReactions: false, showDeletes: false })], rows, {}, [group]);
+  const { fired, fireTrigger } = fireRecorder();
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+  assert.equal(result.staleMissedCalls, 1);
+  assert.equal(result.eventsSuppressed, 2, "reaction and delete suppressed");
+  assert.deepEqual(fired, []);
+});
+
+test("triggers: a failed push fires nothing", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow()]);
+  const { fired, fireTrigger } = fireRecorder();
+  const { deps } = makeDeps({ fireTrigger, addInboundMessage: async () => ({ ok: false, kind: "rejected", error: "no" } as never) });
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), deps);
+  assert.equal(result.rejected, 1);
+  assert.deepEqual(fired, []);
+});
+
+test("triggers: no phone for the number skips the fire and the push still lands", async () => {
+  const { repo } = createFakeRepo([makeAccount()], [makeRow()]);
+  const { fired, fireTrigger } = fireRecorder();
+  const result = await drainGhlInboundReplies(withTriggerReads(repo, null), makeDeps({ fireTrigger }).deps);
+  assert.equal(result.pushed, 1);
+  assert.deepEqual(fired, []);
+});
+
+test("triggers: a throwing or slow fire never changes the drain result", async () => {
+  const baseline = createFakeRepo([makeAccount()], [makeRow(), makeRow()]);
+  const expected = await drainGhlInboundReplies(withTriggerReads(baseline.repo), makeDeps({ fireTrigger: fireRecorder().fireTrigger }).deps);
+  for (const behaviour of ["throw", "slow"] as const) {
+    const { repo, rowsById } = createFakeRepo([makeAccount()], [makeRow(), makeRow()]);
+    const { fired, fireTrigger } = fireRecorder(behaviour);
+    const result = await drainGhlInboundReplies(withTriggerReads(repo), makeDeps({ fireTrigger }).deps);
+    assert.deepEqual(result, expected, behaviour);
+    assert.equal(fired.length, 2, behaviour);
+    assert.deepEqual([...rowsById.values()].map((r) => r.resolution), ["ghl_pushed", "ghl_pushed"], behaviour);
+  }
+});
+
+test("triggers: with the flag off the real helper posts nothing anywhere", async () => {
+  const saved = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const realFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  globalThis.fetch = (async () => {
+    fetchCalls++;
+    throw new Error("unexpected fetch");
+  }) as typeof fetch;
+  try {
+    const { repo } = createFakeRepo([makeAccount()], [makeRow()]);
+    const subscriptionReads: string[] = [];
+    const triggerRepo = {
+      ...withTriggerReads(repo),
+      async listTriggerSubscriptions() {
+        subscriptionReads.push("read");
+        return [{ id: "s1", targetUrl: "https://services.leadconnectorhq.com/hook" }];
+      },
+    } as GhlInboundRepo;
+    const result = await drainGhlInboundReplies(triggerRepo, makeDeps().deps); // no fireTrigger: the real helper
+    assert.equal(result.pushed, 1);
+    assert.equal(fetchCalls, 0);
+    assert.deepEqual(subscriptionReads, []);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+    else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
+  }
+});

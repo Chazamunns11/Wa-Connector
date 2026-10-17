@@ -3713,3 +3713,111 @@ test("getGhlContact: a 404 is flagged notFound", async () => {
   const { result } = await withCapturedFetch(async () => jsonResponse(404, {}), () => getGhlContact("token", "c1"));
   assert.deepEqual(result, { ok: false, error: "GHL contact read rejected (HTTP 404)", notFound: true });
 });
+
+// ---------------------------------------------------------------------------
+// Workflow triggers: whatsapp_not_on_whatsapp from the status drain.
+// ---------------------------------------------------------------------------
+
+function triggerFake(behaviour: "ok" | "throw" = "ok") {
+  const fired: { locationId: string; key: string; payload: unknown }[] = [];
+  const fireTrigger: GhlProviderDeps["fireTrigger"] = async (_repo, locationId, key, payload) => {
+    fired.push({ locationId, key, payload });
+    if (behaviour === "throw") throw new Error("boom");
+    return { fired: 1, failed: 0 };
+  };
+  return { fired, fireTrigger };
+}
+
+test("triggers: not_on_whatsapp reported to GHL fires whatsapp_not_on_whatsapp with an empty message (pending_text is cleared once sent)", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  const row = seedAcceptedRow(repoBundle);
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake();
+  const { deps } = makeDeps({ fireTrigger });
+
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, deps);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(fired, [
+    { locationId: LOCATION_ID, key: "whatsapp_not_on_whatsapp", payload: { number: "+447700900999", numberLabel: null, contactId: "ghl-contact-1", message: "" } },
+  ]);
+});
+
+test("triggers: a stored pending_text is sent capped at 500 code points", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  const row = seedAcceptedRow(repoBundle, { pendingText: "😀".repeat(600) });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake();
+  await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
+  assert.equal(Array.from((fired[0].payload as { message: string }).message).length, 500);
+});
+
+test("triggers: delivered, other failures and an unreported not_on_whatsapp fire nothing", async () => {
+  const delivered = createFakeRepo([makeAccount()]);
+  delivered.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const d = seedAcceptedRow(delivered);
+  delivered.bridgeLedger.set(`${TENANT_ID}:${d.idempotencyKey}`, { status: "sent", error: null });
+  const failed = createFakeRepo([makeAccount()]);
+  failed.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const f = seedAcceptedRow(failed);
+  failed.bridgeLedger.set(`${TENANT_ID}:${f.idempotencyKey}`, { status: "failed", error: "send failed" });
+  const unreported = createFakeRepo([makeAccount()]);
+  unreported.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const u = seedAcceptedRow(unreported);
+  unreported.bridgeLedger.set(`${TENANT_ID}:${u.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+
+  const fakeOne = triggerFake();
+  await drainGhlOutboundStatuses(delivered.repo, makeDeps({ fireTrigger: fakeOne.fireTrigger }).deps);
+  await drainGhlOutboundStatuses(failed.repo, makeDeps({ fireTrigger: fakeOne.fireTrigger }).deps);
+  const putFails = makeDeps({ fireTrigger: fakeOne.fireTrigger, updateStatus: async () => ({ ok: false, error: "down", status: 503 }) });
+  const r = await drainGhlOutboundStatuses(unreported.repo, putFails.deps);
+  assert.equal(r.reportFailed, 1);
+  assert.deepEqual(fakeOne.fired, []);
+});
+
+test("triggers: a multipart message that fails as not on WhatsApp fires once", async () => {
+  const { repoBundle, row, parts } = await seedMultipartRow({ messageId: "msg-mp-trigger", attachments: ["https://x/a.pdf"] });
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary({ phoneNumber: "+447700900999" }));
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${parts[0].idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake();
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps({ fireTrigger }).deps);
+  assert.equal(result.failed, 1);
+  assert.deepEqual(fired.map((f) => f.key), ["whatsapp_not_on_whatsapp"]);
+});
+
+test("triggers: a throwing fire never changes the status drain result", async () => {
+  const repoBundle = createFakeRepo([makeAccount()]);
+  repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+  const row = seedAcceptedRow(repoBundle);
+  repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+  const { fired, fireTrigger } = triggerFake("throw");
+  const { deps, statusCalls } = makeDeps({ fireTrigger });
+  const result = await drainGhlOutboundStatuses(repoBundle.repo, deps);
+  assert.equal(result.failed, 1);
+  assert.equal(result.reportFailed, 0);
+  assert.equal(fired.length, 1);
+  assert.equal(statusCalls.length, 1);
+});
+
+test("triggers: with the flag off the real helper posts nothing anywhere", async () => {
+  const saved = process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  const realFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+  globalThis.fetch = (async () => { fetchCalls++; throw new Error("unexpected fetch"); }) as typeof fetch;
+  try {
+    const repoBundle = createFakeRepo([makeAccount()]);
+    repoBundle.sessionsByTenant.set(TENANT_ID, sessionSummary());
+    const row = seedAcceptedRow(repoBundle);
+    repoBundle.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "not_on_whatsapp", error: null });
+    const result = await drainGhlOutboundStatuses(repoBundle.repo, makeDeps().deps); // no fireTrigger: the real helper
+    assert.equal(result.failed, 1);
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (saved === undefined) delete process.env.GHL_WORKFLOW_TRIGGERS_ENABLED;
+    else process.env.GHL_WORKFLOW_TRIGGERS_ENABLED = saved;
+  }
+});

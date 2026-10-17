@@ -209,10 +209,14 @@ import {
   stripQuotePrefix,
 } from "@/lib/ghl";
 import {
+  fireTriggerBestEffort,
   resolveGhlAccessToken,
+  resolveTriggerNumber,
+  type FireTrigger,
   type GhlTokenRefreshDeps,
   type GhlTokenRefreshRepo,
 } from "@/lib/ghl-provider";
+import { toTriggerMessageType } from "@/lib/ghl-triggers";
 import { inboundNumberPrefix } from "@/lib/sending-number";
 import type { GhlRepository } from "@/lib/data";
 import { classifyOptOutMessage } from "@/lib/opt-out";
@@ -239,6 +243,9 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     // Reliability (W10) — STOP/START opt-outs.
     | "recordOptOut"
     | "clearOptOut"
+    // Workflow triggers — the number's phone and who subscribed.
+    | "getWhatsappSessionSummary"
+    | "listTriggerSubscriptions"
   >;
 
 /**
@@ -258,6 +265,8 @@ export interface GhlInboundDeps extends GhlTokenRefreshDeps {
   ) => Promise<AddGhlInboundMessageResult>;
   /** T10 — only called when `GHL_SYNC_DND === "true"`. */
   setContactDnd: (accessToken: string, contactId: string, dnd: boolean) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Workflow triggers; optional so tests can fake it, else the real helper (which reads the firing flag itself). */
+  fireTrigger?: FireTrigger;
 }
 
 export const defaultGhlInboundDeps: GhlInboundDeps = {
@@ -419,7 +428,7 @@ export async function drainGhlInboundReplies(
   result.candidates = rows.length;
   if (rows.length === 0) return result;
 
-  const memos: PassMemos = { contactIdByKey: new Map(), numbersByLocation: new Map(), groupsByTenant: new Map() };
+  const memos: PassMemos = { contactIdByKey: new Map(), numbersByLocation: new Map(), groupsByTenant: new Map(), phoneByTenant: new Map() };
   const breaker: CircuitBreakerState = { consecutiveContactUpsertFailures: 0, consecutivePostFailures: 0 };
 
   for (const row of rows) {
@@ -453,6 +462,8 @@ interface PassMemos {
   numbersByLocation: Map<string, LocationNumber[]>;
   /** Opt-in groups — per-tenant group rows. A group contact created this pass is written into its entry, so later rows reuse it. */
   groupsByTenant: Map<string, WhatsappGroup[]>;
+  /** Workflow triggers — per-tenant phone for the payload's `number`. */
+  phoneByTenant: Map<string, string>;
 }
 
 /**
@@ -757,6 +768,7 @@ async function processGhlInboundRow(
     // Not for a group contact: it belongs to its group's number, and the
     // sender is not a contact at all.
     if (!group) await recordStickiness(repo, account.locationId, contactId, row);
+    await fireInboundTrigger(repo, deps, memos, account.locationId, locationNumbers, contactId, row, group !== null);
     return;
   }
 
@@ -790,6 +802,42 @@ async function processGhlInboundRow(
   // re-resolves the token from scratch before retrying.
   await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: post.error, unclaim: true });
   result.retried++;
+}
+
+/**
+ * Workflow triggers, after a push that landed: a plain one-to-one message fires
+ * `whatsapp_message_received` (no text) and a missed call `whatsapp_missed_call`.
+ * Group rows and edit/reaction/delete rows fire nothing. Never throws, so it can
+ * never change the row's result.
+ */
+async function fireInboundTrigger(
+  repo: GhlInboundRepo,
+  deps: GhlInboundDeps,
+  memos: PassMemos,
+  locationId: string,
+  locationNumbers: LocationNumber[],
+  contactId: string,
+  row: WhatsappInboundMessage,
+  isGroup: boolean
+): Promise<void> {
+  try {
+    if (isGroup) return;
+    const isMissedCall = row.eventKind === "missed_call";
+    if (row.eventKind && !isMissedCall) return;
+    const target = await resolveTriggerNumber(repo, row.coachId, locationNumbers.find((n) => n.tenantId === row.coachId)?.label, memos.phoneByTenant);
+    if (!target) return;
+    if (isMissedCall) {
+      await fireTriggerBestEffort(repo, deps, locationId, "whatsapp_missed_call", { ...target, isVideo: row.messageType === "missedVideoCall", contactId });
+    } else {
+      await fireTriggerBestEffort(repo, deps, locationId, "whatsapp_message_received", {
+        ...target,
+        messageType: toTriggerMessageType(row.messageType),
+        contactId,
+      });
+    }
+  } catch {
+    // never changes the drain result
+  }
 }
 
 /** Opt-in groups — the row's `whatsapp_groups` entry for its own tenant, or null. Memoised per tenant for the pass. */
