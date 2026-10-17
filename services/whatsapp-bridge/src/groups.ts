@@ -6,7 +6,7 @@
  * OPT-IN, FAIL CLOSED: a linked number is often its owner's personal phone,
  * sitting in family and friends groups that must never land in a CRM.
  * Nothing about a group is stored or forwarded until the owner enables it
- * (`whatsapp_groups.enabled`, 0004). The bridge keeps each session's enabled
+ * (`whatsapp_groups.enabled`, 0007). The bridge keeps each session's enabled
  * set in memory (`Session.enabledGroups`, sessions.ts), loaded on every
  * connection 'open' and on `POST /sessions/:id/groups/refresh`; until a load
  * lands, and after any failed load, the set is EMPTY, so group traffic is
@@ -15,7 +15,7 @@
  * HARD RULE 3 STILL HOLDS: a group JID is never built by string
  * concatenation. It comes from Baileys' own group list
  * (`groupFetchAllParticipating`), is stored when the owner enables it, and
- * must match `GROUP_JID_RE` (the same pattern as 0004's and 0005's CHECKs)
+ * must match `GROUP_JID_RE` (the same pattern as 0007's and 0008's CHECKs)
  * before ANY store write — including inbound rows, whose `group_jid` column
  * has no CHECK of its own.
  *
@@ -25,7 +25,7 @@
 import { jidNormalizedUser } from "@whiskeysockets/baileys";
 import { isBoom } from "@hapi/boom";
 
-/** The one group-JID shape this bridge accepts — byte-identical to whatsapp_groups.group_jid's CHECK (0004) and whatsapp_messages.group_jid's (0005). */
+/** The one group-JID shape this bridge accepts — byte-identical to whatsapp_groups.group_jid's CHECK (0007) and whatsapp_messages.group_jid's (0008). */
 export const GROUP_JID_RE = /^[0-9]+(-[0-9]+)?@g\.us$/;
 
 /** True iff `jid` is a well-formed WhatsApp group id (`120363…@g.us`, or the older `<creator>-<timestamp>@g.us`). */
@@ -79,7 +79,7 @@ export interface OwnIdentity {
 /**
  * Maps `groupFetchAllParticipating()` to the list route's shape. A group
  * whose id does not pass `isGroupJid` is left out: the app stores what the
- * owner enables under 0004's CHECK, so offering one it could never store
+ * owner enables under 0007's CHECK, so offering one it could never store
  * would only fail later.
  */
 export function toGroupList(all: Record<string, GroupMetadataLike>): GroupListEntry[] {

@@ -69,7 +69,7 @@ test("locationTenantIds lists every number of each account's location, plus the 
   const result = locationTenantIds(accounts, numbers);
   assert.deepEqual([...result.keys()], ["loc-1", "loc-2"]);
   assert.deepEqual(result.get("loc-1"), ["t-default-1", "t-slot2-1", "t-old-default-1"]);
-  // No number rows yet: the account tenant alone (pre-0003 install).
+  // No number rows yet: the account tenant alone (pre-0006 install).
   assert.deepEqual(result.get("loc-2"), ["t-only-2"]);
 });
 

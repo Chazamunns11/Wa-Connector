@@ -1,6 +1,6 @@
 /**
  * Pure helpers for a GHL location's WhatsApp numbers (`ghl_location_numbers`,
- * migration 0003) and per-contact stickiness (`ghl_contact_numbers`). No I/O:
+ * migration 0006) and per-contact stickiness (`ghl_contact_numbers`). No I/O:
  * the repository (src/lib/data/supabase.ts) does the queries and uses these
  * for the decisions, so the decisions are unit-testable without Supabase.
  */
@@ -9,7 +9,7 @@ export type LocationSlot = 1 | 2 | 3;
 
 const SLOTS: readonly LocationSlot[] = [1, 2, 3];
 
-/** `ghl_location_numbers.label`'s CHECK limit (0003). */
+/** `ghl_location_numbers.label`'s CHECK limit (0006). */
 export const MAX_NUMBER_LABEL_LENGTH = 40;
 
 export type SlotParseResult = { ok: true; slot: LocationSlot } | { ok: false };

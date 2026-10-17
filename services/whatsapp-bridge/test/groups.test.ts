@@ -32,7 +32,7 @@ const GROUP_JID = "120363418570879210@g.us";
 const ME = { id: "447700900001:12@s.whatsapp.net", lid: "200000000000001:12@lid" };
 
 // ---------------------------------------------------------------------------
-// isGroupJid — the same regex as whatsapp_groups.group_jid's CHECK (0004).
+// isGroupJid — the same regex as whatsapp_groups.group_jid's CHECK (0007).
 // ---------------------------------------------------------------------------
 
 test("isGroupJid: accepts both WhatsApp group id shapes", () => {
@@ -479,7 +479,7 @@ test("store.getDailyActivity: a dispatched group row seeds 5 units on restart; u
     { status: "sent", dispatch_attempted: true, sent_at: "2026-10-17T09:05:00.000Z", created_at: "2026-10-17T09:04:00.000Z", to_phone: null, group_jid: GROUP_JID },
     { status: "failed", dispatch_attempted: true, sent_at: null, created_at: "2026-10-17T09:10:00.000Z", to_phone: null, group_jid: GROUP_JID },
     { status: "failed", dispatch_attempted: false, sent_at: null, created_at: "2026-10-17T09:20:00.000Z", to_phone: null, group_jid: GROUP_JID },
-    // A row read before 0005 has no group_jid key at all — counts 1.
+    // A row read before 0008 has no group_jid key at all — counts 1.
     { status: "sent", dispatch_attempted: true, sent_at: "2026-10-17T08:00:00.000Z", created_at: "2026-10-17T08:00:00.000Z", to_phone: "+447700900124" },
   ];
   (store as unknown as { supabase: unknown }).supabase = {

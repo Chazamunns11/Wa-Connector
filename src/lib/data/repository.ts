@@ -73,7 +73,7 @@ export interface GhlRepository {
   getGhlAccountByTenantId(tenantId: string): Promise<GhlAccount | null>;
 
   // -------------------------------------------------------------------------
-  // Several WhatsApp numbers per location (migration 0003): up to 3
+  // Several WhatsApp numbers per location (migration 0006): up to 3
   // `ghl_location_numbers` rows per location, one `whatsapp_tenants` row each,
   // plus sticky per-contact routing (`ghl_contact_numbers`). All service-role;
   // `LocationNumber` carries a tenant id and must never reach a browser.
@@ -111,7 +111,7 @@ export interface GhlRepository {
   /** Make `slot` the location's default (and mirror it to `ghl_accounts.tenant_id`). False when the slot does not exist. */
   setDefaultLocationNumber(locationId: string, slot: number): Promise<boolean>;
 
-  /** Set (or clear, with `null`) one number's label — already trimmed and at most 40 characters (0003's CHECK). False when the slot does not exist. */
+  /** Set (or clear, with `null`) one number's label — already trimmed and at most 40 characters (0006's CHECK). False when the slot does not exist. */
   setLocationNumberLabel(locationId: string, slot: number, label: string | null): Promise<boolean>;
 
   /** The tenant a contact most recently messaged on, or null (fall back to the default number). */
@@ -126,7 +126,7 @@ export interface GhlRepository {
   ): Promise<void>;
 
   // -------------------------------------------------------------------------
-  // Opt-in WhatsApp groups (migration 0004): `whatsapp_groups`, one row per
+  // Opt-in WhatsApp groups (migration 0007): `whatsapp_groups`, one row per
   // (number, group). Nothing is forwarded to GHL for a group until its row is
   // `enabled`; `ghl_contact_id` is the one GHL contact standing for the group.
   // All service-role; a `WhatsappGroup` carries a tenant id.
@@ -138,7 +138,7 @@ export interface GhlRepository {
   /**
    * Switch a group on or off for one number — upsert on `(tenant_id,
    * group_jid)`, so the first switch-on creates the row. `groupJid` must match
-   * 0004's CHECK (`^[0-9]+(-[0-9]+)?@g\.us$`) or this throws before any
+   * 0007's CHECK (`^[0-9]+(-[0-9]+)?@g\.us$`) or this throws before any
    * write; `name` is trimmed to 100 characters. Switching on also clears
    * `left_at`. Never touches `ghl_contact_id`, so a re-enabled group posts
    * into its existing GHL contact. The caller asks the bridge to reload its

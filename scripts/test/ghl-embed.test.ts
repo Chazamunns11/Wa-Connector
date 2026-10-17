@@ -449,7 +449,7 @@ function fakeGuardRepo(accounts: GhlAccount[]): GhlEmbedGuardRepo & { calls: str
       return byLocation.get(locationId) ?? null;
     },
     // Several numbers per location (Task 4): every installed account here has
-    // just its slot-1 number, the account's own tenant (0003's backfill).
+    // just its slot-1 number, the account's own tenant (0006's backfill).
     async getLocationNumberBySlot(locationId: string, slot: number) {
       const account = byLocation.get(locationId);
       return account && slot === 1 ? { tenantId: account.tenantId, slot: 1, isDefault: true, label: null } : null;

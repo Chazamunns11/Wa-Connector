@@ -22,7 +22,7 @@
 - RLS on, no policies, for every new table (service-role only).
 - Bridge tests run on Node 24 (`services/whatsapp-bridge`, `npm test`); app checks are `npm run check` at the repo root.
 - A group send costs **5** daily-cap units.
-- Migrations: `supabase/migrations/0003_ghl_location_numbers.sql`, `0004_whatsapp_groups.sql`. Each is additive and runs after 0002.
+- Migrations: `supabase/migrations/0006_ghl_location_numbers.sql`, `0007_whatsapp_groups.sql`. Each is additive and runs after 0005.
 
 ## Review Focus
 
@@ -37,9 +37,9 @@
 ### Task 1: Schema for numbers and stickiness
 
 **Files:**
-- Create: `supabase/migrations/0003_ghl_location_numbers.sql`
+- Create: `supabase/migrations/0006_ghl_location_numbers.sql`
 - Modify: `docs/superpowers/specs/2026-10-17-multiple-numbers-per-sub-account-design.md` (slots replace tenant ids at the browser)
-- Modify: `docs/GO-LIVE-FOUNDATION.md` (migration list mentions 0003, 0004)
+- Modify: `docs/GO-LIVE-FOUNDATION.md` (migration list mentions 0006, 0007)
 
 **Interfaces:**
 - Produces tables:
@@ -135,7 +135,7 @@
 ### Task 6: Schema for groups
 
 **Files:**
-- Create: `supabase/migrations/0004_whatsapp_groups.sql`
+- Create: `supabase/migrations/0007_whatsapp_groups.sql`
 
 **Interfaces:**
 - Produces: `whatsapp_groups(id uuid pk, tenant_id uuid not null → whatsapp_tenants on delete cascade, group_jid text not null check (group_jid ~ '^[0-9]+(-[0-9]+)?@g\.us$'), name text not null check (char_length(name) <= 100), enabled boolean not null default false, ghl_contact_id text null, left_at timestamptz null, created_at, updated_at, unique (tenant_id, group_jid))`; `whatsapp_inbound_messages` gains `group_jid text null` and `sender_name text null check (char_length(sender_name) <= 60)`.
@@ -201,5 +201,5 @@
 **Files:**
 - Modify: `README.md`, `services/whatsapp-bridge/README.md`, `docs/GO-LIVE-FOUNDATION.md`, `docs/superpowers/plans/2026-10-16-competitor-gap-roadmap.md`
 
-- [ ] **Step 1:** Document migrations 0003 and 0004, the new bridge routes, the 5-unit group cost, and mark B and E as built in the roadmap.
+- [ ] **Step 1:** Document migrations 0006 and 0007, the new bridge routes, the 5-unit group cost, and mark B and E as built in the roadmap.
 - [ ] **Step 2:** Commit `docs: several numbers and groups`.

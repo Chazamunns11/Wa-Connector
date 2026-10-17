@@ -1,6 +1,6 @@
 -- Group sends in the send ledger (whatsapp_messages).
 --
--- WHY: a send to an opted-in WhatsApp group (0004's whatsapp_groups) has no
+-- WHY: a send to an opted-in WhatsApp group (0007's whatsapp_groups) has no
 -- phone number, and `to_phone` carries a strict E.164 CHECK. So `to_phone`
 -- becomes nullable and the row records the group in a new `group_jid`
 -- column instead, with the same jid CHECK as whatsapp_groups.group_jid. A

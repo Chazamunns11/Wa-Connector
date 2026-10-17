@@ -50,7 +50,7 @@
  * the slot to its tenant on every call, within the token's own location
  * (`src/app/api/connect/guard.ts`, check 8). A token with no `s` — every link
  * minted before this change — means slot 1, so existing links keep working
- * and keep reaching the number they always did (0003's backfill made each
+ * and keep reaching the number they always did (0006's backfill made each
  * location's original tenant slot 1). A present `s` that isn't exactly 1-3
  * fails verify as `invalid`, same as a malformed `v`. The session token
  * carries the same `s` the link token did (`POST /api/connect/session`), so

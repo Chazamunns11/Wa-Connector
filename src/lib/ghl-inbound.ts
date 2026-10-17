@@ -156,7 +156,7 @@
  * ONLY in the text posted to GHL — the DB row's `body` stays `null`
  * regardless (this module never writes to that column).
  *
- * ============ OPT-IN WHATSAPP GROUPS (0004) ============ A row with a
+ * ============ OPT-IN WHATSAPP GROUPS (0007) ============ A row with a
  * `groupJid` is a message from a WhatsApp group, `fromPhone` being the member
  * who wrote it. Resolved via `whatsapp_groups (tenant_id = the ROW's tenant,
  * group_jid)` — memoised per tenant per pass:
@@ -229,7 +229,7 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     // stickiness (see `processGhlInboundRow`'s steps 4 and 5).
     | "listLocationNumbers"
     | "recordInboundForStickiness"
-    // Opt-in groups (0004) — the row's group, and its GHL contact once made.
+    // Opt-in groups (0007) — the row's group, and its GHL contact once made.
     | "listWhatsappGroups"
     | "setWhatsappGroupContact"
     // Reliability (W10) — STOP/START opt-outs.
@@ -651,7 +651,7 @@ async function processGhlInboundRow(
     // included), else "" so a single-number location's body is byte-for-byte
     // unchanged. No truncation needed: this module never length-caps the
     // body it posts (GHL takes the reply as-is), and the prefix is at most a
-    // 40-char label (0003's CHECK) plus brackets. A group row adds its
+    // 40-char label (0006's CHECK) plus brackets. A group row adds its
     // sender after it: `[Sales] Jane: hello`.
     body: numberPrefix + (group ? `${groupSenderLabel(row)}: ` : "") + body,
     timestampIso: row.receivedAt,

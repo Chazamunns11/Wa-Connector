@@ -1479,7 +1479,7 @@ export class SessionManager {
             // Existence check (hard rule 3): ask WhatsApp, and send to the JID
             // IT returns — never to a JID we built by string concatenation.
             try {
-              // A non-group row always has to_phone (0005's one-target CHECK).
+              // A non-group row always has to_phone (0008's one-target CHECK).
               const results = await sock.onWhatsApp(record.toPhone ?? "");
               jid = results?.find((r) => r.exists)?.jid;
             } catch (err) {

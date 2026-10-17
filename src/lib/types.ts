@@ -174,7 +174,7 @@ export interface GhlAccount {
 }
 
 /**
- * One WhatsApp number of a GHL location (`ghl_location_numbers`, 0003).
+ * One WhatsApp number of a GHL location (`ghl_location_numbers`, 0006).
  * SERVER-ONLY: it carries the number's `tenantId`, which never leaves the
  * server. NEVER serialise this to a browser; browser-facing surfaces address a
  * number by `slot` (and show `label`) only.
@@ -408,7 +408,7 @@ export interface WhatsappInboundMessage {
    * `'matched' | 'no_matching_call'` (coach-tenant rows) or — GHL provider
    * Phase 3, `supabase/migrations/0072_ghl_inbound_push.sql` —
    * `'ghl_pushed' | 'ghl_rejected' | 'ghl_push_failed' | 'ghl_push_uncertain'`
-   * or (opt-in groups, 0004) `'group_not_enabled'` — a group row whose group
+   * or (opt-in groups, 0007) `'group_not_enabled'` — a group row whose group
    * is unknown or switched off, never posted to GHL (GHL-tenant rows;
    * `src/lib/ghl-inbound.ts`'s `drainGhlInboundReplies` is the only writer of
    * these five). Free text (no CHECK), mirrors
@@ -451,24 +451,24 @@ export interface WhatsappInboundMessage {
   /** Actual downloaded byte size — set only once `mediaStatus === 'stored'`. */
   mediaSizeBytes?: number | null;
   /**
-   * Opt-in groups (0004) — the group's jid for a message from an enabled
+   * Opt-in groups (0007) — the group's jid for a message from an enabled
    * WhatsApp group (`fromPhone` is then the member who wrote it, not a
    * contact); `null`/absent for a one-to-one reply. Optional for the same
    * fixture reason as `mediaStatus`.
    */
   groupJid?: string | null;
-  /** Opt-in groups (0004) — the group member's WhatsApp display name (≤60 chars), or `null` when WhatsApp gave none. Always `null` for a one-to-one reply. */
+  /** Opt-in groups (0007) — the group member's WhatsApp display name (≤60 chars), or `null` when WhatsApp gave none. Always `null` for a one-to-one reply. */
   senderName?: string | null;
 }
 
 /**
- * Opt-in groups — one `whatsapp_groups` row (0004): a group one of a tenant's
+ * Opt-in groups — one `whatsapp_groups` row (0007): a group one of a tenant's
  * numbers has been seen in. Service-role only; carries a tenant id, so never
  * hand it to a browser as-is.
  */
 export interface WhatsappGroup {
   tenantId: string;
-  /** `^[0-9]+(-[0-9]+)?@g\.us$` (0004's CHECK). */
+  /** `^[0-9]+(-[0-9]+)?@g\.us$` (0007's CHECK). */
   groupJid: string;
   name: string;
   /** Opt-in switch — nothing is forwarded to GHL while false. */

@@ -153,7 +153,7 @@
  * cannot attribute to an E.164 is dropped `unmappable_sender`, same as a
  * 1:1 sender: no row is ever stored without a real phone number. The reply
  * carries `groupJid` and `senderName` (the member's push name, trimmed and
- * cut to 60 code points — 0004's CHECK); both are null on a 1:1 reply.
+ * cut to 60 code points — 0007's CHECK); both are null on a 1:1 reply.
  *
  * NO LEDGER GATE: every session is a GHL-location tenant (PortalHub's
  * `kind = 'ghl_location'` branch, docs/GHL-PROVIDER-PLAN.md decision D4).
@@ -255,7 +255,7 @@ export type ClassifyResult =
   | { kind: "needs_lid_resolution"; lidJid: string; pending: Omit<InboundReply, "fromPhone"> };
 
 const MAX_BODY_CHARS = 500;
-/** 0004's CHECK on whatsapp_inbound_messages.sender_name. */
+/** 0007's CHECK on whatsapp_inbound_messages.sender_name. */
 const MAX_SENDER_NAME_CHARS = 60;
 /** The default for `classifyInboundMessage`'s `enabledGroups`: no groups — fail closed. */
 const NO_GROUPS: ReadonlySet<string> = new Set();
@@ -664,7 +664,7 @@ function sanitizeBody(text: string): string {
 /**
  * A group member's push name for `InboundReply.senderName`: NULs removed
  * (same Postgres reason as `sanitizeBody`), surrounding whitespace trimmed,
- * cut to 60 CODE POINTS (0004's `char_length` CHECK; never splits an
+ * cut to 60 CODE POINTS (0007's `char_length` CHECK; never splits an
  * emoji). Blank or absent -> null, so the drain falls back to the number.
  */
 function sanitizeSenderName(pushName: string | null | undefined): string | null {

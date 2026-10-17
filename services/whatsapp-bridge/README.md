@@ -66,16 +66,16 @@ session lease (`src/lock.ts`) makes an accidental second replica harmless
 (it idles, unable to claim), but it is waste, not capacity.
 
 Deploy order for the first live run: apply `supabase/migrations/0001_init.sql`
-then every later migration in number order (`0002_…` adds
+then every later migration in number order (`0005_…` adds
 `whatsapp_sessions.phone_linked_at`, which `wipeCreds` writes)
 → deploy bridge → set `WHATSAPP_BRIDGE_URL`/`WHATSAPP_BRIDGE_SECRET` on Vercel.
-Migrations `0003` (numbers), `0004` (groups) and `0005`
+Migrations `0006` (numbers), `0007` (groups) and `0008`
 (`whatsapp_messages.group_jid`, `to_phone` nullable) should all be applied
 before this version of the bridge is deployed. The bridge tolerates running
 before them: one-to-one sending and receiving are unaffected, and groups fail
 closed (the enabled-group set cannot load, so group traffic is dropped in
 both directions). The app is different: its build must not go live before
-0003 to 0005 are applied, or every GHL outbound message fails before it is
+0006 to 0008 are applied, or every GHL outbound message fails before it is
 recorded, the GHL inbound drain fails on every pass, and a GHL install
 (OAuth) errors after it has already written the account.
 

@@ -37,9 +37,9 @@ export interface MessageRecord {
   id: string;
   coachId: string;
   idempotencyKey: string;
-  /** The 1:1 recipient (strict E.164), or null for a group send. Exactly one of `toPhone` / `groupJid` is set (0005's `whatsapp_messages_one_target`). */
+  /** The 1:1 recipient (strict E.164), or null for a group send. Exactly one of `toPhone` / `groupJid` is set (0008's `whatsapp_messages_one_target`). */
   toPhone: string | null;
-  /** The opted-in WhatsApp group this row was sent to (src/groups.ts), or null for a 1:1 send. Null too on a row read before migration 0005 (PostgREST omits the unknown column). */
+  /** The opted-in WhatsApp group this row was sent to (src/groups.ts), or null for a 1:1 send. Null too on a row read before migration 0008 (PostgREST omits the unknown column). */
   groupJid: string | null;
   status: MessageStatus;
   waMessageId: string | null;
@@ -66,7 +66,7 @@ interface MessageRow {
   coach_id: string;
   idempotency_key: string;
   to_phone: string | null;
-  /** Absent entirely on a row read before migration 0005 is applied. */
+  /** Absent entirely on a row read before migration 0008 is applied. */
   group_jid?: string | null;
   status: MessageStatus;
   wa_message_id: string | null;
@@ -78,7 +78,7 @@ interface MessageRow {
   kind?: "text" | "media";
 }
 
-/** Who a send goes to: one phone number, or one opted-in group. Never both — the ledger's CHECK (0005) refuses a row naming both, and so does this type. */
+/** Who a send goes to: one phone number, or one opted-in group. Never both — the ledger's CHECK (0008) refuses a row naming both, and so does this type. */
 export type MessageTarget = { toPhone: string } | { groupJid: string };
 
 function mapMessage(row: MessageRow): MessageRecord {
@@ -326,7 +326,7 @@ export class BridgeStore {
    * A group target is re-checked against `isGroupJid` here, before the
    * insert (src/groups.ts — validate before ANY store write), and only the
    * target's own column is named: a 1:1 insert never mentions `group_jid`,
-   * so it is byte-identical to the pre-0005 insert.
+   * so it is byte-identical to the pre-0008 insert.
    */
   async acceptMessage(
     coachId: string,
@@ -441,7 +441,7 @@ export class BridgeStore {
    * (`group_jid` set) counts `GROUP_SEND_CAP_UNITS` (5), the same as the
    * pacer recorded when it sent it — otherwise a restart would hand back 4
    * units per group send. `select("*")` rather than naming `group_jid`, so
-   * this read still works on a database without migration 0005 (the column
+   * this read still works on a database without migration 0008 (the column
    * is then simply absent and every row counts 1, which is right: no group
    * row can exist there).
    */
@@ -532,10 +532,10 @@ export class BridgeStore {
    * to skip poking the portal a second time for a message it already knows
    * about.
    *
-   * Group rows (0004): `groupJid` is re-checked against `isGroupJid` BEFORE
+   * Group rows (0007): `groupJid` is re-checked against `isGroupJid` BEFORE
    * the insert — this column has no CHECK of its own, so this is the gate
    * (src/groups.ts). A 1:1 row names neither `group_jid` nor `sender_name`,
-   * so its insert is byte-identical to the pre-0004 one.
+   * so its insert is byte-identical to the pre-0007 one.
    */
   async recordInboundMessage(input: {
     coachId: string;
@@ -575,14 +575,14 @@ export class BridgeStore {
   }
 
   // -------------------------------------------------------------------------
-  // whatsapp_groups (0004) — the opt-in switch per (number, group). Read-only
+  // whatsapp_groups (0007) — the opt-in switch per (number, group). Read-only
   // here: the app writes it when the owner enables a group.
   // -------------------------------------------------------------------------
 
   /**
    * The group JIDs this tenant's owner has enabled and the number has not
    * left — the source of `Session.enabledGroups` (src/sessions.ts). Rows are
-   * filtered through `isGroupJid` once more on the way out (0004's CHECK
+   * filtered through `isGroupJid` once more on the way out (0007's CHECK
    * already holds them to it), so the in-memory set can only ever hold
    * well-formed JIDs. Note the column is `tenant_id` here, not the
    * historical `coach_id` the whatsapp_* tables use.

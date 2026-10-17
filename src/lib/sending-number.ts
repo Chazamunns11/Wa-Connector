@@ -1,5 +1,5 @@
 /**
- * Which of a GHL location's WhatsApp numbers (`ghl_location_numbers`, 0003 —
+ * Which of a GHL location's WhatsApp numbers (`ghl_location_numbers`, 0006 —
  * up to three, one `whatsapp_tenants` row each) a message belongs to.
  *
  *   - OUTBOUND (`resolveSendingTenant`, called by

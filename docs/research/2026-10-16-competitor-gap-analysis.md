@@ -115,7 +115,7 @@ A public status page, a stated support response time, and held messages shown on
 On branch `claude/eloquent-mccarthy-m60n6c`, all with tests (bridge 299 passing on Node 24, app 345 passing, production build clean):
 
 - **Typing simulation** (`services/whatsapp-bridge/src/typing.ts`). "Typing…" shows in the recipient's chat before each text: 1 second plus 30ms per character, ±20%, capped at 4 seconds. A dropped socket during the window fails the message as not sent, so it's safe to retry. On by default (`WA_TYPING_INDICATOR_ENABLED`, `WA_TYPING_MAX_MS`).
-- **Warm-up for new numbers** (`src/pacing.ts`, migration `0002`). Daily cap of 20 for days 0-2, 50 for days 3-6, 100 for days 7-13, then the normal cap. **Off by default** (`WA_WARMUP_ENABLED`), because FitClosers' 11 established numbers will be re-scanned during the move and would count as new. Migration 0002 must be applied before this bridge is deployed.
+- **Warm-up for new numbers** (`src/pacing.ts`, migration `0005`). Daily cap of 20 for days 0-2, 50 for days 3-6, 100 for days 7-13, then the normal cap. **Off by default** (`WA_WARMUP_ENABLED`), because FitClosers' 11 established numbers will be re-scanned during the move and would count as new. Migration 0005 must be applied before this bridge is deployed.
 - **Public status page** at `/status`. One state each for "WhatsApp sending" and "GoHighLevel sync", no customer data, cached for 60 seconds.
 
 The rest of the list below needs either a decision from Charlie or its own spec. See `docs/superpowers/plans/2026-10-16-competitor-gap-roadmap.md`.

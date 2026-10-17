@@ -146,7 +146,7 @@ test("Sends today counts a group send as 5 units and a 1:1 send as 1, with or wi
   addSentTodayUnits(counts, [
     { coach_id: "a", group_jid: null },
     { coach_id: "a", group_jid: "120363000000000001@g.us" },
-    { coach_id: "a" }, // a database before 0005 has no group_jid column
+    { coach_id: "a" }, // a database before 0008 has no group_jid column
     { coach_id: "b", group_jid: "120363000000000002@g.us" },
   ]);
   addSentTodayUnits(counts, [{ coach_id: "b", group_jid: null }]);

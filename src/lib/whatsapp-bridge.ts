@@ -142,7 +142,7 @@ export type BridgeGroupsResult = { ok: true; groups: BridgeGroup[] } | BridgeFai
 
 /**
  * The bridge's group-JID shape — byte-identical to its `GROUP_JID_RE`
- * (services/whatsapp-bridge/src/groups.ts) and to 0004's/0005's CHECKs.
+ * (services/whatsapp-bridge/src/groups.ts) and to 0007's/0008's CHECKs.
  */
 export const WHATSAPP_GROUP_JID_RE = /^[0-9]+(-[0-9]+)?@g\.us$/;
 

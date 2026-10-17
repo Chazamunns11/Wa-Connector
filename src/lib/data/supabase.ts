@@ -137,7 +137,7 @@ interface WhatsappInboundMessageRow {
   media_path?: string | null;
   media_mime?: string | null;
   media_size_bytes?: number | null;
-  /** Opt-in groups (0004) — see `WhatsappInboundMessage.groupJid`/`senderName`. */
+  /** Opt-in groups (0007) — see `WhatsappInboundMessage.groupJid`/`senderName`. */
   group_jid?: string | null;
   sender_name?: string | null;
 }
@@ -175,7 +175,7 @@ function isFreshPendingMedia(row: WhatsappInboundMessageRow): boolean {
 /** Media plan (docs/MEDIA-PLAN.md §7d/§8) — same bucket name the bridge's own `WA_MEDIA_BUCKET` config defaults to (`services/whatsapp-bridge/src/config.ts`); read from the SAME env var name here so the two never silently drift onto different buckets. */
 const MEDIA_BUCKET = process.env.WA_MEDIA_BUCKET?.trim() || "wa-media";
 
-// `group_jid, sender_name` (0004) sit in the BASE list: 0004's deploy order
+// `group_jid, sender_name` (0007) sit in the BASE list: 0007's deploy order
 // is "apply before the portal build that reads these", and a group row read
 // without `group_jid` would be pushed as a one-to-one reply from its sender.
 const WHATSAPP_INBOUND_BASE_COLUMNS =
@@ -483,7 +483,7 @@ async function getWhatsappSentTodayByCoach(supabase: SupabaseClient, coachIds: s
   const todayStartIso = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z").toISOString();
   const PAGE_SIZE = 1000;
   for (let from = 0; ; from += PAGE_SIZE) {
-    // `select("*")`, not "coach_id, group_jid": a database before 0005 has
+    // `select("*")`, not "coach_id, group_jid": a database before 0008 has
     // no group_jid column, and naming it would fail the whole read (the same
     // tolerance as the bridge's `getDailyActivity`).
     const { data, error } = await supabase
@@ -584,7 +584,7 @@ export function chooseGroupForContact(
     : null;
 }
 
-/** 0004's `char_length(name) <= 100` — trimmed by whole characters (code points, as Postgres counts them), never mid-emoji. */
+/** 0007's `char_length(name) <= 100` — trimmed by whole characters (code points, as Postgres counts them), never mid-emoji. */
 const WHATSAPP_GROUP_NAME_MAX = 100;
 
 /** Postgres unique_violation. */
@@ -863,7 +863,7 @@ export class SupabaseGhlRepository implements GhlRepository {
 
   async setWhatsappGroupEnabled(tenantId: string, groupJid: string, name: string, enabled: boolean) {
     // Bridge hard rule 3: only a JID from WhatsApp's own group list, in the
-    // exact shape 0004's CHECK and the bridge's GROUP_JID_RE accept.
+    // exact shape 0007's CHECK and the bridge's GROUP_JID_RE accept.
     if (!isWhatsappGroupJid(groupJid)) throw new Error("setWhatsappGroupEnabled: groupJid is not a WhatsApp group id");
     const supabase = getServiceClient();
     const row: Record<string, unknown> = {

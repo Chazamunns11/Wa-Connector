@@ -71,13 +71,17 @@ two are filled in a second pass once both domains exist. That is expected.
    service-role only) and the two storage buckets (`wa-media`, private, and
    `client-logos`).
    Then run each later file in `supabase/migrations/` in number order
-   (`0002_whatsapp_sessions_phone_linked_at.sql`, `0003_ghl_location_numbers.sql`, `0004_whatsapp_groups.sql`, `0005_whatsapp_messages_group_jid.sql`, and any after), once each. The
-   bridge writes `whatsapp_sessions.phone_linked_at` on every logout, so
-   0002 must be applied before the bridge is deployed. Likewise apply
-   0001 to 0005 in order before deploying the bridge and the app: 0003 adds
-   the several-numbers tables, 0004 the group tables, and 0005 the
-   `whatsapp_messages.group_jid` column the bridge and app now use.
-   The app build must not go live before 0003 to 0005 are applied. Without
+   (`0002_accounts.sql`, `0003_activation_cap.sql`, `0004_reliability.sql`,
+   `0005_whatsapp_sessions_phone_linked_at.sql`, `0006_ghl_location_numbers.sql`,
+   `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`, and any
+   after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
+   every logout, so 0005 must be applied before the bridge is deployed.
+   Likewise apply 0001 to 0008 in order before deploying the bridge and the
+   app: 0002 to 0004 add accounts, activation and held messages / STOP
+   opt-outs (see `docs/GO-LIVE-ACCOUNTS.md`), 0006 the several-numbers
+   tables, 0007 the group tables, and 0008 the `whatsapp_messages.group_jid`
+   column the bridge and app now use.
+   The app build must not go live before 0006 to 0008 are applied. Without
    them every GHL outbound message fails before it is recorded, the GHL
    inbound drain fails on every pass (no replies reach GHL), and a GHL
    install (OAuth) errors after it has already written the account. The

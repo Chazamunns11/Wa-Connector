@@ -58,10 +58,10 @@ Group names, descriptions, invite codes and member numbers are never logged (sam
 
 ## App (src/)
 
-- **Repository:** `whatsapp_groups` gains `created_by_us boolean default false`. A small `whatsapp_group_actions` log table (tenant, group, action, count, created_at) backs the daily limits and the owner admin view. Migration `0006_group_management.sql`.
+- **Repository:** `whatsapp_groups` gains `created_by_us boolean default false`. A small `whatsapp_group_actions` log table (tenant, group, action, count, created_at) backs the daily limits and the owner admin view. Migration `0009_group_management.sql`.
 - **Embed route** `src/app/api/crm/embed/groups/manage/route.ts`: slot-guarded like the existing groups route; never returns tenant ids; validates names (≤100) and descriptions (≤512).
 - **Invites:** the app resolves picked contacts or a tag to E.164 numbers through the GHL contacts API (location token), then sends each invite as a normal outbound message on that number. These go through the usual pacing, typing and daily cap.
-- **Editable invite message** (Charlie, 17 Oct): per account, up to 500 characters, with placeholders `{first_name}`, `{group_name}`, `{coach_name}` and a required `{link}`; saving without `{link}` is refused with the fixed string below. Default: "Hi {first_name}, {coach_name} invited you to join {group_name} on WhatsApp: {link}". Stored on `accounts` (new column `group_invite_template text null`, in 0006).
+- **Editable invite message** (Charlie, 17 Oct): per account, up to 500 characters, with placeholders `{first_name}`, `{group_name}`, `{coach_name}` and a required `{link}`; saving without `{link}` is refused with the fixed string below. Default: "Hi {first_name}, {coach_name} invited you to join {group_name} on WhatsApp: {link}". Stored on `accounts` (new column `group_invite_template text null`, in 0009).
 - **UI:** in each number's Groups section, a "Create group" button and, per group where we're an admin, a "Manage" panel (rename, settings toggles, members list with Remove / Make admin, invite link with Copy and Reset, Leave). Confirmations in the page, never `confirm()`.
 
 ## Workflow actions (phase 2)
