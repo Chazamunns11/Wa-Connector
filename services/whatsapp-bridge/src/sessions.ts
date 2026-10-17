@@ -277,7 +277,12 @@ export interface SessionSnapshot {
   qr: string | null;
   sentToday: number;
   dailyCap: number;
+  /** Items waiting in the send queue. */
   queueLength: number;
+  /** Daily-cap units those queued items will cost (a group send is `GROUP_SEND_CAP_UNITS`, a 1:1 part 1). */
+  queuedUnits: number;
+  /** Daily-cap units of the item being dispatched right now (0 when none). */
+  inFlightUnits: number;
 }
 
 /**
@@ -1654,6 +1659,8 @@ export class SessionManager {
       sentToday: session.pacer.sentTodayCount(),
       dailyCap: session.pacer.effectiveDailyCap(),
       queueLength: session.queue.length,
+      queuedUnits: queuedUnits(session),
+      inFlightUnits: session.inFlightUnits,
     };
   }
 

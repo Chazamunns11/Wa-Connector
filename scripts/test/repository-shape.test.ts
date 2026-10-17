@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { GhlRepository } from "@/lib/data/repository";
-import { SupabaseGhlRepository } from "@/lib/data/supabase";
+import { addSentTodayUnits, chooseGroupForContact, SupabaseGhlRepository } from "@/lib/data/supabase";
 
 // Type-level: the Supabase implementation must satisfy the whole contract.
 const _check: GhlRepository = {} as import("@/lib/data/supabase").SupabaseGhlRepository;
@@ -114,4 +114,45 @@ test("the owner health snapshot maps every number's tenant to its location", () 
   const body = methodSource("getGhlHealthSnapshot");
   assert.match(body, /listAllLocationNumberTenants\(/);
   assert.match(body, /tenantIds: tenantIdsByLocation\.get\(/);
+});
+
+test("Sends today counts a group send as 5 units and a 1:1 send as 1, with or without the group_jid column", () => {
+  const counts = new Map<string, number>();
+  addSentTodayUnits(counts, [
+    { coach_id: "a", group_jid: null },
+    { coach_id: "a", group_jid: "120363000000000001@g.us" },
+    { coach_id: "a" }, // a database before 0005 has no group_jid column
+    { coach_id: "b", group_jid: "120363000000000002@g.us" },
+  ]);
+  addSentTodayUnits(counts, [{ coach_id: "b", group_jid: null }]);
+  assert.equal(counts.get("a"), 7);
+  assert.equal(counts.get("b"), 6);
+});
+
+function groupRow(tenantId: string, overrides: Partial<{ enabled: boolean; leftAt: string | null }> = {}) {
+  return { tenantId, groupJid: "120363000000000001@g.us", name: "G", enabled: true, ghlContactId: "c-1", leftAt: null, ...overrides };
+}
+
+test("chooseGroupForContact: a group of one of the location's numbers wins, enabled and still-a-member first", () => {
+  const picked = chooseGroupForContact(
+    [groupRow("t-2", { enabled: false }), groupRow("t-1", { leftAt: "2026-10-01T00:00:00Z" }), groupRow("t-3")],
+    new Set(["t-1", "t-2", "t-3"]),
+    new Set()
+  );
+  assert.deepEqual(picked, { tenantId: "t-3", groupJid: "120363000000000001@g.us", enabled: true, left: false });
+});
+
+test("chooseGroupForContact: a group of a removed number (no longer any location's number) comes back switched off and flagged", () => {
+  const picked = chooseGroupForContact([groupRow("t-removed")], new Set(["t-1"]), new Set());
+  assert.deepEqual(picked, { tenantId: "t-removed", groupJid: "120363000000000001@g.us", enabled: false, left: false, numberRemoved: true });
+});
+
+test("chooseGroupForContact: a group of another location's current number is not this contact's group", () => {
+  assert.equal(chooseGroupForContact([groupRow("t-elsewhere")], new Set(["t-1"]), new Set(["t-elsewhere"])), null);
+  assert.equal(chooseGroupForContact([], new Set(["t-1"]), new Set()), null);
+});
+
+test("removeLocationNumber switches off the removed number's groups", () => {
+  const body = methodSource("removeLocationNumber");
+  assert.match(body, /from\("whatsapp_groups"\)\s*\.update\(\{ enabled: false \}\)\s*\.eq\("tenant_id", target\.tenantId\)/);
 });

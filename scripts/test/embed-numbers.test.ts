@@ -342,10 +342,26 @@ test("listEmbedNumbers: slot, label, isDefault and a redacted summary per number
       { slot: 2, label: "Sales line", isDefault: false },
     ]
   );
-  assert.deepEqual(Object.keys(numbers[0]).sort(), ["isDefault", "label", "slot", "summary"]);
+  assert.deepEqual(Object.keys(numbers[0]).sort(), ["isDefault", "key", "label", "slot", "summary"]);
   assert.equal(numbers[0].summary?.phoneNumber, "+447700900123");
   assert.equal(repo.calls.filter((c) => c.startsWith("summary:")).length, 2);
   assertNoTenantId(numbers, "listEmbedNumbers");
+});
+
+test("listEmbedNumbers: each number has an opaque key that changes when the number in a slot changes", async () => {
+  const before = await listEmbedNumbers(fakeNumbersRepo(SLOTS_1_2), LOCATION_ID);
+  const again = await listEmbedNumbers(fakeNumbersRepo(SLOTS_1_2), LOCATION_ID);
+  // Slot 2 removed and re-added: same slot, a different tenant.
+  const readded = await listEmbedNumbers(
+    fakeNumbersRepo([SLOTS_1_2[0], { ...SLOTS_1_2[1], tenantId: TENANT_3 }]),
+    LOCATION_ID
+  );
+  for (const n of before) assert.match(n.key, /^[0-9a-f]{12}$/);
+  assert.notEqual(before[0].key, before[1].key);
+  assert.deepEqual(again.map((n) => n.key), before.map((n) => n.key), "stable for the same number");
+  assert.equal(readded[0].key, before[0].key);
+  assert.notEqual(readded[1].key, before[1].key, "a re-added slot gets a new key");
+  assertNoTenantId(before, "listEmbedNumbers keys");
 });
 
 test("decideAddNumber: adds at the next slot with a trimmed label, returns the redacted list", async () => {

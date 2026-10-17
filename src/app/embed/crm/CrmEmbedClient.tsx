@@ -99,6 +99,8 @@ const MAX_NUMBERS = 3;
 /** One WhatsApp number as `POST /api/crm/embed/session` and `/api/crm/embed/numbers` return it — a slot, never a tenant id. */
 interface EmbedNumber {
   slot: LocationSlot;
+  /** Opaque per-number id (not the tenant id): the React key, so a removed-then-re-added slot starts fresh. */
+  key: string;
   label: string | null;
   isDefault: boolean;
   summary: GhlEmbedWhatsappSummary | null;
@@ -442,7 +444,7 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
     <div className="flex flex-col gap-4">
       {numbers.map((number) => (
         <EmbedNumberCard
-          key={number.slot}
+          key={number.key}
           number={number}
           copy={buildEmbedCopy(label)}
           bridgeConfigured={bridgeConfigured}

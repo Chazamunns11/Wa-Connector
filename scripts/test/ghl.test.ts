@@ -382,7 +382,7 @@ function createFakeRepo(
     numbers?: Record<string, LocationNumber[]>;
     sticky?: Record<string, string>;
     /** Opt-in groups (Task 9) — group contacts, keyed `${locationId}:${ghlContactId}`. */
-    groups?: Record<string, { tenantId: string; groupJid: string; enabled: boolean; left?: boolean }>;
+    groups?: Record<string, { tenantId: string; groupJid: string; enabled: boolean; left?: boolean; numberRemoved?: boolean }>;
   } = {}
 ) {
   /** Every `markWhatsappGroupLeft` call, in order (Task 9). */
@@ -2793,6 +2793,24 @@ test("groups outbound: a switched-off group refuses with the fixed string — no
   assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
 });
 
+test("groups outbound: a group contact of a number that was removed from the location refuses as turned off — never the phone path, and the row is on a current number", async () => {
+  const REMOVED_TENANT_ID = "tenant-removed";
+  const bundle = createFakeRepo([makeAccount()], {
+    numbers: TWO_NUMBERS,
+    // Even an enabled row: a removed number's group must never send.
+    groups: { [`${LOCATION_ID}:${GROUP_CONTACT}`]: { tenantId: REMOVED_TENANT_ID, groupJid: GROUP_JID, enabled: true, numberRemoved: true } },
+  });
+  const { deps, sendCalls, sendAttachmentCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ phone: "+447700900123" }), deps);
+  assert.deepEqual(outcome, { kind: "refused", reason: GROUP_OFF_REASON });
+  assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  const row = [...bundle.rows.values()][0];
+  assert.equal(row.refusalReason, GROUP_OFF_REASON);
+  assert.equal(row.toPhone, null, "never falls into the phone path");
+  assert.equal(row.tenantId, TENANT_ID, "recorded on the location's default number, not the removed one");
+  assert.equal(statusCalls[0].errorMessage, GROUP_OFF_REASON);
+});
+
 test("groups outbound: a switched-off group refuses even with attachments and the media split on — nothing dispatched, no part rows", async () => {
   await withMediaOutboundEnabled(async () => {
     const bundle = groupRepo(false);
@@ -2897,6 +2915,39 @@ test("groups outbound (media split): the up-front budget check counts a group pa
       getSession: async (coachId) => ({
         ok: true,
         session: { coachId, status: "connected", phoneNumber: "+447700900000", qr: null, sentToday: 141, dailyCap: 150, queueLength: 0 },
+      }),
+    });
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.capReached });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  });
+});
+
+test("groups outbound (media split): the up-front budget check counts the bridge's queued and in-flight UNITS, not queued items", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps({
+      // One queued group (5 units) plus one group in flight (5): 150 - 135 - 5 - 5 = 5 left,
+      // too few for 2 group parts (10). Counting queueLength (1 item) would leave 14.
+      getSession: async (coachId) => ({
+        ok: true,
+        session: { coachId, status: "connected", phoneNumber: "+447700900000", qr: null, sentToday: 135, dailyCap: 150, queueLength: 1, queuedUnits: 5, inFlightUnits: 5 },
+      }),
+    });
+    const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: GHL_PROVIDER_REASONS.capReached });
+    assert.equal(sendCalls.length + sendAttachmentCalls.length, 0);
+  });
+});
+
+test("groups outbound (media split): a bridge build without unit fields falls back to queueLength", async () => {
+  await withMediaOutboundEnabled(async () => {
+    const bundle = groupRepo();
+    const { deps, sendCalls, sendAttachmentCalls } = makeDeps({
+      // 150 - 139 - 2 queued items = 9 left, too few for 2 group parts (10).
+      getSession: async (coachId) => ({
+        ok: true,
+        session: { coachId, status: "connected", phoneNumber: "+447700900000", qr: null, sentToday: 139, dailyCap: 150, queueLength: 2 },
       }),
     });
     const outcome = await handleProviderOutboundMessage(bundle.repo, groupPayload({ attachments: ["https://x/a.pdf"] }), deps);

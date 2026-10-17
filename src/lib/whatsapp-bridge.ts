@@ -75,7 +75,12 @@ export interface BridgeSessionSnapshot {
   qr: string | null;
   sentToday: number;
   dailyCap: number;
+  /** Items waiting in the bridge's send queue. */
   queueLength: number;
+  /** Daily-cap units the queued items will cost (a group send is 5). Absent from a bridge build before groups. */
+  queuedUnits?: number;
+  /** Daily-cap units of the item being dispatched right now. Absent from a bridge build before groups. */
+  inFlightUnits?: number;
 }
 
 /** Mirrors the bridge's message row shape (services/whatsapp-bridge/src/server.ts). */

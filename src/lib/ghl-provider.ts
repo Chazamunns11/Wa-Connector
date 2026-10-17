@@ -180,7 +180,7 @@ export interface GhlProviderDeps {
    * Media plan (docs/MEDIA-PLAN.md §5.6, decision O3) — the accept-time
    * budget check's ONLY source of "how much of today's cap is left": the
    * bridge's own live session snapshot (`sentToday`/`dailyCap`/
-   * `queueLength`), the same numbers `GET /sessions/:coachId` already
+   * `queuedUnits`/`inFlightUnits`, falling back to `queueLength`), the same numbers `GET /sessions/:coachId` already
    * returns. This is a best-effort, portal-side FRONT-LOAD of the refusal —
    * the bridge's own per-part accept-time reservation
    * (services/whatsapp-bridge/src/sessions.ts's `acceptAndEnqueue`) remains
@@ -707,7 +707,9 @@ export async function handleProviderOutboundMessage(
       // Switched off wins; an enabled group the number has left (left_at
       // set — the bridge leaves it out of its enabled set) gets the bridge's
       // own "no longer in that group" string, never "turned off".
-      groupRefusal = !group.enabled ? REASON_GROUP_SYNC_OFF : group.left ? REASON_GROUP_LEFT : null;
+      // A group of a number since removed from the location is "turned
+      // off" too (removing a number switches its groups off).
+      groupRefusal = group.numberRemoved || !group.enabled ? REASON_GROUP_SYNC_OFF : group.left ? REASON_GROUP_LEFT : null;
     } else {
       const phone = typeof payload.phone === "string" ? payload.phone : null;
       toPhone = normalisePhoneE164(phone, "GB");
@@ -739,7 +741,11 @@ export async function handleProviderOutboundMessage(
     // group contact belongs to its group's number) can sit in front of it.
     // A failure here is pre-intake: `{ kind: "error", recorded: false }`, so
     // GHL's own retry gets a chance — nothing has been sent from any number.
-    sendingNumber = group ? groupSendingNumber(account, group.tenantId) : await resolveOutboundSendingNumber(repo, account, contactId);
+    // A removed number's group is refused below; its row goes on the
+    // location's default number, never on a number the location no longer has.
+    sendingNumber = group
+      ? groupSendingNumber(account, group.numberRemoved ? account.tenantId : group.tenantId)
+      : await resolveOutboundSendingNumber(repo, account, contactId);
 
     ({ message: row, isNew } = await repo.recordGhlOutboundMessage({
       locationId: account.locationId,
@@ -1047,7 +1053,10 @@ function aggregatePartOutcomes(outcomes: PartOutcome[]): { done: false } | { don
 async function hasSufficientOutboundBudget(deps: GhlProviderDeps, tenantId: string, unitsNeeded: number): Promise<boolean> {
   const session = await deps.getSession(tenantId);
   if (!session.ok) return true;
-  const remaining = session.session.dailyCap - session.session.sentToday - session.session.queueLength;
+  const { dailyCap, sentToday, queueLength, queuedUnits, inFlightUnits } = session.session;
+  // The same sum the bridge's own reservation uses (sent + in flight + queued
+  // units). An older bridge without the unit fields: one unit per queued item.
+  const remaining = dailyCap - sentToday - (queuedUnits ?? queueLength) - (inFlightUnits ?? 0);
   return unitsNeeded <= remaining;
 }
 

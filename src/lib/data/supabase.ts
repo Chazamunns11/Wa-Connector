@@ -30,6 +30,7 @@ import type {
 } from "@/lib/types";
 import { LOGO_BUCKET, LOGO_EXTENSION, normaliseHex, type SafeLogoType } from "@/lib/brand";
 import { ghlTenantKeyQueryFilters } from "@/lib/ghl";
+import { GROUP_SEND_CAP_UNITS } from "@/lib/ghl-provider";
 import {
   buildGhlHealthSnapshot,
   GHL_HEALTH_INBOUND_ROW_CAP,
@@ -404,21 +405,35 @@ async function getWhatsappSentTodayByCoach(supabase: SupabaseClient, coachIds: s
   const todayStartIso = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z").toISOString();
   const PAGE_SIZE = 1000;
   for (let from = 0; ; from += PAGE_SIZE) {
+    // `select("*")`, not "coach_id, group_jid": a database before 0005 has
+    // no group_jid column, and naming it would fail the whole read (the same
+    // tolerance as the bridge's `getDailyActivity`).
     const { data, error } = await supabase
       .from("whatsapp_messages")
-      .select("coach_id")
+      .select("*")
       .in("coach_id", coachIds)
       .eq("status", "sent")
       .gte("sent_at", todayStartIso)
       .range(from, from + PAGE_SIZE - 1);
     if (error) throw error;
-    const page = (data ?? []) as { coach_id: string }[];
-    for (const row of page) {
-      counts.set(row.coach_id, (counts.get(row.coach_id) ?? 0) + 1);
-    }
+    const page = (data ?? []) as SentTodayRow[];
+    addSentTodayUnits(counts, page);
     if (page.length < PAGE_SIZE) break;
   }
   return counts;
+}
+
+type SentTodayRow = { coach_id: string; group_jid?: string | null };
+
+/**
+ * Add each sent row's daily-cap units to its coach's count: a group send is
+ * `GROUP_SEND_CAP_UNITS`, a 1:1 send 1 — as the bridge counts them, so
+ * "Sends today" matches the cap it enforces.
+ */
+export function addSentTodayUnits(counts: Map<string, number>, rows: SentTodayRow[]): void {
+  for (const row of rows) {
+    counts.set(row.coach_id, (counts.get(row.coach_id) ?? 0) + (row.group_jid ? GROUP_SEND_CAP_UNITS : 1));
+  }
 }
 
 interface LocationNumberRow {
@@ -454,6 +469,41 @@ function mapWhatsappGroup(row: WhatsappGroupRow): WhatsappGroup {
     ghlContactId: row.ghl_contact_id,
     leftAt: row.left_at,
   };
+}
+
+/**
+ * Which group (if any) a location's GHL contact stands for, given the
+ * contact's `whatsapp_groups` rows across all tenants. A group of one of the
+ * location's numbers (`locationTenants`) wins. Normally there is one: the
+ * group contact's key is per number (`ghlGroupContactKey`), so the same group
+ * on two numbers has two contacts; should two rows ever share a contact,
+ * prefer an enabled group the number is still in, then a stable order.
+ * Failing that, a group of a tenant that is no longer any location's number
+ * (not in `linkedTenants`: the number was removed) comes back switched off
+ * and flagged `numberRemoved`, so the send is refused rather than treated as
+ * a phone contact. A group of another location's current number is not this
+ * contact's group.
+ */
+export function chooseGroupForContact(
+  groups: WhatsappGroup[],
+  locationTenants: ReadonlySet<string>,
+  linkedTenants: ReadonlySet<string>
+): { tenantId: string; groupJid: string; enabled: boolean; left: boolean; numberRemoved?: true } | null {
+  const own = groups.filter((g) => locationTenants.has(g.tenantId));
+  own.sort(
+    (a, b) =>
+      Number(b.enabled) - Number(a.enabled) ||
+      Number(a.leftAt !== null) - Number(b.leftAt !== null) ||
+      a.tenantId.localeCompare(b.tenantId)
+  );
+  const group = own[0];
+  if (group) return { tenantId: group.tenantId, groupJid: group.groupJid, enabled: group.enabled, left: group.leftAt !== null };
+  const removed = groups
+    .filter((g) => !locationTenants.has(g.tenantId) && !linkedTenants.has(g.tenantId))
+    .sort((a, b) => a.tenantId.localeCompare(b.tenantId))[0];
+  return removed
+    ? { tenantId: removed.tenantId, groupJid: removed.groupJid, enabled: false, left: removed.leftAt !== null, numberRemoved: true }
+    : null;
 }
 
 /** 0004's `char_length(name) <= 100` — trimmed by whole characters (code points, as Postgres counts them), never mid-emoji. */
@@ -628,6 +678,13 @@ export class SupabaseGhlRepository implements GhlRepository {
       .eq("location_id", locationId)
       .eq("tenant_id", target.tenantId);
     if (stickyError) throw stickyError;
+    // Switch its groups off, so their GHL contacts are refused as "turned
+    // off" rather than mistaken for phone contacts.
+    const { error: groupsError } = await supabase
+      .from("whatsapp_groups")
+      .update({ enabled: false })
+      .eq("tenant_id", target.tenantId);
+    if (groupsError) throw groupsError;
 
     if (promoteSlot !== null) {
       const promoted = numbers.find((n) => n.slot === promoteSlot)!;
@@ -768,25 +825,27 @@ export class SupabaseGhlRepository implements GhlRepository {
     const tenantIds = new Set(numbers.map((n) => n.tenantId));
     if (accountResult.data) tenantIds.add((accountResult.data as { tenant_id: string }).tenant_id);
     if (tenantIds.size === 0) return null;
-    const { data, error } = await supabase
-      .from("whatsapp_groups")
-      .select(WHATSAPP_GROUP_COLUMNS)
-      .in("tenant_id", [...tenantIds])
-      .eq("ghl_contact_id", ghlContactId);
+    // By contact across every tenant, not only this location's: a group of a
+    // number since removed from the location must still be recognised (and
+    // refused), never fall into the phone path. whatsapp_groups only holds
+    // groups an owner has switched on, so this stays small.
+    const { data, error } = await supabase.from("whatsapp_groups").select(WHATSAPP_GROUP_COLUMNS).eq("ghl_contact_id", ghlContactId);
     if (error) throw error;
     const groups = ((data ?? []) as WhatsappGroupRow[]).map(mapWhatsappGroup);
-    // Normally one row: the group contact's key is per number
-    // (`ghlGroupContactKey`), so the same group on two numbers has two
-    // contacts. A safety net should two rows ever share a contact anyway:
-    // prefer an enabled group the number is still in, then a stable order.
-    groups.sort(
-      (a, b) =>
-        Number(b.enabled) - Number(a.enabled) ||
-        Number(a.leftAt !== null) - Number(b.leftAt !== null) ||
-        a.tenantId.localeCompare(b.tenantId)
-    );
-    const group = groups[0];
-    return group ? { tenantId: group.tenantId, groupJid: group.groupJid, enabled: group.enabled, left: group.leftAt !== null } : null;
+    const outside = [...new Set(groups.map((g) => g.tenantId).filter((t) => !tenantIds.has(t)))];
+    // Only when no group of this location's numbers matched: which of the
+    // other tenants are still some location's number (so not removed).
+    const linked = new Set<string>();
+    if (outside.length > 0 && !groups.some((g) => tenantIds.has(g.tenantId))) {
+      const [numberRows, accountRows] = await Promise.all([
+        supabase.from("ghl_location_numbers").select("tenant_id").in("tenant_id", outside),
+        supabase.from("ghl_accounts").select("tenant_id").in("tenant_id", outside),
+      ]);
+      if (numberRows.error) throw numberRows.error;
+      if (accountRows.error) throw accountRows.error;
+      for (const r of [...(numberRows.data ?? []), ...(accountRows.data ?? [])] as { tenant_id: string }[]) linked.add(r.tenant_id);
+    }
+    return chooseGroupForContact(groups, tenantIds, linked);
   }
 
   async setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string) {

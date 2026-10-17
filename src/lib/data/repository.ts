@@ -91,7 +91,8 @@ export interface GhlRepository {
 
   /**
    * Delete a number's `ghl_contact_numbers` and `ghl_location_numbers` rows
-   * (FIRST: the number row has no ON DELETE on its tenant), promoting the
+   * (FIRST: the number row has no ON DELETE on its tenant) and switch its
+   * `whatsapp_groups` off (`enabled = false`), promoting the
    * lowest remaining slot to default when the default is removed. Does NOT
    * delete the `whatsapp_tenants` row: the caller logs the bridge session out
    * of `removedTenantId` first.
@@ -149,12 +150,15 @@ export interface GhlRepository {
    * send to a switched-off group with its fixed string. `left` is
    * `left_at IS NOT NULL` (the number is no longer in the group), so a send
    * to a left group can be refused with the bridge's "no longer in that
-   * group" string rather than "turned off".
+   * group" string rather than "turned off". A group of a number since removed
+   * from the location (its tenant is no longer any location's number) comes
+   * back with `enabled: false` and `numberRemoved: true`: the caller refuses
+   * it rather than treating the contact as a phone contact.
    */
   getWhatsappGroupByContact(
     locationId: string,
     ghlContactId: string
-  ): Promise<{ tenantId: string; groupJid: string; enabled: boolean; left: boolean } | null>;
+  ): Promise<{ tenantId: string; groupJid: string; enabled: boolean; left: boolean; numberRemoved?: boolean } | null>;
 
   /** Store the GHL contact created for a group (the inbound drain, before it posts the group's first message). */
   setWhatsappGroupContact(tenantId: string, groupJid: string, ghlContactId: string): Promise<void>;

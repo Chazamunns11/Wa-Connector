@@ -299,6 +299,22 @@ test("accept-time reservation: a send IN FLIGHT (shifted, awaiting groupMetadata
   assert.equal(h.session.pacer.sentTodayCount(), 6, "A recorded its 5 units");
 });
 
+test("session snapshot: exposes queuedUnits and inFlightUnits alongside queueLength", async () => {
+  // cap 10, sentToday 0: group A (5) held in flight, group C (5) queued behind it.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const h = makeHarness({ sentToday: 0, groupMetadataGate: gate });
+  assert.equal((await h.manager.sendToGroup(TENANT, GROUP_JID, "a", "g-a")).kind, "accepted");
+  for (let i = 0; i < 20 && !h.calls.some((c) => c.method === "groupMetadata"); i++) await new Promise((r) => setImmediate(r));
+  assert.equal((await h.manager.sendToGroup(TENANT, GROUP_JID, "c", "g-c")).kind, "accepted");
+  const snapshot = h.manager.getSnapshot(TENANT);
+  assert.equal(snapshot?.queueLength, 1, "one item queued");
+  assert.equal(snapshot?.queuedUnits, 5, "the queued group costs 5 units, not 1");
+  assert.equal(snapshot?.inFlightUnits, 5, "the group being dispatched still holds its 5 units");
+  release();
+  await h.terminal;
+});
+
 test("in-flight units are released on a not-dispatched exit (no leak into later reservations)", async () => {
   const h = makeHarness({ sentToday: 0, participants: [{ id: "447700900777@s.whatsapp.net" }] });
   await h.manager.sendToGroup(TENANT, GROUP_JID, "a", "g-a");

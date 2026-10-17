@@ -55,6 +55,8 @@ function makeFakes(sendOutcome: SendOutcome) {
       sentToday: 0,
       dailyCap: 150,
       queueLength: 0,
+      queuedUnits: 0,
+      inFlightUnits: 0,
     }),
     logout: async (coachId: string) => {
       calls.push({ method: "logout", args: [coachId] });

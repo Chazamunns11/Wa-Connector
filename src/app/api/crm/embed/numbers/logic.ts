@@ -21,7 +21,7 @@
  * a SLOT; every lookup below runs inside the `locationId` the route's guard
  * resolved from the verified token. `LocationNumber` (which carries the
  * tenant id) is server-only, and every response here is built by
- * ENUMERATING `slot`/`label`/`isDefault`/`summary` (`toEmbedNumberView`),
+ * ENUMERATING `slot`/`key`/`label`/`isDefault`/`summary` (`toEmbedNumberView`),
  * never by spreading a `LocationNumber`, so a tenant id can never ride along.
  * Bridge failure messages are never forwarded to the client either: a failed
  * logout answers with a fixed sentence.
@@ -33,6 +33,7 @@
  * moves the default if needed (Task 2). Removing the location's last number
  * is refused before anything is touched (deactivate the location instead).
  */
+import { createHash } from "node:crypto";
 import type { GhlRepository } from "@/lib/data";
 import type { GhlEmbedWhatsappSummary, LocationNumber, WhatsappSessionSummary } from "@/lib/types";
 import type { BridgeOkResult } from "@/lib/whatsapp-bridge";
@@ -54,6 +55,8 @@ export type EmbedNumbersRepo = Pick<
 /** What the browser sees for one number. Structurally unable to carry a tenant id. */
 export interface EmbedNumberView {
   slot: LocationSlot;
+  /** Opaque per-number id for the browser (a React key): changes when the number in a slot changes, never reveals the tenant id (`embedNumberKey`). */
+  key: string;
   label: string | null;
   isDefault: boolean;
   summary: GhlEmbedWhatsappSummary | null;
@@ -73,9 +76,24 @@ export function toEmbedSummary(summary: WhatsappSessionSummary | null): GhlEmbed
   return { status, phoneNumber, lastConnectedAt, lastDisconnectReason, sentToday };
 }
 
+/**
+ * A short, domain-separated sha256 prefix of the tenant id: stable for a
+ * number, different for a number removed and re-added in the same slot, and
+ * not the tenant id (nor the group contact key's hash of it).
+ */
+export function embedNumberKey(tenantId: string): string {
+  return createHash("sha256").update(`embed-number:${tenantId}`).digest("hex").slice(0, 12);
+}
+
 async function toEmbedNumberView(repo: Pick<EmbedNumbersRepo, "getWhatsappSessionSummary">, number: LocationNumber): Promise<EmbedNumberView> {
   const summary = await repo.getWhatsappSessionSummary(number.tenantId);
-  return { slot: number.slot, label: number.label, isDefault: number.isDefault, summary: toEmbedSummary(summary) };
+  return {
+    slot: number.slot,
+    key: embedNumberKey(number.tenantId),
+    label: number.label,
+    isDefault: number.isDefault,
+    summary: toEmbedSummary(summary),
+  };
 }
 
 /** The location's numbers, by slot, each with its redacted session summary (one summary read per number). */
