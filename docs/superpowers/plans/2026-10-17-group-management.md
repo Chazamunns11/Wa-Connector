@@ -20,7 +20,7 @@
   - `New numbers can't create groups during their first 14 days.`
   - `This number isn't an admin of that group.`
   - `You can't remove the group's last admin.`
-- Default invite message: `Hi {first_name}, {coach_name} invited you to join {group_name} on WhatsApp: {link}`. Placeholders `{first_name}`, `{group_name}`, `{coach_name}` and a required `{link}`. Template up to **500** characters, stored per account in `accounts.group_invite_template text null`.
+- Default invite message: `Hi {first_name}, {coach_name} invited you to join {group_name} on WhatsApp: {link}`. Placeholders `{first_name}`, `{group_name}`, `{coach_name}` and a required `{link}`. Template up to **500** characters, stored **per sub-account** in `ghl_accounts.group_invite_template text null` (Charlie, 17 Oct: each sub-account has its own wording, edited inside GHL).
 - Limits per number per day (UTC day, like the pacer): **3** groups created (`WA_GROUP_CREATE_DAILY`, default 3) and **50** direct adds (`WA_GROUP_ADD_DAILY`, default 50). Invite messages count as normal sends against the daily cap (1 unit each).
 - Create: **try `groupCreate(subject, [])` first**. If WhatsApp refuses, retry with the first contact eligible for a direct add. If there is none, refuse with the first fixed string.
 - **Invite link by default.** Direct add only for a contact who has **messaged that number before** (a non-group row for them in `whatsapp_inbound_messages` on that tenant). If WhatsApp refuses the add (privacy), fall back to the invite link.
@@ -55,7 +55,7 @@
   - `alter table public.whatsapp_groups add column created_by_us boolean not null default false;`
   - `create index whatsapp_groups_ghl_contact_idx on public.whatsapp_groups (ghl_contact_id) where ghl_contact_id is not null;` (backs `getWhatsappGroupByContact`, deferred from the last review).
   - `whatsapp_group_actions(id uuid pk default gen_random_uuid(), tenant_id uuid not null references public.whatsapp_tenants (id) on delete cascade, group_jid text null check (group_jid is null or group_jid ~ '^[0-9]+(-[0-9]+)?@g\.us$'), action text not null check (action in ('create','add','remove','promote','demote','update','invite_reset','leave')), count int not null check (count between 1 and 50), created_at timestamptz not null default now())`, plus `create index whatsapp_group_actions_tenant_created_idx on public.whatsapp_group_actions (tenant_id, created_at)`. RLS on, no policies. Only `create`/`add` rows count towards limits. The rest is an audit trail for a later owner view.
-  - `alter table public.accounts add column group_invite_template text check (group_invite_template is null or (char_length(group_invite_template) between 1 and 500 and strpos(group_invite_template, '{link}') > 0));` (`accounts` is defined in `0002_accounts.sql`).
+  - `alter table public.ghl_accounts add column group_invite_template text check (group_invite_template is null or (char_length(group_invite_template) between 1 and 500 and strpos(group_invite_template, '{link}') > 0));` (per sub-account; `ghl_accounts` is defined in `0001_init.sql`).
 - [ ] **Step 1: Write the failing schema test.** Assert each statement above by regex, plus `enable row level security` and `assert.doesNotMatch(sql, /create policy/)`.
 - [ ] **Step 2: Run** `npm test`. Expect FAIL (file missing).
 - [ ] **Step 3: Write the migration**, with comments in the style of `0007_whatsapp_groups.sql` explaining why each column exists.
@@ -167,7 +167,7 @@
 **Interfaces:**
 - Consumes: Task 1 columns, Task 4 routes.
 - Produces:
-  - Repo: `recordCreatedWhatsappGroup(tenantId: string, groupJid: string, name: string): Promise<void>` (upsert `enabled = true, created_by_us = true, left_at = null`); `renameWhatsappGroup(tenantId: string, groupJid: string, name: string): Promise<void>`; `getGroupInviteTemplate(accountId: string): Promise<string | null>`; `setGroupInviteTemplate(accountId: string, template: string | null): Promise<void>`; `hasInboundFromPhone(tenantId: string, phoneE164: string): Promise<boolean>` (the same query as the bridge's, used to label contacts "can be added directly" in the UI). `listWhatsappGroups` maps `created_by_us`.
+  - Repo: `recordCreatedWhatsappGroup(tenantId: string, groupJid: string, name: string): Promise<void>` (upsert `enabled = true, created_by_us = true, left_at = null`); `renameWhatsappGroup(tenantId: string, groupJid: string, name: string): Promise<void>`; `getGroupInviteTemplate(locationId: string): Promise<string | null>`; `setGroupInviteTemplate(locationId: string, template: string | null): Promise<void>`; `hasInboundFromPhone(tenantId: string, phoneE164: string): Promise<boolean>` (the same query as the bridge's, used to label contacts "can be added directly" in the UI). `listWhatsappGroups` maps `created_by_us`.
   - Bridge client functions (same `bridgeFetch` / validator style as `listWhatsappGroups`): `createWhatsappGroup(coachId, input)`, `getWhatsappGroupDetail(coachId, jid)`, `updateWhatsappGroup(coachId, jid, patch)`, `updateWhatsappGroupParticipants(coachId, jid, req)`, `getWhatsappGroupInvite(coachId, jid)`, `resetWhatsappGroupInvite(coachId, jid)`, `leaveWhatsappGroup(coachId, jid)`. Types `BridgeGroupDetail`, `BridgeMemberView`, `BridgeParticipantResult` mirror Task 3. Exported pure validators `isValidGroupDetail(v): v is BridgeGroupDetail` and `isValidInviteLink(v): v is string` (must match `^https://chat\.whatsapp\.com/[A-Za-z0-9]{10,32}$`). The JID is `encodeURIComponent`'d into the path.
 - [ ] **Step 1: Write failing tests:** the new method names are in `METHODS` of `repository-shape.test.ts`. `isValidGroupDetail` rejects a member without `memberId` or with `admin: "owner"`. `isValidInviteLink` rejects `http://chat.whatsapp.com/x` and `https://evil.example/abc`.
 - [ ] **Step 2: Run** `npm test`. Expect FAIL.
@@ -239,7 +239,7 @@
 - Test: new `scripts/test/embed-group-manage.test.ts`, `scripts/test/embed-groups.test.ts`
 
 **Interfaces:**
-- Consumes: Tasks 5–7; `authorizeGhlEmbedRequest` + `requestedSlotFromBody` (slot guard) for `manage`, and `authorizeGhlEmbedLocationRequest` for `invite-template` (the template is per account, not per number).
+- Consumes: Tasks 5–7; `authorizeGhlEmbedRequest` + `requestedSlotFromBody` (slot guard) for `manage`, and `authorizeGhlEmbedLocationRequest` for `invite-template` (the template is per sub-account, not per number).
 - Produces:
   - `POST /api/crm/embed/groups/manage`, body `{ slot?, action, ... }`, where `action` is one of:
     - `create` `{ requestId, name, description?, contactIds? | tag?, directAdd? }`: `resolveInvitees` → bridge `createWhatsappGroup` (participants = invitees' phones, as fallback candidates) → `recordCreatedWhatsappGroup` → `refreshWhatsappGroups` → `sendGroupInvites` (excluding `addedPhone`) → `{ ok, group: { jid, name }, invites: { added, sent, held, refused, skipped } }`.
@@ -247,7 +247,7 @@
     - `detail`, `update`, `participants`, `invite_link`, `invite_reset`, `leave` `{ groupJid, ... }`: the group must be in this tenant's `listWhatsappGroups` and enabled, else 404 `unknown_group`. A successful `update` with a name also calls `renameWhatsappGroup`. `leave` calls `markWhatsappGroupLeft` then `refreshWhatsappGroups`.
     - `invite` `{ groupJid, contactIds? | tag?, directAdd? }`: invite more people to an existing group.
   - `decideGroupManageRequest(repo, deps, ctx: { tenantId: string /* from the slot guard */; account: GhlAccount /* route loads it with getGhlAccountByLocationId */; slotLabel: string | null }, body): Promise<{ status: number; body: Record<string, unknown> }>`. Each response is built by listing its fields (never a spread), as in `groups/logic.ts`.
-  - `POST /api/crm/embed/groups/invite-template` `{ template: string | null }` (null resets to default) → `{ ok, template, isDefault }`; an empty body reads it. An unclaimed location (`account.accountId === null`) → 409 `{ code: "no_account", message: "Claim this sub-account to edit the invite message." }`.
+  - `POST /api/crm/embed/groups/invite-template` `{ template: string | null }` (null resets to default) → `{ ok, template, isDefault }`; an empty body reads it.
   - Validation: name/description limits in code points, `requestId` matches `^[A-Za-z0-9_-]{8,64}$`, `contactIds` ≤ 100.
 - [ ] **Step 1: Write failing tests** in `embed-group-manage.test.ts`:
   - `no tenant id anywhere`: the serialised JSON of every action's response does not contain the fake tenant uuid.
@@ -257,7 +257,7 @@
   - `manage: not_admin → 403 with "This number isn't an admin of that group."`
   - `participants: self and last-admin results surface as the fixed strings` (`You can't remove the group's last admin.`, and the self string).
   - `leave: marks left and refreshes`.
-  - `invite-template: missing {link} refused verbatim; unclaimed location 409; null resets`.
+  - `invite-template: missing {link} refused verbatim; null resets; one sub-account's template never changes another's`.
   - `embed-groups.test.ts`: the list includes `createdByUs`.
 - [ ] **Step 2: Run** `npm test`. Expect FAIL.
 - [ ] **Step 3: Implement.** The routes are thin adapters (the same shape as `groups/route.ts`). Failures are fixed sentences, and bridge messages are passed through only for the 422/403 codes, whose messages are the spec's fixed strings.
@@ -274,7 +274,7 @@
 **Interfaces:**
 - Consumes: Task 8 actions. All calls go through `callEmbedApi("/api/crm/embed/groups/manage", "POST", { slot, action, ... })`.
 
-- [ ] **Step 1: CreateGroupForm.** Name (counter /100), optional description (/512), invitees: "Pick contacts" (a search box over `search_contacts`, chips) or "Everyone with tag". "Add people who've messaged this number directly" checkbox (off by default). An invite message editor showing the template, Save/Reset via `invite-template`, and the line "Applies to every sub-account on your account." `requestId` is minted once per open form (`crypto.randomUUID()` without dashes), and the button is disabled while in flight. The result summary lists added, sent, held ("will send when the number reconnects"), refused (with reason) and skipped (with reason).
+- [ ] **Step 1: CreateGroupForm.** Name (counter /100), optional description (/512), invitees: "Pick contacts" (a search box over `search_contacts`, chips) or "Everyone with tag". "Add people who've messaged this number directly" checkbox (off by default). An invite message editor showing the template, Save/Reset via `invite-template`, and the line "Applies to this sub-account." `requestId` is minted once per open form (`crypto.randomUUID()` without dashes), and the button is disabled while in flight. The result summary lists added, sent, held ("will send when the number reconnects"), refused (with reason) and skipped (with reason).
 - [ ] **Step 2: GroupManagePanel** (opened from a group row, loads `detail`): rename, description, "Only admins can send", "Approve new members" toggles, a members list (name or phone, else "WhatsApp member") with Remove / Make admin / Remove admin, hidden for our own row. The invite link with Copy and Reset (reset asks for confirmation in the page). "Invite more" (reuses the invitee picker) and Leave (in-page confirmation, never `confirm()`). With `weAreAdmin === false`, it shows only "This number isn't an admin of that group." and Leave.
 - [ ] **Step 3: Run** `npm run check` and the production build. Expect PASS.
 - [ ] **Step 4: Commit** `ui: create and manage WhatsApp groups`.
@@ -286,3 +286,10 @@
 
 - [ ] **Step 1:** Document migration 0009 (apply before deploying this bridge and app), `WA_GROUP_CREATE_DAILY` / `WA_GROUP_ADD_DAILY`, the new routes, that invites are normal sends (cap, STOP, hold), and that `scripts/group-sandbox.ts` should be run on a spare number before go-live, with its result for the empty create recorded in the spec's Decisions log.
 - [ ] **Step 2: Commit** `docs: group creation and management`.
+
+
+## Decisions after planning (Charlie, 17 Oct 2026)
+
+- **Invites appear in GHL.** Each invite sent by WhatsApp is also posted into the contact's GHL conversation as an outbound message (GHL Conversations API, the location token), after the bridge accepts it, so the coach sees it went out. Task 8 owns this: post once per invite, never block or fail the invite if the GHL post fails (log with a fixed string), and never post for refused or skipped invitees. Add tests for: posted after acceptance; GHL failure doesn't fail the invite; no post for refused/skipped.
+- **Invite template per sub-account** (edited inside GHL, applies to that sub-account only). Applied in Global Constraints, Task 1 (migration), Task 5 (repo), Task 8 (route) and Task 9 (UI copy) above.
+- **Controller rulings on the planner's questions:** 50 direct adds a day (the spec's Tests line saying 20 is outdated); the create-limit message fills in the configured number; warm-up refusals follow `WA_WARMUP_ENABLED` (off by default, so re-scanned established numbers aren't blocked); during warm-up direct adds quietly become invite links; removing our own number → "You can't remove this WhatsApp number from the group. Use Leave instead."; members are managed by their WhatsApp member id from group details, phone numbers only for adds; explicit STOP check before direct adds and the create fallback member; `{coach_name}` = the number's label, else the sub-account label; "has messaged this number" means within the 90-day inbound retention; 100 invitees per request; managing requires the group to be synced.
