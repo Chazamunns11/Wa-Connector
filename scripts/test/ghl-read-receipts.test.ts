@@ -12,9 +12,9 @@ import type { GhlAccount, GhlOutboundMessage } from "@/lib/types";
 
 const TENANT = "11111111-1111-4111-8111-111111111111";
 
-function account(): GhlAccount {
+function account(locationId = "loc-1"): GhlAccount {
   return {
-    locationId: "loc-1", tenantId: TENANT, label: "T", companyId: null, conversationProviderId: null,
+    locationId, tenantId: TENANT, label: "T", companyId: null, conversationProviderId: null,
     accessToken: "tok", accessTokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(), refreshToken: "r",
     status: "active", lastError: null, createdAt: "2026-07-01T00:00:00Z", updatedAt: "2026-07-01T00:00:00Z",
     accountId: "acc", activatedAt: "2026-10-01T00:00:00Z",
@@ -30,12 +30,20 @@ function row(n: number, over: Partial<GhlOutboundMessage> = {}): GhlOutboundMess
   };
 }
 
-function setup(rows: GhlOutboundMessage[], readKeys: string[], putResult: { ok: true } | { ok: false; error: string; status?: number } = { ok: true }) {
+type PutResult = { ok: true } | { ok: false; error: string; status?: number };
+
+function setup(
+  rows: GhlOutboundMessage[],
+  readKeys: string[],
+  putResult: PutResult | ((messageId: string) => PutResult) = { ok: true },
+  accounts: (locationId: string) => GhlAccount | null = (l) => account(l)
+) {
   const byId = new Map(rows.map((r) => [r.id, r]));
   const puts: { messageId: string; status: string }[] = [];
   const listed: { limit: number; sinceIso: string }[] = [];
+  const accountLookups: string[] = [];
   const repo: GhlReadReceiptsRepo = {
-    async getGhlAccountByLocationId() { return account(); },
+    async getGhlAccountByLocationId(locationId) { accountLookups.push(locationId); return accounts(locationId); },
     async claimGhlTokenRefresh() { return true; },
     async saveGhlTokens() {},
     async markGhlNeedsReauth() {},
@@ -57,20 +65,20 @@ function setup(rows: GhlOutboundMessage[], readKeys: string[], putResult: { ok: 
   const deps = {
     updateStatus: async (_t: string, messageId: string, status: string) => {
       puts.push({ messageId, status });
-      return putResult;
+      return typeof putResult === "function" ? putResult(messageId) : putResult;
     },
     refreshToken: async () => { throw new Error("unexpected refresh"); },
     refreshWaitMs: 0,
     notify: () => {},
   } as unknown as GhlProviderDeps;
-  return { repo, deps, byId, puts, listed };
+  return { repo, deps, byId, puts, listed, accountLookups };
 }
 
 test("read row: PUT read once and marked", async () => {
   const s = setup([row(1)], ["key-1"]);
   const r = await drainGhlReadReceipts(s.repo, s.deps);
   assert.deepEqual(s.puts, [{ messageId: "m1", status: "read" }]);
-  assert.deepEqual(r, { examined: 1, reported: 1, failed: 0 });
+  assert.deepEqual(r, { examined: 1, reported: 1, failed: 0, timeBudgetExceeded: false });
   assert.notEqual(s.byId.get("row-1")!.readReportedAt, null);
   assert.equal(s.byId.get("row-1")!.readReportError, null);
   await drainGhlReadReceipts(s.repo, s.deps);
@@ -159,6 +167,7 @@ test("rows older than 7 days aren't listed", async () => {
   assert.match(sql, /g\.read_reported_at is null/);
   assert.match(sql, /g\.created_at >= p_since/);
   assert.match(sql, /w\.read_at is not null/);
+  assert.match(sql, /join public\.ghl_accounts a\s+on a\.location_id = g\.location_id and a\.status = 'active'/);
   assert.match(sql, /order by g\.created_at/);
   assert.match(sql, /grant execute on function public\.ghl_outbound_awaiting_read\(timestamptz, int\) to service_role/);
 });
@@ -175,4 +184,73 @@ test("flag off: the cron route doesn't call the drain", () => {
   const src = readFileSync(new URL("../../src/app/api/cron/drain/route.ts", import.meta.url), "utf8");
   assert.match(src, /if \(process\.env\.GHL_READ_RECEIPTS_ENABLED === "true"\) \{\s*try \{\s*ghlReadReceipts = await drainGhlReadReceipts\(repo\)/);
   assert.equal(src.match(/drainGhlReadReceipts\(repo\)/g)?.length, 1);
+});
+
+// Two locations, rows interleaved oldest first: loc-1 rows are m1, m3, m5;
+// loc-2 rows are m2, m4.
+function twoLocationRows(): GhlOutboundMessage[] {
+  const base = Date.now() - 3_600_000;
+  return [1, 2, 3, 4, 5].map((n) =>
+    row(n, { locationId: n % 2 === 1 ? "loc-1" : "loc-2", createdAt: new Date(base + n * 1000).toISOString() })
+  );
+}
+const allKeys = ["key-1", "key-2", "key-3", "key-4", "key-5"];
+
+test("account and token are looked up once per location per pass", async () => {
+  const s = setup(twoLocationRows(), allKeys);
+  const r = await drainGhlReadReceipts(s.repo, s.deps);
+  assert.equal(r.reported, 5);
+  assert.deepEqual(s.accountLookups, ["loc-1", "loc-2"]);
+});
+
+for (const [label, status] of [["401", 401], ["5xx", 503]] as const) {
+  test(`${label} on one location: its later rows get no PUT, the other location still goes through`, async () => {
+    const s = setup(twoLocationRows(), allKeys, (messageId) =>
+      messageId === "m1" ? { ok: false, error: `GHL status update rejected (HTTP ${status})`, status } : { ok: true }
+    );
+    const r = await drainGhlReadReceipts(s.repo, s.deps);
+    assert.deepEqual(s.puts.map((p) => p.messageId), ["m1", "m2", "m4"]);
+    assert.deepEqual(r, { examined: 5, reported: 2, failed: 3, timeBudgetExceeded: false });
+    for (const id of ["row-1", "row-3", "row-5"]) {
+      assert.equal(s.byId.get(id)!.readReportedAt, null, "left for the next pass");
+      assert.equal(s.byId.get(id)!.readReportError, null);
+    }
+    assert.notEqual(s.byId.get("row-4")!.readReportedAt, null);
+  });
+}
+
+test("missing token on one location: no PUT for any of its rows, the other location still goes through", async () => {
+  const s = setup(twoLocationRows(), allKeys, { ok: true }, (l) => (l === "loc-1" ? null : account(l)));
+  const r = await drainGhlReadReceipts(s.repo, s.deps);
+  assert.deepEqual(s.puts.map((p) => p.messageId), ["m2", "m4"]);
+  assert.deepEqual(r, { examined: 5, reported: 2, failed: 3, timeBudgetExceeded: false });
+  assert.deepEqual(s.accountLookups, ["loc-1", "loc-2"], "a failed lookup is not repeated per row");
+});
+
+test("a final 4xx on one row doesn't skip the rest of its location", async () => {
+  const s = setup(twoLocationRows(), allKeys, (messageId) =>
+    messageId === "m1" ? { ok: false, error: "GHL status update rejected (HTTP 422)", status: 422 } : { ok: true }
+  );
+  const r = await drainGhlReadReceipts(s.repo, s.deps);
+  assert.equal(s.puts.length, 5);
+  assert.equal(r.reported, 4);
+});
+
+test("time budget: stops starting new rows once the pass has run long", async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const s = setup(twoLocationRows(), allKeys, () => {
+      offset = 30_000;
+      return { ok: true };
+    });
+    const r = await drainGhlReadReceipts(s.repo, s.deps);
+    assert.deepEqual(s.puts.map((p) => p.messageId), ["m1"]);
+    assert.equal(r.timeBudgetExceeded, true);
+    assert.equal(r.reported, 1);
+    assert.equal(s.byId.get("row-2")!.readReportedAt, null);
+  } finally {
+    Date.now = realNow;
+  }
 });

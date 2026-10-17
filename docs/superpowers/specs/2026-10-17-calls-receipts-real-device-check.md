@@ -13,9 +13,11 @@ the spare number from a second phone.
 | 1 | Ring and don't answer | One "Missed WhatsApp call" message in the GHL conversation |
 | 2 | Ring and answer on the phone | No message |
 | 3 | Decline the call | One message |
+| 3b | Ring and decline it on the coach's phone (the spare number's own handset) | One message, on the caller's contact (not on the coach's own number) |
 | 4 | Ring five times in a row | One message (limit is one per caller per 10 minutes) |
 | 5 | Make a video call and don't answer | One "Missed WhatsApp video call" message |
 | 6 | With the bridge offline, ring the number, then bring the bridge back | Record what happens (see below) |
+| 7 | Turn the app's cron off (or keep the bridge's row unprocessed) for more than 6 hours, then let it run | No GHL message for that call: it is closed as `missed_call_stale` |
 
 For check 6: the bridge only logs a call it saw ring (an `offer`). Record
 whether Baileys replays the `offer` after reconnecting (its `offline: true`
@@ -42,7 +44,7 @@ pass. Any other 4xx is final and the row is marked "GHL refused read status".
 
 | Check | Result |
 | --- | --- |
-| Missed calls 1 to 5 as expected | |
+| Missed calls 1 to 5 (and 3b) as expected | |
 | Offline call: Baileys replays `offer`? | |
 | GHL accepts `read`? | |
 | Read-receipts-off contact shows delivered only | |

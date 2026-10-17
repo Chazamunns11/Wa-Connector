@@ -504,6 +504,17 @@ Leave them off until the checks in
 Turn on the bridge flags first, then the app flag, and only if GHL accepted
 `read` in the sandbox.
 
+Rules to know once missed calls are on:
+
+- A missed call more than 6 hours old when the app's drain reaches it is not
+  posted to GHL (it is closed as `missed_call_stale`), so a reconnect after a
+  long outage never sends a very late text-back.
+- A missed call does not count as the caller having messaged the number, so it
+  never makes them eligible for a direct group add.
+- A GHL text-back workflow should match a body that *contains* `📞 Missed`, not
+  one that starts with it: on a multi-number location the body starts with the
+  number's label.
+
 ## Part 6 — Moving a sub-account from the FitClosers app to this one
 
 The same phone number must never be linked to both bridges at once; two

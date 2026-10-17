@@ -84,7 +84,8 @@ route, switched on `action`) and `/api/crm/embed/groups/invite-template`.
 
 - Invites are normal outbound messages. They go through pacing, the daily cap,
   STOP and the hold queue, so a held or opted-out invite is not sent. People are
-  added directly only if they have messaged that number in the last 90 days.
+  added directly only if they have messaged that number in the last 90 days
+  (a missed call doesn't count).
   Everyone else gets the invite link.
 - Only invites that WhatsApp accepted are also posted into the contact's GHL
   conversation. Held or queued invites are not.

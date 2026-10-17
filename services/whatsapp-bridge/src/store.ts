@@ -756,6 +756,8 @@ export class BridgeStore {
       .eq("coach_id", tenantId)
       .eq("from_phone", phoneE164)
       .is("group_jid", null)
+      // A missed call is not a message: it never makes a number eligible for a direct add.
+      .is("event_kind", null)
       .gte("received_at", since)
       .limit(1);
     if (error) throw error;

@@ -188,3 +188,7 @@
 - A call counts as missed only if the bridge saw the ring (`offer`) for it. A call ringing during a bridge restart, or one answered and longer than 10 minutes, is never logged as missed.
 - Migration 0010 also holds the SQL function `ghl_outbound_awaiting_read` (service_role only). Migrations 0001 to 0010 were all applied successfully to a local Postgres 16.
 - A 401 from GHL on a read status is retried. Other 4xx responses are final ("GHL refused read status").
+- The read drain resolves each location's account and token once per pass. A missing token, a 401 or a 5xx skips that location for the rest of the pass (its remaining rows count as failed, no PUT, retried next pass). It has the same 25-second time budget as the status drain. `ghl_outbound_awaiting_read` only returns rows of an active `ghl_accounts` location.
+- The caller and voice/video type of a missed call are saved at `offer` and used for the row. A decline on the coach's own phone can carry our own JID in the terminal event's `from`.
+- A missed call more than 6 hours old when the app's drain reaches it is resolved as `missed_call_stale` without posting, so a reconnect never sends a very late text-back. (`resolution` is free text per 0001; no CHECK to change.)
+- Missed calls never count as "has messaged us" for direct group adds: both `hasInboundFromPhone` queries filter `event_kind is null`.

@@ -2201,20 +2201,28 @@ export interface DrainGhlReadReceiptsResult {
   examined: number;
   reported: number;
   failed: number;
+  /** `true` iff this pass stopped early after `DRAIN_TIME_BUDGET_MS`; the rows not reached are left for the next pass. */
+  timeBudgetExceeded: boolean;
 }
 
 /**
  * Reports `read` to GHL for delivered rows whose bridge ledger row has a
  * `read_at`. Never touches `reported_status`. App-originated rows are marked
  * locally without a PUT; a 4xx other than 401 is final (fixed error, never retried); a 5xx,
- * network error or token failure leaves the row for the next pass. Never
- * throws; logs fixed strings only.
+ * network error or token failure leaves the row for the next pass.
+ *
+ * The account and token are resolved once per location per pass. A missing
+ * token, a 401 or a 5xx skips that location for the rest of the pass: its
+ * remaining rows count as failed and get no PUT, and other locations carry
+ * on. The same wall-clock budget as `drainGhlOutboundStatuses` applies.
+ * Never throws; logs fixed strings only.
  */
 export async function drainGhlReadReceipts(
   repo: GhlReadReceiptsRepo,
   deps: GhlProviderDeps = defaultGhlProviderDeps
 ): Promise<DrainGhlReadReceiptsResult> {
-  const result: DrainGhlReadReceiptsResult = { examined: 0, reported: 0, failed: 0 };
+  const result: DrainGhlReadReceiptsResult = { examined: 0, reported: 0, failed: 0, timeBudgetExceeded: false };
+  const startedAtMs = Date.now();
 
   let rows: GhlOutboundMessage[];
   try {
@@ -2225,15 +2233,41 @@ export async function drainGhlReadReceipts(
     return result;
   }
 
+  // Per-location token for this pass (null = no usable token).
+  const tokenByLocation = new Map<string, string | null>();
+  // Locations skipped for the rest of this pass.
+  const skippedLocations = new Set<string>();
+
   for (const row of rows) {
+    if (Date.now() - startedAtMs >= DRAIN_TIME_BUDGET_MS) {
+      result.timeBudgetExceeded = true;
+      console.error("[ghl-provider.drainGhlReadReceipts] time budget exceeded; remaining rows left for the next pass.");
+      break;
+    }
     try {
       if (isAppOriginatedMessageId(row.ghlMessageId)) {
         await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
         continue;
       }
-      const account = await repo.getGhlAccountByLocationId(row.locationId);
-      const accessToken = account ? await resolveGhlAccessToken(repo, deps, account) : null;
+      if (skippedLocations.has(row.locationId)) {
+        result.failed++;
+        continue;
+      }
+      let accessToken: string | null;
+      if (tokenByLocation.has(row.locationId)) {
+        accessToken = tokenByLocation.get(row.locationId) ?? null;
+      } else {
+        try {
+          const account = await repo.getGhlAccountByLocationId(row.locationId);
+          accessToken = account ? await resolveGhlAccessToken(repo, deps, account) : null;
+        } catch (err) {
+          accessToken = null;
+          console.error("[ghl-provider.drainGhlReadReceipts] token lookup failed (non-fatal):", err instanceof Error ? err.name : "error");
+        }
+        tokenByLocation.set(row.locationId, accessToken);
+      }
       if (!accessToken) {
+        skippedLocations.add(row.locationId);
         result.failed++;
         continue;
       }
@@ -2241,8 +2275,12 @@ export async function drainGhlReadReceipts(
       if (put.ok) {
         await repo.markGhlOutboundReadReported(row.id, { readReportError: null });
         result.reported++;
-      } else if (put.status !== undefined && put.status >= 400 && put.status < 500 && put.status !== 401) {
-        // A 401 is a token problem, not a refusal of the status: retry next pass.
+      } else if (put.status === 401 || (put.status !== undefined && put.status >= 500)) {
+        // A token problem or a GHL outage: retry next pass, and spare the
+        // rest of this location's rows a PUT that would fail the same way.
+        skippedLocations.add(row.locationId);
+        result.failed++;
+      } else if (put.status !== undefined && put.status >= 400 && put.status < 500) {
         await repo.markGhlOutboundReadReported(row.id, { readReportError: REASON_GHL_REFUSED_READ });
         result.failed++;
       } else {

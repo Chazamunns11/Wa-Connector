@@ -78,6 +78,25 @@ test("reject without accept is missed", async () => {
   assert.equal(rows.length, 1);
 });
 
+test("declined on the coach's own phone: reject carries our JID in from -> one row for the caller", async () => {
+  const { tracker, rows } = setup();
+  const OWN = "447700900999@s.whatsapp.net";
+  await tracker.handle("c", [ev("offer", { isVideo: true })]);
+  await tracker.handle("c", [ev("reject", { from: OWN, chatId: OWN, isVideo: false })]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.fromPhone, "+447700900123");
+  assert.equal(rows[0]?.messageType, "missedVideoCall", "the call type comes from the offer");
+});
+
+test("a LID caller saved at offer is resolved at the terminal event even if from changes", async () => {
+  const LID = "123456789012345@lid";
+  const { tracker, rows } = setup();
+  await tracker.handle("c", [ev("offer", { from: LID, callerPn: PN })]);
+  await tracker.handle("c", [ev("timeout", { from: "447700900999@s.whatsapp.net", callerPn: undefined })]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.fromPhone, "+447700900123");
+});
+
 test("group call ignored", async () => {
   const { tracker, rows } = setup();
   await tracker.handle("c", [ev("offer", { isGroup: true }), ev("timeout", { isGroup: true, groupJid: "123@g.us" })]);

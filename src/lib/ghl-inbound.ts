@@ -299,6 +299,15 @@ export const GHL_INBOUND_REASONS = {
 /** Terminal resolution for a group row whose group is unknown or switched off — never posted to GHL. */
 export const GROUP_NOT_ENABLED_RESOLUTION = "group_not_enabled";
 
+/**
+ * A missed call older than this when the drain reaches it is resolved without
+ * posting (`MISSED_CALL_STALE_RESOLUTION`), so a reconnect after a long outage
+ * never sets off a very late GHL text-back workflow.
+ */
+export const MISSED_CALL_STALE_MS = 6 * 60 * 60 * 1000;
+/** Terminal resolution for a missed call older than `MISSED_CALL_STALE_MS` — never posted to GHL. */
+export const MISSED_CALL_STALE_RESOLUTION = "missed_call_stale";
+
 export interface DrainGhlInboundRepliesResult {
   /** Unprocessed GHL-tenant rows this pass looked at (capped at `DRAIN_BATCH_CAP`) — `0` whenever `blockedUnconfigured` is `true`, since the list is never even read in that case. */
   candidates: number;
@@ -316,6 +325,8 @@ export interface DrainGhlInboundRepliesResult {
   claimLost: number;
   /** Group rows whose group is unknown or switched off — `resolution: 'group_not_enabled'`, never posted. */
   groupNotEnabled: number;
+  /** Missed calls older than `MISSED_CALL_STALE_MS` — `resolution: 'missed_call_stale'`, never posted. */
+  staleMissedCalls: number;
   /** Rows this pass whose text was a STOP-type keyword and recorded an opt-out (idempotent, so a retried row can count again). */
   optedOut: number;
   /** Rows this pass whose text was a START-type keyword and cleared an opt-out. */
@@ -377,6 +388,7 @@ export async function drainGhlInboundReplies(
     retried: 0,
     claimLost: 0,
     groupNotEnabled: 0,
+    staleMissedCalls: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: false,
@@ -492,6 +504,20 @@ async function processGhlInboundRow(
     }
     await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_push_failed", pushError: REASON_PUSH_EXHAUSTED });
     result.failed++;
+    return;
+  }
+
+  // A missed call that is too old (the bridge was offline, or this drain was
+  // stalled) is resolved without posting: a text-back hours later would be
+  // worse than none. No GHL call, so the circuit breaker is untouched.
+  if (row.eventKind === "missed_call" && Date.now() - Date.parse(row.receivedAt) > MISSED_CALL_STALE_MS) {
+    const claimed = await repo.claimWhatsappInboundMessage(row.id);
+    if (!claimed) {
+      result.claimLost++;
+      return;
+    }
+    await repo.resolveGhlInboundMessage(row.id, { resolution: MISSED_CALL_STALE_RESOLUTION, pushError: null });
+    result.staleMissedCalls++;
     return;
   }
 

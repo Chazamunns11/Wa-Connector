@@ -25,9 +25,9 @@ Items 5, 6 and 8 lean on item 3 (custom triggers). Each section says what works 
 - Missed calls are written as an inbound row with a new `event_kind = 'missed_call'` (the column comes from the item 4 spec) and `body = null`. They go through the same sender resolution (PN or confirmed LID only) and the same drain as messages.
 - The app posts them to GHL as an inbound message, `📞 Missed WhatsApp call` (voice) or `📞 Missed WhatsApp video call`. Posting as an inbound message is deliberate here: it is a contact reaching out, so "Customer replied" workflows firing is the point.
 - With item 3: a `whatsapp_missed_call` trigger carrying `number`, `numberLabel`, `isVideo` and `contactId`, so the text-back workflow can filter on it.
-- Without item 3: the "Customer replied" trigger fires on the posted message, and a workflow condition on the message body starting `📞 Missed` does the same job.
+- Without item 3: the "Customer replied" trigger fires on the posted message, and a workflow condition on the message body containing `📞 Missed` does the same job. Use "contains", not "starts with": on a location with more than one number the body carries a number label first (`[Sales] 📞 Missed WhatsApp call`).
 
-**Guardrails.** A per-caller limit of one missed-call post per 10 minutes, so a caller ringing five times doesn't create five messages or five text-backs.
+**Guardrails.** A per-caller limit of one missed-call post per 10 minutes, so a caller ringing five times doesn't create five messages or five text-backs. A missed call more than 6 hours old when the app's drain reaches it (for example after a long outage and a reconnect) is not posted; it is closed with the resolution `missed_call_stale`, so nobody gets a text-back hours late. A missed call never counts as the contact having messaged the number, so it does not make them eligible for a direct group add.
 
 **Fixed strings:** `📞 Missed WhatsApp call`, `📞 Missed WhatsApp video call`.
 
@@ -60,7 +60,7 @@ Items 5, 6 and 8 lean on item 3 (custom triggers). Each section says what works 
 **What the user gets.** GHL shows a sent WhatsApp message as **delivered** and then **read**, like the blue ticks on the phone. A workflow can act on "read but no reply after 24 hours".
 
 **How.**
-- The bridge subscribes to `messages.update` and `message-receipt.update` for our own sent messages (`fromMe`), and maps WhatsApp's acks to `delivered` and `read`.
+- The bridge subscribes to `messages.update` only, for our own sent one-to-one messages (`fromMe`), and maps WhatsApp's acks to `delivered` and `read`. It does not use `message-receipt.update` (that is where Baileys sends group receipts, which we don't track).
 - `whatsapp_messages` gains `delivered_at` and `read_at`, set once and never moved backwards.
 - The app's outbound status drain already reports to GHL. It adds `delivered`, then `read`, through GHL's message status update, if GHL's provider status API accepts those values (the drain uses it today for `delivered` and `failed`; confirm `read` in the sandbox).
 - With item 3: a `whatsapp_message_read` trigger carrying `contactId` and `messageId`, for "read, no reply" workflows.

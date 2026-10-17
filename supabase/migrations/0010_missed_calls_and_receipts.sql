@@ -68,6 +68,9 @@ create index if not exists ghl_outbound_read_pending_idx
 -- Delivered-and-not-yet-read-reported rows whose bridge ledger row HAS a
 -- read_at, oldest first. The join lives in SQL so rows that were never read
 -- (contacts with read receipts off) cannot fill the batch and starve the rest.
+-- Only rows of an ACTIVE ghl_accounts location, the same fence
+-- listUnreportedGhlOutboundMessages applies (ghl_accounts!inner(status)), so a
+-- location that needs re-auth or is disabled cannot fill the batch either.
 -- Service-role only, like activate_ghl_location.
 create or replace function public.ghl_outbound_awaiting_read(p_since timestamptz, p_limit int)
 returns table (
@@ -103,6 +106,8 @@ as $$
   from public.ghl_outbound_messages g
   join public.whatsapp_messages w
     on w.coach_id = g.tenant_id and w.idempotency_key = g.idempotency_key
+  join public.ghl_accounts a
+    on a.location_id = g.location_id and a.status = 'active'
   where g.reported_status = 'delivered'
     and g.read_reported_at is null
     and g.created_at >= p_since

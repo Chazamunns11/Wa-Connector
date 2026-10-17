@@ -5,6 +5,10 @@
  * `accept` from any device, records one inbound row (event_kind
  * 'missed_call') that the app later posts to GoHighLevel.
  *
+ * The caller (from / callerPn) and the voice/video type are taken from the
+ * `offer` and saved, never from the terminal event: a reject made on the
+ * coach's own phone can carry our own JID in `from`.
+ *
  * Rules: group calls and calls from our own number are ignored; the caller is
  * resolved exactly like a message sender (PN, or a LID that lidMapping
  * resolves) and unresolvable callers are dropped; at most one row per
@@ -29,8 +33,17 @@ export interface MissedCallDeps {
   log: Pick<Logger, "warn" | "error">;
 }
 
+/** The caller as the `offer` described it. Later events can name a different `from` (see `handleOne`). */
+interface Caller {
+  from: string;
+  callerPn?: string;
+  isVideo: boolean;
+}
+
 interface CallState {
   offer: boolean;
+  /** Saved at `offer`; the terminal event's own fields are never used for the row. */
+  caller: Caller | null;
   accepted: boolean;
   /** True once a terminal status has been handled; kept (until swept) so a late duplicate terminal event cannot re-record or flag an answered call as missed. */
   settled: boolean;
@@ -70,7 +83,7 @@ export class MissedCallTracker {
     const key = `${coachId}:${call.id}`;
     let state = this.calls.get(key);
     if (!state) {
-      state = { offer: false, accepted: false, settled: false, touchedAt: this.now() };
+      state = { offer: false, caller: null, accepted: false, settled: false, touchedAt: this.now() };
       this.calls.set(key, state);
       // Hard cap: Map iterates in insertion order, so the first key is the oldest.
       while (this.calls.size > MAX_TRACKED_CALLS) {
@@ -84,6 +97,7 @@ export class MissedCallTracker {
 
     if (call.status === "offer") {
       state.offer = true;
+      state.caller = { from: call.from, callerPn: call.callerPn, isVideo: call.isVideo === true };
       return;
     }
     if (call.status === "accept") {
@@ -94,9 +108,13 @@ export class MissedCallTracker {
     state.settled = true;
     // Missed only if we saw the ring ourselves: after a restart (or a swept
     // entry) a terminal event alone proves nothing, so fail safe.
-    if (state.accepted || !state.offer) return;
+    if (state.accepted || !state.offer || !state.caller) return;
 
-    const phone = await this.resolveCaller(call);
+    // The caller and call type come from the offer. A reject made on the
+    // coach's own phone can carry OUR JID in `from`, so the terminal event's
+    // own fields would name the wrong person (or ourselves).
+    const caller = state.caller;
+    const phone = await this.resolveCaller(caller);
     if (!phone) return;
     if (phone === this.deps.ownPhone(coachId)) return;
 
@@ -109,7 +127,7 @@ export class MissedCallTracker {
       fromPhone: phone,
       waMessageId: `call:${call.id}`,
       body: null,
-      messageType: call.isVideo ? "missedVideoCall" : "missedVoiceCall",
+      messageType: caller.isVideo ? "missedVideoCall" : "missedVoiceCall",
       receivedAt,
       groupJid: null,
       senderName: null,
@@ -118,11 +136,11 @@ export class MissedCallTracker {
     if (fresh) this.deps.schedulePoke();
   }
 
-  private async resolveCaller(call: WACallEvent): Promise<string | null> {
-    const res = resolveSenderE164(call.from, call.callerPn);
+  private async resolveCaller(caller: Caller): Promise<string | null> {
+    const res = resolveSenderE164(caller.from, caller.callerPn);
     if (res.kind === "resolved") return res.phone;
     if (res.kind !== "unresolved_lid") return null;
-    const pnJid = await this.deps.resolvePnForLid(call.from);
+    const pnJid = await this.deps.resolvePnForLid(caller.from);
     return pnJid ? pnJidToE164(pnJid) : null;
   }
 }

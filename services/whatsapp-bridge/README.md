@@ -98,7 +98,15 @@ only observes: it never answers or rejects a call.
   ignored.
 - The caller is resolved like a message sender (phone JID, or a LID that
   the session's LID mapping resolves); unresolvable callers are dropped.
+- The caller and voice/video type come from the ring (`offer`), not from the
+  event that ends the call: a decline on the coach's own phone can name the
+  number itself as `from`.
 - At most one row per caller per 10 minutes.
+- The app does not post a missed call that is more than 6 hours old when its
+  drain reaches it (resolution `missed_call_stale`), so a reconnect after a
+  long outage never sets off a very late text-back.
+- A missed call is not a message: it never makes the caller eligible for a
+  direct group add (see "Group management limits and rules" below).
 - Logs carry fixed strings only: no phones, JIDs or call ids.
 
 ## Delivered and read receipts
@@ -215,6 +223,7 @@ Errors for the management routes: 400 `invalid_body`, `invalid_group_jid`, `grou
   exist), is remembered. A refusal is never remembered: none made a group, so
   the same `requestId` runs the create again.
 - Direct adds need the person to have messaged the number in the last 90 days.
+  A missed call doesn't count (`event_kind` must be null).
   Warm-up refusals follow `WA_WARMUP_ENABLED` (off by default).
 - Members are managed by `memberId` (from the group details). Phone numbers are
   only used to add. Removing the number's own member id is refused.

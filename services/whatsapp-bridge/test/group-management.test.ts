@@ -793,7 +793,7 @@ test("logs: no name, description, link, phone or memberId reaches the logger", a
 // store.hasInboundFromPhone — the 90-day eligibility window.
 // ---------------------------------------------------------------------------
 
-test("store.hasInboundFromPhone: only a 1:1 row from the last 90 days counts", async () => {
+test("store.hasInboundFromPhone: only a 1:1 message (not a missed call) from the last 90 days counts", async () => {
   const store = new BridgeStore(makeConfig());
   const filters: unknown[][] = [];
   const builder: Record<string, unknown> = {};
@@ -813,6 +813,7 @@ test("store.hasInboundFromPhone: only a 1:1 row from the last 90 days counts", a
     ["eq", "coach_id", TENANT],
     ["eq", "from_phone", PHONE_A],
     ["is", "group_jid", null],
+    ["is", "event_kind", null],
     ["gte", "received_at", "2026-07-19T12:00:00.000Z"],
   ]);
 });

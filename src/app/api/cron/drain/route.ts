@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Read receipts: off unless GHL_READ_RECEIPTS_ENABLED is exactly "true".
-  let ghlReadReceipts = { examined: 0, reported: 0, failed: 0 };
+  let ghlReadReceipts = { examined: 0, reported: 0, failed: 0, timeBudgetExceeded: false };
   if (process.env.GHL_READ_RECEIPTS_ENABLED === "true") {
     try {
       ghlReadReceipts = await drainGhlReadReceipts(repo);
@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, optedOut: 0, optedIn: 0, blockedUnconfigured: false };
+  let ghlInboundReplies = { candidates: 0, pushed: 0, rejected: 0, failed: 0, uncertain: 0, retried: 0, claimLost: 0, groupNotEnabled: 0, staleMissedCalls: 0, optedOut: 0, optedIn: 0, blockedUnconfigured: false };
   try {
     ghlInboundReplies = await drainGhlInboundReplies(repo);
     if (ghlInboundReplies.candidates > 0) {

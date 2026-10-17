@@ -21,11 +21,14 @@
 import test, { beforeEach, afterEach } from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { describeInboundMediaPlaceholder, describeMissedCall, MISSED_VIDEO_CALL_TEXT, MISSED_VOICE_CALL_TEXT } from "@/lib/ghl";
 import type { AddGhlInboundMessageResult, UpsertGhlContactResult } from "@/lib/ghl";
 import {
   drainGhlInboundReplies,
+  MISSED_CALL_STALE_MS,
+  MISSED_CALL_STALE_RESOLUTION,
   GHL_INBOUND_REASONS,
   type GhlInboundDeps,
   type GhlInboundRepo,
@@ -338,6 +341,7 @@ test("drainGhlInboundReplies: GHL_CONVERSATION_PROVIDER_ID unset -> zero repo re
     retried: 0,
     claimLost: 0,
     groupNotEnabled: 0,
+    staleMissedCalls: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: true,
@@ -725,6 +729,7 @@ test("drainGhlInboundReplies: the LIST call itself throwing -> an all-zero resul
     retried: 0,
     claimLost: 0,
     groupNotEnabled: 0,
+    staleMissedCalls: 0,
     optedOut: 0,
     optedIn: 0,
     blockedUnconfigured: false,
@@ -1323,6 +1328,11 @@ test("merge: START on one number clears the contact's opt-out on every number of
 // Missed WhatsApp calls — fixed strings, no media path, no STOP handling.
 // ---------------------------------------------------------------------------
 
+/** A receivedAt well inside the 6-hour missed-call window. */
+function freshIso(): string {
+  return new Date(Date.now() - 60_000).toISOString();
+}
+
 test("describeMissedCall: video -> video text, anything else -> voice text", () => {
   assert.equal(MISSED_VOICE_CALL_TEXT, "📞 Missed WhatsApp call");
   assert.equal(MISSED_VIDEO_CALL_TEXT, "📞 Missed WhatsApp video call");
@@ -1332,7 +1342,7 @@ test("describeMissedCall: video -> video text, anything else -> voice text", () 
 });
 
 test("missed voice call posts \"📞 Missed WhatsApp call\" (exact body, no attachments)", async () => {
-  const row = makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call" });
+  const row = makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: freshIso() });
   const { repo } = createFakeRepo([makeAccount()], [row]);
   const { deps, postCalls } = makeDeps();
 
@@ -1345,8 +1355,8 @@ test("missed voice call posts \"📞 Missed WhatsApp call\" (exact body, no atta
 });
 
 test("missed voice call on a multi-number location keeps the number prefix", async () => {
-  const labelled = makeRow({ coachId: SECOND_TENANT_ID, body: null, messageType: "missedVoiceCall", eventKind: "missed_call" });
-  const unlabelled = makeRow({ coachId: TENANT_ID, body: null, messageType: "missedVoiceCall", eventKind: "missed_call" });
+  const labelled = makeRow({ coachId: SECOND_TENANT_ID, body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: freshIso() });
+  const unlabelled = makeRow({ coachId: TENANT_ID, body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: freshIso() });
   const { repo } = createFakeRepo([makeAccount()], [labelled, unlabelled], TWO_NUMBERS);
   const { deps, postCalls } = makeDeps();
 
@@ -1356,7 +1366,7 @@ test("missed voice call on a multi-number location keeps the number prefix", asy
 });
 
 test("missed video call posts the video string", async () => {
-  const row = makeRow({ body: null, messageType: "missedVideoCall", eventKind: "missed_call" });
+  const row = makeRow({ body: null, messageType: "missedVideoCall", eventKind: "missed_call", receivedAt: freshIso() });
   const { repo } = createFakeRepo([makeAccount()], [row]);
   const { deps, postCalls } = makeDeps();
 
@@ -1369,7 +1379,7 @@ test("missed call skips media resolution", async () => {
   const row = makeRow({
     body: null,
     messageType: "missedVoiceCall",
-    eventKind: "missed_call",
+    eventKind: "missed_call", receivedAt: freshIso(),
     mediaStatus: "stored",
     mediaPath: "tenant-1/WAMSG1.jpg",
   });
@@ -1384,7 +1394,7 @@ test("missed call skips media resolution", async () => {
 
 test("missed call is not treated as a STOP keyword", async () => {
   // Even if a body were somehow present, an event row never reaches the opt-out classifier.
-  const row = makeRow({ body: "STOP", messageType: "missedVoiceCall", eventKind: "missed_call" });
+  const row = makeRow({ body: "STOP", messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: freshIso() });
   const { repo, optOuts } = createFakeRepo([makeAccount()], [row]);
   const { deps, postCalls } = makeDeps();
 
@@ -1403,4 +1413,43 @@ test("a row with eventKind null is unchanged", async () => {
   await drainGhlInboundReplies(repo, deps);
 
   assert.equal(postCalls[0]?.body, "hello");
+});
+
+test("a missed call older than 6 hours is resolved as missed_call_stale without posting", async () => {
+  const stale = makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString() });
+  const fresh = makeRow({ body: null, messageType: "missedVoiceCall", eventKind: "missed_call", receivedAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString() });
+  const { repo, calls } = createFakeRepo([makeAccount()], [stale, fresh]);
+  const { deps, upsertCalls, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(MISSED_CALL_STALE_MS, 6 * 60 * 60 * 1000);
+  assert.equal(MISSED_CALL_STALE_RESOLUTION, "missed_call_stale");
+  assert.equal(result.staleMissedCalls, 1);
+  assert.equal(result.pushed, 1, "the 5-hour-old call is still posted");
+  assert.equal(postCalls.length, 1);
+  assert.equal(upsertCalls.length, 1, "no contact upsert for the stale row");
+  assert.ok(calls.some((c) => c.method === "claimWhatsappInboundMessage" && c.args[0] === stale.id), "claimed so it is never listed again");
+  const resolutions = calls.filter((c) => c.method === "resolveGhlInboundMessage").map((c) => c.args);
+  assert.deepEqual(resolutions[0], [stale.id, { resolution: "missed_call_stale", pushError: null }]);
+  assert.deepEqual(resolutions[1], [fresh.id, { resolution: "ghl_pushed", pushError: null }]);
+});
+
+test("an old ordinary message is still posted (the stale rule is for missed calls only)", async () => {
+  const row = makeRow({ body: "hello", eventKind: null, receivedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() });
+  const { repo } = createFakeRepo([makeAccount()], [row]);
+  const { deps, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.staleMissedCalls, 0);
+  assert.equal(postCalls.length, 1);
+});
+
+test("hasInboundFromPhone (portal): a missed call doesn't count as having messaged us", () => {
+  const src = readFileSync(new URL("../../src/lib/data/supabase.ts", import.meta.url), "utf8");
+  const start = src.indexOf("async hasInboundFromPhone(");
+  const body = src.slice(start, src.indexOf("\n  }\n", start));
+  assert.match(body, /\.is\("group_jid", null\)/);
+  assert.match(body, /\.is\("event_kind", null\)/);
 });
