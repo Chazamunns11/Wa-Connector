@@ -7,6 +7,7 @@ import {
   createGroup,
   loadGroupView,
   postToGroup,
+  reconcileAllPendingGroupAccounts,
   reconcileGroupJobs,
   refreshGroup,
   rotateInviteLink,
@@ -313,4 +314,74 @@ test("contactPickerData: ownership, phone-less contacts dropped, tags offered; d
   assert.deepEqual(await contactPickerData(h.repo, h.deps, session, "loc-x", { query: "al" }), { error: "not_found" });
   const off = harness({ enabled: false });
   assert.equal("error" in (await contactPickerData(off.repo, off.deps, session, "loc-1", {})), true);
+});
+
+function sweepRepo(h: ReturnType<typeof harness>, accountCount: number, throwFor: string[] = []) {
+  const ids = Array.from({ length: accountCount }, (_, i) => `acc-${i + 1}`);
+  const asked: number[] = [];
+  const touched: string[] = [];
+  const repo = {
+    ...h.repo,
+    listAccountsWithPendingGroupMembers: async (limit?: number) => {
+      asked.push(limit ?? -1);
+      return ids.slice(0, limit ?? ids.length);
+    },
+    listPendingGroupJobIds: async (accountId: string) => {
+      touched.push(accountId);
+      if (throwFor.includes(accountId)) throw new Error(`boom for ${accountId} +447700900123`);
+      return [];
+    },
+    listWhatsappGroupsForAccount: async () => [],
+  } as unknown as GroupsRepo;
+  return { repo, asked, touched };
+}
+
+test("reconcileAll: 25 accounts waiting, one pass handles 20", async () => {
+  const h = harness();
+  const s = sweepRepo(h, 25);
+  assert.deepEqual(await reconcileAllPendingGroupAccounts(s.repo, h.deps), { accounts: 20, invitesSent: 0 });
+  assert.deepEqual(s.asked, [20]);
+  assert.equal(s.touched.length, 20);
+});
+
+test("reconcileAll: a throwing account is logged without detail and does not stop the others", async () => {
+  const h = harness();
+  const s = sweepRepo(h, 5, ["acc-2"]);
+  const errors: unknown[][] = [];
+  const orig = console.error;
+  console.error = (...a: unknown[]) => void errors.push(a);
+  try {
+    assert.deepEqual(await reconcileAllPendingGroupAccounts(s.repo, h.deps, 20), { accounts: 4, invitesSent: 0 });
+  } finally {
+    console.error = orig;
+  }
+  assert.deepEqual(s.touched, ["acc-1", "acc-2", "acc-3", "acc-4", "acc-5"]);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]![0], "[groups] reconcile failed");
+  assert.ok(!JSON.stringify(errors).includes("+4477"));
+});
+
+test("reconcileAll: groups switched off does nothing, not even a read", async () => {
+  const h = harness({ enabled: false });
+  const s = sweepRepo(h, 3);
+  assert.deepEqual(await reconcileAllPendingGroupAccounts(s.repo, h.deps), { accounts: 0, invitesSent: 0 });
+  assert.deepEqual(s.asked, []);
+});
+
+test("reconcileAll: an account with only a held invite (no pending member) is retried and sent", async () => {
+  const seed = harness();
+  const gid = await seedGroup(seed);
+  await seed.repo.insertWhatsappGroupMembers([{ groupId: gid, phone: phone(7), ghlContactId: null, displayName: null, state: "invite_needed", jobId: null, consentConfirmedAt: NOW, addedByProfileId: null, lastReason: null }]);
+  const h = harness({ status: "paused" as BillingStatus });
+  h.groups.set(gid, seed.groups.get(gid)!);
+  seed.members.forEach((m) => h.members.push(m));
+  assert.deepEqual(await reconcileGroupJobs(h.repo, h.deps, "acc-1"), { jobs: 0, invitesSent: 0 });
+  // billing restored; the cron lists the account because of the held invite
+  const ok = harness();
+  ok.groups.set(gid, h.groups.get(gid)!);
+  h.members.forEach((m) => ok.members.push(m));
+  const repo = { ...ok.repo, listAccountsWithPendingGroupMembers: async () => (ok.members.some((m) => m.state === "pending" || m.state === "invite_needed") ? ["acc-1"] : []) } as unknown as GroupsRepo;
+  assert.deepEqual(await reconcileAllPendingGroupAccounts(repo, ok.deps), { accounts: 1, invitesSent: 1 });
+  assert.deepEqual(ok.log.texts.map((t) => t.to), [phone(7)]);
+  assert.ok(!ok.log.notes.join(" ").includes("+4477"));
 });

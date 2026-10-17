@@ -451,8 +451,10 @@ your own number. Groups ship switched off.
    0005).
 2. Set `WA_GROUPS_ENABLED=true` on the bridge and redeploy it.
 3. Set `GROUPS_ENABLED=true` on Vercel and redeploy the portal.
-4. Turn on the site flag (`FEATURES_GROUPS_LIVE`) so the marketing page stops
-   saying "Coming soon".
+4. Set the site flag so the marketing page stops saying "Coming soon". It is
+   the code constant `FEATURES.groupsLive` in `src/lib/site/features.ts` (on
+   the site branch), not an environment variable: change it to `true` and
+   redeploy.
 
 Rolling back is the reverse: site flag, then portal, then bridge. Leave the
 migration in place.

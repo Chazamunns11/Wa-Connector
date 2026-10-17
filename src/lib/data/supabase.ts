@@ -1705,7 +1705,7 @@ export class SupabaseGhlRepository implements GhlRepository {
     const { data, error } = await supabase
       .from("whatsapp_group_members")
       .select("whatsapp_groups!inner(account_id)")
-      .eq("state", "pending")
+      .in("state", ["pending", "invite_needed"])
       .limit(Math.max(1, limit) * 20);
     if (error) throw error;
     const ids = new Set<string>();

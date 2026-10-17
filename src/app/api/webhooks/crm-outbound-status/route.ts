@@ -33,6 +33,8 @@ import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { drainGhlOutboundStatuses } from "@/lib/ghl-provider";
 import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
+import { groupsDeps } from "@/app/(app)/dashboard/groups/deps";
+import { reconcileAllPendingGroupAccounts } from "@/lib/groups/service";
 
 /** Verbatim copy of `GET /api/cron/reminders`'s identical helper (same rationale as `whatsapp-replies/route.ts`'s own copy — small enough that duplicating beats a shared import for one function). */
 function constantTimeEqualStr(a: string, b: string): boolean {
@@ -61,5 +63,11 @@ export async function POST(request: Request) {
   // the DB session status; the bridge's live answer decides), then drains.
   await releaseHeldOutboundMessages(repo);
   const result = await drainGhlOutboundStatuses(repo);
+  // Groups: apply finished add jobs and send held invites. Never fails the poke.
+  try {
+    await reconcileAllPendingGroupAccounts(repo, groupsDeps());
+  } catch (err) {
+    console.error("[groups] reconcile failed", err instanceof Error ? err.name : "error");
+  }
   return NextResponse.json({ ok: true, ...result });
 }

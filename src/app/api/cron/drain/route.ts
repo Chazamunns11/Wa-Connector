@@ -27,6 +27,8 @@ import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
 import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
 import { purgeCancelledAccounts } from "@/lib/billing/cleanup";
 import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
+import { groupsDeps } from "@/app/(app)/dashboard/groups/deps";
+import { reconcileAllPendingGroupAccounts } from "@/lib/groups/service";
 
 export const dynamic = "force-dynamic";
 
@@ -104,6 +106,17 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] ghl inbound-reply drain failed (non-fatal):", err);
   }
 
+  // Groups: finished add jobs and held invites. Skipped when GROUPS_ENABLED is off.
+  let groupsReconcile = { accounts: 0, invitesSent: 0 };
+  try {
+    groupsReconcile = await reconcileAllPendingGroupAccounts(repo, groupsDeps());
+    if (groupsReconcile.accounts > 0) {
+      console.log(`[cron/drain] groups reconcile: ${groupsReconcile.accounts} account(s), ${groupsReconcile.invitesSent} invite(s) sent.`);
+    }
+  } catch (err) {
+    console.error("[groups] reconcile failed", err instanceof Error ? err.name : "error");
+  }
+
   let whatsappInboundPurged = 0;
   try {
     const cutoffIso = new Date(now - WHATSAPP_INBOUND_RETENTION_MS).toISOString();
@@ -129,5 +142,5 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] cancelled-account cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
-  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlInboundReplies, whatsappInboundPurged, cancelledCleanup });
+  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlInboundReplies, groupsReconcile, whatsappInboundPurged, cancelledCleanup });
 }

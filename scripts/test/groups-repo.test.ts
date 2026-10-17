@@ -168,10 +168,10 @@ test("listPendingGroupJobIds returns distinct job/group pairs for pending member
   assert.deepEqual(out, [{ jobId: JOB, groupId: GROUP }]);
 });
 
-test("listAccountsWithPendingGroupMembers returns distinct account ids, bounded", async () => {
+test("listAccountsWithPendingGroupMembers covers pending and held-invite members, distinct, bounded", async () => {
   respond = () => ({ body: [{ whatsapp_groups: { account_id: ACCOUNT } }, { whatsapp_groups: { account_id: ACCOUNT } }] });
   const out = await new SupabaseGhlRepository().listAccountsWithPendingGroupMembers(10);
-  assert.equal(seen[0].url.searchParams.get("state"), "eq.pending");
+  assert.equal(seen[0].url.searchParams.get("state"), "in.(pending,invite_needed)");
   assert.ok(seen[0].url.searchParams.get("limit"));
   assert.deepEqual(out, [ACCOUNT]);
 });

@@ -56,6 +56,7 @@ export type GroupsRepo = Pick<
   | "listWhatsappGroupMembers"
   | "updateWhatsappGroupMember"
   | "listPendingGroupJobIds"
+  | "listAccountsWithPendingGroupMembers"
   | "getWhatsappGroupJob"
   | "listWhatsappGroupPosts"
   | "claimGhlTokenRefresh"
@@ -401,6 +402,30 @@ export async function reconcileGroupJobs(
   for (const group of await repo.listWhatsappGroupsForAccount(accountId)) {
     const gate = await gateForLocation(repo, deps, accountId, group.locationId);
     result.invitesSent += await sendInvites(repo, deps, group, gate);
+  }
+  return result;
+}
+
+/**
+ * Cron/poke sweep: reconciles up to `limit` accounts that still have unfinished
+ * work (pending members, or invites held back by billing, a bridge error or a
+ * cap). One account throwing is logged by name-free fixed text and skipped.
+ */
+export async function reconcileAllPendingGroupAccounts(
+  repo: GroupsRepo,
+  deps: GroupsDeps,
+  limit = 20,
+): Promise<{ accounts: number; invitesSent: number }> {
+  const result = { accounts: 0, invitesSent: 0 };
+  if (!deps.groupsEnabled) return result;
+  for (const accountId of await repo.listAccountsWithPendingGroupMembers(limit)) {
+    try {
+      const r = await reconcileGroupJobs(repo, deps, accountId);
+      result.accounts += 1;
+      result.invitesSent += r.invitesSent;
+    } catch (err) {
+      console.error("[groups] reconcile failed", accountId, err instanceof Error ? err.name : "error");
+    }
   }
   return result;
 }

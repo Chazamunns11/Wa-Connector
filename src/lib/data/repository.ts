@@ -681,7 +681,7 @@ export interface GhlRepository {
   updateWhatsappGroupMember(id: string, patch: { state: GroupMemberState; lastReason: string | null; inviteIdempotencyKey?: string }): Promise<void>;
   /** Distinct job ids of members still 'pending' in this account's groups. */
   listPendingGroupJobIds(accountId: string): Promise<{ jobId: string; groupId: string }[]>;
-  /** Account ids with at least one 'pending' member, for the cron/poke reconcile (bounded). */
+  /** Account ids with at least one 'pending' member or held 'invite_needed' member (invite not yet sent), for the cron/poke reconcile (bounded). */
   listAccountsWithPendingGroupMembers(limit?: number): Promise<string[]>;
   /** Reads the bridge-owned whatsapp_group_jobs table. */
   getWhatsappGroupJob(id: string): Promise<WhatsappGroupJob | null>;
