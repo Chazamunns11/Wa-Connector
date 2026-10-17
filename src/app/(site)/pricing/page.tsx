@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Container } from "@/components/site/Container";
 import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
+import { IncludedList } from "@/components/site/IncludedList";
 import { PricingCalculator } from "@/components/site/PricingCalculator";
 import { ResaleCalculator } from "@/components/site/ResaleCalculator";
 import { PricingTable } from "@/components/site/PricingTable";
@@ -60,6 +61,9 @@ export default function PricingPage() {
             </div>
             <div className="mt-6">
               <PricingTable pricing={pricing} />
+            </div>
+            <div className="mt-10">
+              <IncludedList brand={brand} />
             </div>
           </div>
         </Container>

@@ -84,7 +84,7 @@ test("chrome: header is Ink, footer is Ink, Cta and forms use the site pills", (
 
 // ---- Task 14B: home page in Direction B ----
 
-test("14B home page: grounds run dark, coral, slab, mist, coral", () => {
+test("14B home page: grounds run dark, white features, coral, slab, mist, coral", () => {
   const p = read("src/app/(site)/page.tsx");
   const order = ["surface-dark", "surface-coral", "slab slab-lift", "bg-raised", "surface-coral"];
   let at = -1;
@@ -98,12 +98,12 @@ test("14B home page: grounds run dark, coral, slab, mist, coral", () => {
   const heroSection = p.slice(p.indexOf("<section"), p.indexOf("</section>"));
   assert.match(heroSection, /surface-dark/);
   const h1 = p.slice(p.indexOf("<h1"), p.indexOf("</h1>"));
-  assert.match(h1, /hero-big/);
+  assert.match(h1, /copy\.heroH1/);
   assert.ok(p.indexOf('id="own-result"') > p.indexOf("copy.disclosure.heading"), "footnote target sits inside the disclosure block");
   assert.match(p, /<HowItWorks steps=\{copy\.setup\.steps\} \/>/);
   assert.ok(!/aside=/.test(p));
   assert.match(p, /<CustomerResults/);
-  assert.match(p, /<SafetyThread items=\{copy\.safety\}/);
+  assert.match(p, /<FeatureList/);
   assert.ok(!/Clients read WhatsApp/.test(p));
   assert.ok(!/copy\.safetyIntro/.test(p), "safetyIntro is not rendered (W37)");
 });
@@ -166,7 +166,7 @@ test("14B sales-copy: step 2 carries the path chip; sampleCaption gone; other st
   assert.ok(!("sampleCaption" in c.setup));
   assert.equal(
     c.heroSub,
-    "PingWren takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.",
+    "Set PingWren as the Telephony Provider and the Send SMS steps you already have go out on WhatsApp. When the customer writes back, the reply lands in Conversations.",
   );
   assert.equal(c.faqAllLink, "All the questions, on one page");
   assert.equal(c.priceStrip.terms, "The 7-day trial covers up to 3 numbers. We take a card up front, and you can cancel any time from the billing portal.");

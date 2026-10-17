@@ -1,6 +1,7 @@
 import type { BrandConfig } from "@/lib/brand-config";
 
 export interface SalesCopy {
+  heroH1: string;
   heroSub: string;
   ctaNote: string;
   setup: {
@@ -24,7 +25,8 @@ export interface SalesCopy {
 export function salesCopy(brand: BrandConfig): SalesCopy {
   const { name } = brand;
   return {
-    heroSub: `${name} takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.`,
+    heroH1: "Two-way WhatsApp chat in GoHighLevel, from your own number.",
+    heroSub: `Set ${name} as the Telephony Provider and the Send SMS steps you already have go out on WhatsApp. When the customer writes back, the reply lands in Conversations.`,
     ctaNote:
       "We take a card up front. The trial covers up to 3 numbers, and you can cancel from the billing portal whenever you like.",
     setup: {

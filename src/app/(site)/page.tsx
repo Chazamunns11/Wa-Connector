@@ -1,14 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import type { ReactNode } from "react";
 import { Container } from "@/components/site/Container";
 import { CustomerResults } from "@/components/site/CustomerResults";
 import { Cta } from "@/components/site/Cta";
 import { FaqList } from "@/components/site/FaqList";
+import { FeatureList } from "@/components/site/FeatureList";
 import { HowItWorks } from "@/components/site/HowItWorks";
 import { PricingSummary } from "@/components/site/PricingSummary";
-import { SafetyThread } from "@/components/site/SafetyThread";
-import { DashboardSample } from "@/components/site/samples/DashboardSample";
 import { SameReminderTwice } from "@/components/site/samples/SameReminderTwice";
 import { brandConfig } from "@/lib/brand-config";
 import { HOME_FAQ_IDS, faqEntries } from "@/lib/site/faq";
@@ -28,15 +26,6 @@ const H2 = "h-page font-display";
 const BAND = "band";
 const GAP = "gap-[clamp(24px,5vw,80px)]";
 
-function Sample({ caption, children }: { caption: string; children: ReactNode }) {
-  return (
-    <figure className="m-0">
-      {children}
-      <figcaption className="mt-3 small font-medium">{caption}</figcaption>
-    </figure>
-  );
-}
-
 export default function HomePage() {
   const brand = brandConfig();
   const copy = salesCopy(brand);
@@ -48,18 +37,19 @@ export default function HomePage() {
         <Container>
           <div className="hero-grid">
             <div>
-              <h1 className="hero-h1 h-hero font-display">
-                {result.headingLead} {result.headingTail} <span className="hero-big">{result.after}</span>
-              </h1>
-              <p className="small mt-1.5 font-semibold">
-                <a href="#own-result" aria-label="Our own average, footnote 1" className="inline-flex min-h-6 items-center underline underline-offset-2">
+              <h1 className="h-hero font-display max-w-[19ch]">{copy.heroH1}</h1>
+              <p className="mt-7 max-w-[48ch] text-[clamp(1.1rem,1.6vw,1.3rem)] font-medium leading-[1.45]">{copy.heroSub}</p>
+              <div className="mt-7">
+                <Cta ground="dark" label={copy.ctaLabel} secondary={{ href: "#features", label: "See everything it does" }} note={copy.ctaNote} />
+              </div>
+              <p className="hero-result mt-9 max-w-[34rem] text-lg font-medium leading-[1.5]">
+                About <span className="num-display font-display !text-[clamp(2.2rem,4vw,3.25rem)]">{result.before}</span>{" "}
+                {result.resultLead}{" "}
+                <span className="num-display font-display !text-[clamp(2.2rem,4vw,3.25rem)]">{result.after}</span>{" "}
+                <a href="#own-result" aria-label="Our own average, footnote 1" className="small inline-flex min-h-6 items-center align-baseline font-semibold underline underline-offset-2">
                   Our own average<sup aria-hidden="true" className="ml-0.5 text-xs font-bold">1</sup>
                 </a>
               </p>
-              <p className="mt-7 max-w-[46ch] text-[clamp(1.1rem,1.6vw,1.3rem)] font-medium leading-[1.45]">{copy.heroSub}</p>
-              <div className="mt-7">
-                <Cta ground="dark" label={copy.ctaLabel} secondary={{ href: SITE_ROUTES.setup, label: "Read the setup guide" }} note={copy.ctaNote} />
-              </div>
             </div>
             <div className="relative z-[3] max-[900px]:mt-6">
               <SameReminderTwice />
@@ -68,7 +58,9 @@ export default function HomePage() {
         </Container>
       </section>
 
-      <section id="how-it-works" className={`hang-pad surface-coral ${BAND} scroll-mt-4`}>
+      <FeatureList brand={brand} />
+
+      <section id="how-it-works" className={`surface-coral ${BAND} scroll-mt-4`}>
         <Container>
           <h2 className={`${H2} max-w-[14ch]`}>{copy.setup.heading}</h2>
           <p className="mt-4 max-w-[52ch] text-xl text-ink-dim">{copy.setup.lead}</p>
@@ -76,30 +68,7 @@ export default function HomePage() {
         </Container>
       </section>
 
-      <section className={BAND}>
-        <Container>
-          <div className="flex flex-wrap items-end justify-between gap-6">
-            <h2 className={`${H2} max-w-[12ch]`}>{copy.afterwards.heading}</h2>
-            <p className="max-w-[40ch]">{copy.afterwards.body}</p>
-          </div>
-          <div className="mt-10">
-            <Sample caption={copy.afterwards.caption}>
-              <DashboardSample />
-            </Sample>
-          </div>
-        </Container>
-      </section>
-
       <CustomerResults headingClass={H2} />
-
-      <section className={BAND}>
-        <Container>
-          <div className={`grid ${GAP} min-[901px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]`}>
-            <h2 className={`${H2} max-w-[10ch]`}>{copy.safetyHeading}</h2>
-            <SafetyThread items={copy.safety} />
-          </div>
-        </Container>
-      </section>
 
       <section className={BAND}>
         <Container>

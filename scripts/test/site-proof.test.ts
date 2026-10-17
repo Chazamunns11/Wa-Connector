@@ -59,7 +59,7 @@ test("W38: the 85%+ note lives inside 'Read this before you sign up' and the her
   assert.ok(disclosure.includes("result.note"));
   assert.ok(page.indexOf('href="#own-result"') < page.indexOf("copy.disclosure.heading"));
   assert.ok(page.indexOf("copy.disclosure.heading") < page.indexOf("copy.faqHeading"));
-  assert.ok(page.indexOf("<SafetyThread") < page.indexOf("copy.disclosure.heading"));
+  assert.ok(page.indexOf("<FeatureList") < page.indexOf("copy.disclosure.heading"));
 });
 
 test("owner's own average: figures, honest framing, and nothing banned (Rulings W25/W27)", async () => {
@@ -79,7 +79,7 @@ test("owner's own average: figures, honest framing, and nothing banned (Rulings 
   assert.match(page, /import \{[^}]*OWN_RESULTS_AVERAGE[^}]*\} from "@\/lib\/site\/proof"/);
   assert.ok(!a.headingLead.includes("%"), "headline lead carries no percentage");
   assert.match(a.headingTail, /it's$/);
-  assert.ok(page.indexOf("OWN_RESULTS_AVERAGE") < page.indexOf("<SafetyThread"));
+  assert.ok(page.indexOf("OWN_RESULTS_AVERAGE") < page.indexOf("<FeatureList"));
 });
 
 test("walkthrough fixes: menu item named after the brand, no triple negative, pricing line, auth logo link", () => {
