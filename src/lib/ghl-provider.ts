@@ -796,30 +796,10 @@ export async function handleProviderOutboundMessage(
   // drain's problem to pick up next pass, never GHL's — the route returns
   // 200 regardless (see the "error" outcome's own JSDoc).
   try {
-    // Accounts gate: only an activated number on a paid or trialing account
-    // sends. Refused honestly — recorded, then reported back to GoHighLevel as
-    // failed with the fixed customer string — and BEFORE the media split, so
-    // the media path is gated too.
-    const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
-    const gateReason = sendingGate(account, owner?.billingStatus ?? null, brandConfig().name);
-    if (gateReason) {
-      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
-      await reportGhlOutcome(repo, deps, account, row, "failed", gateReason);
-      return { kind: "refused", reason: gateReason };
-    }
-
-    // Reliability (W10): a contact who replied STOP gets nothing — refused
-    // before the media split and before any bridge call, reported to
-    // GoHighLevel as not sent with a fixed reason. Multiple numbers (merge
-    // ruling): a STOP recorded on ANY of this location's numbers blocks the
-    // send from every one of them (`optedOutReason`). A group row has no
-    // phone (`toPhone` null), so a member's STOP never blocks a group send.
-    const optedOut = toPhone ? await optedOutReason(repo, account.locationId, row.tenantId, toPhone) : null;
-    if (optedOut) {
-      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: optedOut });
-      await reportGhlOutcome(repo, deps, account, row, "failed", optedOut);
-      return { kind: "refused", reason: optedOut };
-    }
+    // Accounts gate, then the STOP check — before the media split, so the
+    // media path is gated too (see `refuseIfGatedOrOptedOut`).
+    const blocked = await refuseIfGatedOrOptedOut(repo, deps, account, row, toPhone);
+    if (blocked) return blocked;
 
     // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — split off
     // ENTIRELY before any of the legacy single-send logic below runs. With
@@ -854,78 +834,143 @@ export async function handleProviderOutboundMessage(
       return { kind: "refused", reason };
     }
 
-    // Ordering note: `embedStateFor` (dashboard) reports disabled/needs_reauth
-    // before the account gate because it describes the *first thing the owner
-    // must fix*. This path deliberately gates first: a refusal for billing or
-    // activation is the commercial truth and reaches GoHighLevel with the
-    // fixed customer string either way, and no message is sent in both orders.
-    //
-    // needs_reauth / disabled — never attempt the bridge for a known-bad
-    // account. Still reported inline where possible — see
-    // `resolveGhlAccessToken`'s JSDoc (finding 3) for why `needs_reauth`
-    // often CAN report immediately (a still-unexpired access token), and
-    // `refusalReason` (finding 3) for how the true reason survives even when
-    // it can't.
-    if (account.status === "needs_reauth" || account.status === "disabled") {
-      const reason = account.status === "needs_reauth" ? REASON_NEEDS_REAUTH : REASON_DISABLED;
-      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
-      await reportGhlOutcome(repo, deps, account, row, "failed", reason);
-      return { kind: "refused", reason };
-    }
-
-    // Ordering: older messages for this number still waiting (held) go first,
-    // so this one waits behind them and the release pass sends in order.
-    // Per number: `row.tenantId` (the sticky/default/group number this row
-    // was routed to), never `account.tenantId` (merge ruling).
-    if (await holdBehindHeldRows(repo, row.tenantId, row)) return { kind: "held" };
-
-    // `row.tenantId` — the number `resolveOutboundSendingNumber` routed this
-    // row to (Task 3), not `account.tenantId` (the location's default). A
-    // disconnected number — sticky or default — is decided by the bridge's
-    // own `session_not_connected` below: HELD if it was linked before
-    // (merge ruling: holding wins over the sticky refusal), and NEVER swapped
-    // for another number.
-    const sendResult = await deps.sendWhatsapp({
-      coachId: row.tenantId,
-      ...target,
-      text: textResult.text,
-      idempotencyKey: row.idempotencyKey,
-    });
-
-    if (sendResult.ok) {
-      // 202 fresh accept OR 200 replay (the bridge's OWN idempotency dedupe,
-      // distinct from this module's (location_id, ghl_message_id) dedupe
-      // above) — either way the bridge now owns this send; zero status calls
-      // inline (plan's D3 — delivery truth comes later, via the drain).
-      await repo.updateGhlOutboundSendState(row.id, { sendState: "accepted" });
-      return { kind: "accepted" };
-    }
-
-    if (isTransientBridgeFailure(sendResult.code)) {
-      // Transient (finding 5 — includes `unreachable`/`lease_unavailable`
-      // AND `internal`/`unauthorized`/any other code not in the explicit
-      // terminal set) — row stays 'pending_send' (the DB default; nothing to
-      // write), no status call. The drain retries under the SAME
-      // idempotency key (plan's D3), bounded by `PENDING_SEND_MAX_ATTEMPTS`.
-      return { kind: "pending_retry" };
-    }
-
-    if (sendResult.code === "session_not_connected") {
-      const decision = await resolveNotConnected(repo, row, row, sendingNumber.isDefault);
-      if (decision.kind === "hold") return { kind: "held" };
-      await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: decision.reason });
-      await reportGhlOutcome(repo, deps, account, row, "failed", decision.reason);
-      return { kind: "refused", reason: decision.reason };
-    }
-
-    const reason = mapSendFailureReason(sendResult.code, sendingNumber.isDefault);
-    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
-    await reportGhlOutcome(repo, deps, account, row, "failed", reason);
-    return { kind: "refused", reason };
+    return await continueTextOutbound(repo, deps, { account, row, target, text: textResult.text, sendingNumber });
   } catch (err) {
     console.error(`[ghl-provider] handleProviderOutboundMessage: post-intake failure for row ${row.id} (row already recorded — the drain owns it from here):`, err);
     return { kind: "error", recorded: true };
   }
+}
+
+/**
+ * The two refusals that precede everything else for a phone row: the accounts
+ * gate, then the STOP check. Shared by `handleProviderOutboundMessage` (which
+ * runs it before the media split) and `sendAppOriginatedText`. Returns the
+ * refused outcome (row already stamped and reported), or `null` to go on.
+ */
+async function refuseIfGatedOrOptedOut(
+  repo: GhlProviderRepo,
+  deps: GhlProviderDeps,
+  account: GhlAccount,
+  row: GhlOutboundMessage,
+  toPhone: string | null
+): Promise<HandleProviderOutboundOutcome | null> {
+  // Accounts gate: only an activated number on a paid or trialing account
+  // sends. Refused honestly — recorded, then reported back to GoHighLevel as
+  // failed with the fixed customer string — and BEFORE the media split, so
+  // the media path is gated too.
+  const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
+  const gateReason = sendingGate(account, owner?.billingStatus ?? null, brandConfig().name);
+  if (gateReason) {
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
+    await reportGhlOutcome(repo, deps, account, row, "failed", gateReason);
+    return { kind: "refused", reason: gateReason };
+  }
+
+  // Reliability (W10): a contact who replied STOP gets nothing — refused
+  // before the media split and before any bridge call, reported to
+  // GoHighLevel as not sent with a fixed reason. Multiple numbers (merge
+  // ruling): a STOP recorded on ANY of this location's numbers blocks the
+  // send from every one of them (`optedOutReason`). A group row has no
+  // phone (`toPhone` null), so a member's STOP never blocks a group send.
+  const optedOut = toPhone ? await optedOutReason(repo, account.locationId, row.tenantId, toPhone) : null;
+  if (optedOut) {
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: optedOut });
+    await reportGhlOutcome(repo, deps, account, row, "failed", optedOut);
+    return { kind: "refused", reason: optedOut };
+  }
+  return null;
+}
+
+/** What `continueTextOutbound` needs to carry a text row through to the bridge. */
+export interface TextOutboundContext {
+  account: GhlAccount;
+  row: GhlOutboundMessage;
+  target: OutboundTarget;
+  text: string;
+  sendingNumber: OutboundNumber;
+}
+
+/**
+ * The text path of an outbound row, from the needs_reauth/disabled refusal on:
+ * hold-behind, bridge send, then hold/refuse. Extracted unchanged from
+ * `handleProviderOutboundMessage` so other entry points (`sendAppOriginatedText`)
+ * share it. Callers run `refuseIfGatedOrOptedOut` first. Throws like the
+ * inline code did; callers own the try/catch.
+ */
+export async function continueTextOutbound(
+  repo: GhlProviderRepo,
+  deps: GhlProviderDeps,
+  ctx: TextOutboundContext
+): Promise<HandleProviderOutboundOutcome> {
+  const { account, row, sendingNumber } = ctx;
+  // Ordering note: `embedStateFor` (dashboard) reports disabled/needs_reauth
+  // before the account gate because it describes the *first thing the owner
+  // must fix*. This path deliberately gates first: a refusal for billing or
+  // activation is the commercial truth and reaches GoHighLevel with the
+  // fixed customer string either way, and no message is sent in both orders.
+  //
+  // needs_reauth / disabled — never attempt the bridge for a known-bad
+  // account. Still reported inline where possible — see
+  // `resolveGhlAccessToken`'s JSDoc (finding 3) for why `needs_reauth`
+  // often CAN report immediately (a still-unexpired access token), and
+  // `refusalReason` (finding 3) for how the true reason survives even when
+  // it can't.
+  if (account.status === "needs_reauth" || account.status === "disabled") {
+    const reason = account.status === "needs_reauth" ? REASON_NEEDS_REAUTH : REASON_DISABLED;
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
+    await reportGhlOutcome(repo, deps, account, row, "failed", reason);
+    return { kind: "refused", reason };
+  }
+
+  // Ordering: older messages for this number still waiting (held) go first,
+  // so this one waits behind them and the release pass sends in order.
+  // Per number: `row.tenantId` (the sticky/default/group number this row
+  // was routed to), never `account.tenantId` (merge ruling).
+  if (await holdBehindHeldRows(repo, row.tenantId, row)) return { kind: "held" };
+
+  // `row.tenantId` — the number `resolveOutboundSendingNumber` routed this
+  // row to (Task 3), not `account.tenantId` (the location's default). A
+  // disconnected number — sticky or default — is decided by the bridge's
+  // own `session_not_connected` below: HELD if it was linked before
+  // (merge ruling: holding wins over the sticky refusal), and NEVER swapped
+  // for another number.
+  const sendResult = await deps.sendWhatsapp({
+    coachId: row.tenantId,
+    ...ctx.target,
+    text: ctx.text,
+    idempotencyKey: row.idempotencyKey,
+  });
+
+  if (sendResult.ok) {
+    // 202 fresh accept OR 200 replay (the bridge's OWN idempotency dedupe,
+    // distinct from this module's (location_id, ghl_message_id) dedupe
+    // above) — either way the bridge now owns this send; zero status calls
+    // inline (plan's D3 — delivery truth comes later, via the drain).
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "accepted" });
+    return { kind: "accepted" };
+  }
+
+  if (isTransientBridgeFailure(sendResult.code)) {
+    // Transient (finding 5 — includes `unreachable`/`lease_unavailable`
+    // AND `internal`/`unauthorized`/any other code not in the explicit
+    // terminal set) — row stays 'pending_send' (the DB default; nothing to
+    // write), no status call. The drain retries under the SAME
+    // idempotency key (plan's D3), bounded by `PENDING_SEND_MAX_ATTEMPTS`.
+    return { kind: "pending_retry" };
+  }
+
+  if (sendResult.code === "session_not_connected") {
+    const decision = await resolveNotConnected(repo, row, row, sendingNumber.isDefault);
+    if (decision.kind === "hold") return { kind: "held" };
+    await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: decision.reason });
+    await reportGhlOutcome(repo, deps, account, row, "failed", decision.reason);
+    return { kind: "refused", reason: decision.reason };
+  }
+
+  const reason = mapSendFailureReason(sendResult.code, sendingNumber.isDefault);
+  await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: reason });
+  await reportGhlOutcome(repo, deps, account, row, "failed", reason);
+  return { kind: "refused", reason };
 }
 
 /**
