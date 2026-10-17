@@ -240,6 +240,8 @@ function sameTarget(record: MessageRecord, target: MessageTarget): boolean {
 
 interface Session {
   coachId: string;
+  /** The delayed down-poke armed by `recordClosed`; cleared on open and at shutdown. */
+  downPokeTimer: NodeJS.Timeout | null;
   sock: WASocket | null;
   lock: SessionLock;
   pacer: SessionPacer;
@@ -441,6 +443,39 @@ export function recordReconnected(poke: PortalPoke | null): void {
   poke?.schedule();
 }
 
+/** 5 minutes (the portal's "down long enough" rule) plus a 15 second margin, so the portal's check sees the number as down for at least 5 minutes. */
+export const DOWN_POKE_DELAY_MS = 5 * 60 * 1000 + 15 * 1000;
+
+/** The fields the delayed down-poke touches. */
+export interface DownPokeSession {
+  status: SessionStatus;
+  downPokeTimer: NodeJS.Timeout | null;
+}
+
+/** Cancels the session's delayed down-poke, if any. */
+export function clearDownPoke(session: Pick<DownPokeSession, "downPokeTimer">): void {
+  if (session.downPokeTimer) clearTimeout(session.downPokeTimer);
+  session.downPokeTimer = null;
+}
+
+/**
+ * A connection closed: pokes the portal now (it records the number as down) and
+ * once more after `DOWN_POKE_DELAY_MS` if the session still is not open, so the
+ * portal fires "WhatsApp disconnected" without waiting for the hourly cron. At
+ * most one timer per session; it is unref'd so it never holds the process open.
+ */
+export function recordClosed(session: DownPokeSession, poke: PortalPoke | null, delayMs: number = DOWN_POKE_DELAY_MS): void {
+  poke?.schedule();
+  clearDownPoke(session);
+  if (!poke) return;
+  const timer = setTimeout(() => {
+    if (session.downPokeTimer === timer) session.downPokeTimer = null;
+    if (session.status !== "connected") poke.schedule();
+  }, delayMs);
+  timer.unref();
+  session.downPokeTimer = timer;
+}
+
 /**
  * The exact fields `shutdownOneSession` touches, and nothing else —
  * deliberately STRUCTURAL rather than importing `Session` itself, so
@@ -455,6 +490,7 @@ export function recordReconnected(poke: PortalPoke | null): void {
 export interface ShutdownableSession {
   coachId: string;
   stopping: boolean;
+  downPokeTimer?: NodeJS.Timeout | null;
   sock: { end: (error: Error | undefined) => void } | null;
   pendingWrites: PendingWrites;
   lock: { release: () => Promise<void> };
@@ -506,6 +542,8 @@ export interface ShutdownableSession {
 export async function shutdownOneSession(session: ShutdownableSession, opts: { flushTimeoutMs: number }, log: Logger): Promise<void> {
   const { coachId } = session;
   session.stopping = true;
+  if (session.downPokeTimer) clearTimeout(session.downPokeTimer);
+  session.downPokeTimer = null;
   try {
     session.sock?.end(undefined);
   } catch {
@@ -852,6 +890,7 @@ export class SessionManager {
         undefined,
         activity.lastAttemptAt ? Date.parse(activity.lastAttemptAt) : null
       ),
+      downPokeTimer: null,
       status: "disconnected",
       phoneNumber: null,
       qr: null,
@@ -1153,6 +1192,7 @@ export class SessionManager {
         // a fresh session — fail closed).
         void this.loadEnabledGroups(session);
         void this.drainQueue(session);
+        clearDownPoke(session);
         recordReconnected(this.outboundPoke);
       }
 
@@ -1160,7 +1200,11 @@ export class SessionManager {
         session.sock = null;
         session.qr = null;
         const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
-        void this.handleClose(session, statusCode);
+        // Poke after handleClose has written the final status (logged_out / banned
+        // included), so the portal reads the number as down; and again after 5 min 15 s.
+        void this.handleClose(session, statusCode).finally(() => {
+          if (!this.shuttingDown) recordClosed(session, this.outboundPoke);
+        });
       }
     });
 

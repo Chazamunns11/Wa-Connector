@@ -329,6 +329,12 @@ knowing about if you're reading this before the rest of the package lands:
   a row can exist is that this service's service-role key inserted it.
   The same poke fires when a session reconnects (`recordReconnected`), so the
   portal releases held messages for that number straight away.
+  The poke also fires on every connection close (`recordClosed`), and once
+  more 5 minutes 15 seconds after a close if the session is still not open
+  (an `unref`'d timer, cancelled on open and at shutdown). The portal uses
+  these to fire the "WhatsApp disconnected" / "WhatsApp reconnected" workflow
+  triggers on time (`src/lib/session-triggers.ts`); the hourly cron is the
+  backstop.
 - **No ledger gate**: every tenant is a GHL location whose linked number is
   a dedicated business number, so cold inbound from a prospect who was never
   messaged first is the point. Every reply that passes the filter chain

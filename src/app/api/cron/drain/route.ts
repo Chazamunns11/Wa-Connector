@@ -27,6 +27,9 @@ import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
 import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
 import { purgeCancelledAccounts } from "@/lib/billing/cleanup";
 import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
+import { defaultGhlProviderDeps } from "@/lib/ghl-provider";
+import { defaultTriggerDeps, isWorkflowTriggersEnabled } from "@/lib/ghl-triggers";
+import { defaultSessionTriggerDeps, drainSessionTriggers } from "@/lib/session-triggers";
 
 export const dynamic = "force-dynamic";
 
@@ -121,6 +124,16 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] ghl inbound-reply drain failed (non-fatal):", err);
   }
 
+  // WhatsApp disconnected / reconnected triggers. Only when the flag is on; never fatal.
+  let sessionTriggers = { fired: 0 };
+  if (isWorkflowTriggersEnabled()) {
+    try {
+      sessionTriggers = await drainSessionTriggers(repo, defaultSessionTriggerDeps(defaultTriggerDeps(defaultGhlProviderDeps)), now);
+    } catch {
+      console.error("[cron/drain] session trigger drain failed (non-fatal)");
+    }
+  }
+
   // Data minimisation: an accepted row never reported keeps its text only 7 days.
   try {
     const cleared = await repo.clearStaleOutboundPendingText(new Date(now - STALE_PENDING_TEXT_MS).toISOString());
@@ -154,5 +167,5 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] cancelled-account cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
-  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlReadReceipts, ghlInboundReplies, whatsappInboundPurged, cancelledCleanup });
+  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlReadReceipts, ghlInboundReplies, sessionTriggers, whatsappInboundPurged, cancelledCleanup });
 }
