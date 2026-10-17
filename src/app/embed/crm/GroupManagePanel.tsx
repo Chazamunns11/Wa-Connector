@@ -17,7 +17,6 @@ import {
   type Invitees,
 } from "./CreateGroupForm";
 
-const FALLBACK_ERROR = "Something went wrong. Please try again.";
 const NOT_ADMIN_MESSAGE = "This number isn't an admin of that group.";
 const INPUT_CLASS = "w-full rounded border border-border bg-transparent px-3 py-2 text-sm text-ink";
 const MAX_NAME = 100;
