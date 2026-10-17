@@ -146,6 +146,32 @@ export interface GhlRepository {
    */
   setWhatsappGroupEnabled(tenantId: string, groupJid: string, name: string, enabled: boolean): Promise<void>;
 
+  /**
+   * Record a group this app just created: upsert on `(tenant_id, group_jid)`
+   * with `enabled = true, created_by_us = true, left_at = null`. `groupJid`
+   * must be a well-formed WhatsApp group id or this throws before any write;
+   * `name` is trimmed to 100 characters. The caller asks the bridge to reload
+   * its enabled set afterwards (`refreshWhatsappGroups`).
+   */
+  recordCreatedWhatsappGroup(tenantId: string, groupJid: string, name: string): Promise<void>;
+
+  /** Update the stored name of an existing group row (trimmed to 100 characters). No row, no write. */
+  renameWhatsappGroup(tenantId: string, groupJid: string, name: string): Promise<void>;
+
+  /** The sub-account's own group invite message (`ghl_accounts.group_invite_template`), or null when none is set (callers then use the default wording). */
+  getGroupInviteTemplate(locationId: string): Promise<string | null>;
+
+  /** Set (or with null, clear) the sub-account's group invite message. The caller validates it ({link} present, at most 500 characters); the column's CHECK is the backstop. */
+  setGroupInviteTemplate(locationId: string, template: string | null): Promise<void>;
+
+  /**
+   * True when this phone has sent the number at least one 1:1 message (a
+   * non-group `whatsapp_inbound_messages` row) in the last 90 days — the same
+   * query as the bridge's `hasInboundFromPhone`. Marks a contact "can be added
+   * directly" in the UI; the bridge still decides at add time.
+   */
+  hasInboundFromPhone(tenantId: string, phoneE164: string): Promise<boolean>;
+
   /** Stamp `left_at = now()` — the number is no longer in the group (the bridge's "no longer in that group" send failure). Cleared by the next `setWhatsappGroupEnabled(..., true)`. */
   markWhatsappGroupLeft(tenantId: string, groupJid: string): Promise<void>;
 

@@ -151,6 +151,148 @@ export function isWhatsappGroupJid(jid: string): boolean {
   return typeof jid === "string" && WHATSAPP_GROUP_JID_RE.test(jid);
 }
 
+// ---------------------------------------------------------------------------
+// Group management (services/whatsapp-bridge/src/group-routes.ts). Types
+// mirror the bridge's group-management.ts / groups.ts exactly. A refusal
+// comes back as a BridgeFailure whose `code` is the bridge's error code
+// (create_limit, add_limit, warmup, needs_member, not_admin,
+// limits_unavailable, group_not_enabled, session_not_connected, ...) and
+// whose `message` is the bridge's fixed string for 422/403/503 refusals.
+// Nothing here logs a name, JID, phone, member id or invite link.
+// ---------------------------------------------------------------------------
+
+/** One member as group details show it. `memberId` addresses remove/promote/demote; `phone` is null for a LID-only member. */
+export interface BridgeMemberView {
+  memberId: string;
+  phone: string | null;
+  admin: "admin" | "superadmin" | null;
+  isUs: boolean;
+}
+
+export interface BridgeGroupDetail {
+  jid: string;
+  name: string;
+  description: string | null;
+  announcement: boolean;
+  approval: boolean;
+  weAreAdmin: boolean;
+  members: BridgeMemberView[];
+}
+
+export type BridgeParticipantOutcome =
+  | "ok"
+  | "invite_required"
+  | "not_eligible"
+  | "not_on_whatsapp"
+  | "already_member"
+  | "limit_reached"
+  | "warmup"
+  | "self"
+  | "last_admin"
+  | "not_member"
+  | "duplicate"
+  | "failed";
+
+export interface BridgeParticipantResult {
+  phone?: string;
+  memberId?: string;
+  result: BridgeParticipantOutcome;
+}
+
+export interface CreateWhatsappGroupInput {
+  /** Idempotency key, `[A-Za-z0-9_-]{1,128}`: a repeat within 10 minutes replays the first outcome. */
+  requestId: string;
+  name: string;
+  description?: string;
+  /** E.164 fallback candidates for the first member, used only if WhatsApp refuses an empty group. */
+  participants: string[];
+}
+
+export interface BridgeCreatedGroup {
+  jid: string;
+  name: string;
+  addedPhone: string | null;
+  path: "empty" | "with_member";
+}
+
+export interface WhatsappGroupPatch {
+  name?: string;
+  description?: string;
+  announcement?: boolean;
+  approval?: boolean;
+}
+
+export type WhatsappParticipantsRequest = { action: "add"; phones: string[] } | { action: "remove" | "promote" | "demote"; memberIds: string[] };
+
+export type BridgeCreateGroupResult = ({ ok: true } & BridgeCreatedGroup) | BridgeFailure;
+export type BridgeGroupDetailResult = { ok: true; group: BridgeGroupDetail } | BridgeFailure;
+export type BridgeParticipantsResult = { ok: true; results: BridgeParticipantResult[] } | BridgeFailure;
+export type BridgeInviteResult = { ok: true; link: string } | BridgeFailure;
+
+const PARTICIPANT_OUTCOMES: readonly string[] = [
+  "ok", "invite_required", "not_eligible", "not_on_whatsapp", "already_member", "limit_reached", "warmup", "self", "last_admin", "not_member", "duplicate", "failed",
+];
+
+const INVITE_LINK_RE = /^https:\/\/chat\.whatsapp\.com\/[A-Za-z0-9]{10,32}$/;
+
+/** True iff `v` is a WhatsApp invite link (`https://chat.whatsapp.com/<code>`). Anything else from the bridge is treated as a contract violation. */
+export function isValidInviteLink(v: unknown): v is string {
+  return typeof v === "string" && INVITE_LINK_RE.test(v);
+}
+
+function isValidMemberView(m: unknown): m is BridgeMemberView {
+  if (typeof m !== "object" || m === null) return false;
+  const x = m as Record<string, unknown>;
+  return (
+    typeof x.memberId === "string" &&
+    (x.phone === null || typeof x.phone === "string") &&
+    (x.admin === null || x.admin === "admin" || x.admin === "superadmin") &&
+    typeof x.isUs === "boolean"
+  );
+}
+
+/** Shape guard for the group-details body — every field and every member must look right, or the whole body is a contract violation. */
+export function isValidGroupDetail(v: unknown): v is BridgeGroupDetail {
+  if (typeof v !== "object" || v === null) return false;
+  const g = v as Record<string, unknown>;
+  return (
+    typeof g.jid === "string" &&
+    typeof g.name === "string" &&
+    (g.description === null || typeof g.description === "string") &&
+    typeof g.announcement === "boolean" &&
+    typeof g.approval === "boolean" &&
+    typeof g.weAreAdmin === "boolean" &&
+    Array.isArray(g.members) &&
+    g.members.every(isValidMemberView)
+  );
+}
+
+function isValidParticipantResults(v: unknown): v is BridgeParticipantResult[] {
+  return (
+    Array.isArray(v) &&
+    v.every((r) => {
+      if (typeof r !== "object" || r === null) return false;
+      const x = r as Record<string, unknown>;
+      return (
+        typeof x.result === "string" &&
+        PARTICIPANT_OUTCOMES.includes(x.result) &&
+        (x.phone === undefined || typeof x.phone === "string") &&
+        (x.memberId === undefined || typeof x.memberId === "string")
+      );
+    })
+  );
+}
+
+function isValidCreatedGroup(v: Record<string, unknown>): boolean {
+  return (
+    typeof v.jid === "string" &&
+    isWhatsappGroupJid(v.jid) &&
+    typeof v.name === "string" &&
+    (v.addedPhone === null || typeof v.addedPhone === "string") &&
+    (v.path === "empty" || v.path === "with_member")
+  );
+}
+
 /**
  * One text send. EXACTLY ONE target, enforced by the type (the bridge also
  * 400s both): `to` for a one-to-one send, or `groupJid` for an enabled group.
@@ -289,7 +431,7 @@ function isValidMessage(v: unknown): v is BridgeMessage {
  */
 async function bridgeFetch(
   path: string,
-  init: { method: "GET" | "POST"; body?: unknown }
+  init: { method: "GET" | "POST" | "PATCH"; body?: unknown }
 ): Promise<{ status: number; body: Record<string, unknown> } | BridgeFailure> {
   const env = bridgeEnv();
   if (!env) {
@@ -515,6 +657,90 @@ export function listWhatsappGroups(coachId: string): Promise<BridgeGroupsResult>
 /** Opt-in groups — call after changing a number's `whatsapp_groups` rows so the bridge reloads which groups it forwards and accepts sends to. */
 export function refreshWhatsappGroups(coachId: string): Promise<BridgeOkResult> {
   return activeTransport.refreshGroups(coachId);
+}
+
+// ---------------------------------------------------------------------------
+// Group management calls. Same contract as everything above: hard timeout,
+// never throw, 'unconfigured' without a network attempt. The JID is
+// encodeURIComponent'd into the path. Not on the swappable transport: group
+// management exists only on the Baileys bridge.
+// ---------------------------------------------------------------------------
+
+const groupPath = (coachId: string, jid: string, suffix = ""): string =>
+  `/sessions/${encodeURIComponent(coachId)}/groups/${encodeURIComponent(jid)}${suffix}`;
+
+const MALFORMED = (what: string): BridgeFailure => ({ ok: false, code: "internal", message: `bridge returned a malformed ${what} body` });
+
+/** `POST /sessions/:id/groups` — a failed create keeps the bridge's error code (the caller treats any failure as "the group may exist"). */
+export async function createWhatsappGroup(coachId: string, input: CreateWhatsappGroupInput): Promise<BridgeCreateGroupResult> {
+  const res = await bridgeFetch(`/sessions/${encodeURIComponent(coachId)}/groups`, { method: "POST", body: input });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidCreatedGroup(res.body)) return MALFORMED("create-group");
+    const b = res.body as unknown as BridgeCreatedGroup;
+    return { ok: true, jid: b.jid, name: b.name, addedPhone: b.addedPhone, path: b.path };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `GET /sessions/:id/groups/:jid` */
+export async function getWhatsappGroupDetail(coachId: string, jid: string): Promise<BridgeGroupDetailResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid), { method: "GET" });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidGroupDetail(res.body.group)) return MALFORMED("group");
+    return { ok: true, group: res.body.group };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `PATCH /sessions/:id/groups/:jid` — name, description, announcement, approval. */
+export async function updateWhatsappGroup(coachId: string, jid: string, patch: WhatsappGroupPatch): Promise<BridgeOkResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid), { method: "PATCH", body: patch });
+  if ("ok" in res) return res;
+  if (res.status === 200) return { ok: true };
+  return toFailure(res.status, res.body);
+}
+
+/** `POST /sessions/:id/groups/:jid/participants` — add by phone; remove/promote/demote by member id. */
+export async function updateWhatsappGroupParticipants(coachId: string, jid: string, req: WhatsappParticipantsRequest): Promise<BridgeParticipantsResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid, "/participants"), { method: "POST", body: req });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidParticipantResults(res.body.results)) return MALFORMED("participants");
+    return { ok: true, results: res.body.results };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `GET /sessions/:id/groups/:jid/invite` */
+export async function getWhatsappGroupInvite(coachId: string, jid: string): Promise<BridgeInviteResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid, "/invite"), { method: "GET" });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidInviteLink(res.body.link)) return MALFORMED("invite");
+    return { ok: true, link: res.body.link };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `POST /sessions/:id/groups/:jid/invite/reset` — revokes the old link. */
+export async function resetWhatsappGroupInvite(coachId: string, jid: string): Promise<BridgeInviteResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid, "/invite/reset"), { method: "POST" });
+  if ("ok" in res) return res;
+  if (res.status === 200) {
+    if (!isValidInviteLink(res.body.link)) return MALFORMED("invite");
+    return { ok: true, link: res.body.link };
+  }
+  return toFailure(res.status, res.body);
+}
+
+/** `POST /sessions/:id/groups/:jid/leave` */
+export async function leaveWhatsappGroup(coachId: string, jid: string): Promise<BridgeOkResult> {
+  const res = await bridgeFetch(groupPath(coachId, jid, "/leave"), { method: "POST" });
+  if ("ok" in res) return res;
+  if (res.status === 200) return { ok: true };
+  return toFailure(res.status, res.body);
 }
 
 /**

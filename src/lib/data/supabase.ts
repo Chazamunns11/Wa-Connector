@@ -534,9 +534,10 @@ interface WhatsappGroupRow {
   enabled: boolean;
   ghl_contact_id: string | null;
   left_at: string | null;
+  created_by_us: boolean;
 }
 
-const WHATSAPP_GROUP_COLUMNS = "tenant_id, group_jid, name, enabled, ghl_contact_id, left_at";
+const WHATSAPP_GROUP_COLUMNS = "tenant_id, group_jid, name, enabled, ghl_contact_id, left_at, created_by_us";
 
 function mapWhatsappGroup(row: WhatsappGroupRow): WhatsappGroup {
   return {
@@ -546,6 +547,7 @@ function mapWhatsappGroup(row: WhatsappGroupRow): WhatsappGroup {
     enabled: row.enabled,
     ghlContactId: row.ghl_contact_id,
     leftAt: row.left_at,
+    createdByUs: row.created_by_us === true,
   };
 }
 
@@ -905,6 +907,65 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (enabled) row.left_at = null;
     const { error } = await supabase.from("whatsapp_groups").upsert(row, { onConflict: "tenant_id,group_jid" });
     if (error) throw error;
+  }
+
+  async recordCreatedWhatsappGroup(tenantId: string, groupJid: string, name: string) {
+    if (!isWhatsappGroupJid(groupJid)) throw new Error("recordCreatedWhatsappGroup: groupJid is not a WhatsApp group id");
+    const supabase = getServiceClient();
+    // ghl_contact_id is never sent, so the upsert keeps an existing group contact.
+    const { error } = await supabase.from("whatsapp_groups").upsert(
+      {
+        tenant_id: tenantId,
+        group_jid: groupJid,
+        name: Array.from(name.trim()).slice(0, WHATSAPP_GROUP_NAME_MAX).join(""),
+        enabled: true,
+        created_by_us: true,
+        left_at: null,
+      },
+      { onConflict: "tenant_id,group_jid" }
+    );
+    if (error) throw error;
+  }
+
+  async renameWhatsappGroup(tenantId: string, groupJid: string, name: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("whatsapp_groups")
+      .update({ name: Array.from(name.trim()).slice(0, WHATSAPP_GROUP_NAME_MAX).join("") })
+      .eq("tenant_id", tenantId)
+      .eq("group_jid", groupJid);
+    if (error) throw error;
+  }
+
+  async getGroupInviteTemplate(locationId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_accounts").select("group_invite_template").eq("location_id", locationId).maybeSingle();
+    if (error) throw error;
+    const template = (data as { group_invite_template: string | null } | null)?.group_invite_template;
+    return typeof template === "string" ? template : null;
+  }
+
+  async setGroupInviteTemplate(locationId: string, template: string | null) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_accounts").update({ group_invite_template: template }).eq("location_id", locationId);
+    if (error) throw error;
+  }
+
+  async hasInboundFromPhone(tenantId: string, phoneE164: string) {
+    const supabase = getServiceClient();
+    // Same query as the bridge store's hasInboundFromPhone: a non-group
+    // inbound row from this phone, received within the 90-day retention.
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from("whatsapp_inbound_messages")
+      .select("id")
+      .eq("coach_id", tenantId)
+      .eq("from_phone", phoneE164)
+      .is("group_jid", null)
+      .gte("received_at", since)
+      .limit(1);
+    if (error) throw error;
+    return (data ?? []).length > 0;
   }
 
   async markWhatsappGroupLeft(tenantId: string, groupJid: string) {

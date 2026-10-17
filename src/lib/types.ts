@@ -477,6 +477,8 @@ export interface WhatsappGroup {
   ghlContactId: string | null;
   /** Set when the number left or was removed from the group; null while a member. */
   leftAt: string | null;
+  /** True when this app created the group through the bridge (0009's `created_by_us`). */
+  createdByUs: boolean;
 }
 
 // ---------------------------------------------------------------------------

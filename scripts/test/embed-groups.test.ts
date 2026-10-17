@@ -31,7 +31,7 @@ function assertNoTenantId(value: unknown, context: string) {
 }
 
 function stored(groupJid: string, overrides: Partial<WhatsappGroup> = {}): WhatsappGroup {
-  return { tenantId: TENANT, groupJid, name: "stored name", enabled: false, ghlContactId: null, leftAt: null, ...overrides };
+  return { tenantId: TENANT, groupJid, name: "stored name", enabled: false, ghlContactId: null, leftAt: null, createdByUs: false, ...overrides };
 }
 
 const LIVE: BridgeGroup[] = [
