@@ -10,7 +10,7 @@
  * allowed to contain a literal currency amount (see site-copy.test.ts).
  */
 
-import { VOLUME_FROM, standardPrice, volumePrice } from "@/lib/pricing";
+import { MID_FROM, NUMBERS_INCLUDED, VOLUME_FROM, midPrice, standardPrice, volumePrice } from "@/lib/pricing";
 
 export interface GhlSource {
   title: string;
@@ -69,13 +69,13 @@ export const COMPARISON = {
     .map((p) => (typeof p === "string" ? p : p.text))
     .join(""),
   closing:
-    "If you send a lot of marketing templates, or you need the verified badge, their option may suit you better. If you want the workflows you already have on your own number with a simple per-number price, that's us.",
+    "If you send a lot of marketing templates, or you need the verified badge, their option may suit you better. If you want the workflows you already have on your own number with a simple per-sub-account price, that's us.",
 };
 
 /** Our column. Prices come from src/lib/pricing.ts. */
 export function ourColumn(currency: string): string[] {
   return [
-    `${standardPrice(currency)} a month per number, or ${volumePrice(currency)} each once you connect ${VOLUME_FROM} or more.`,
+    `${standardPrice(currency)} a month per sub-account, with up to ${NUMBERS_INCLUDED} WhatsApp numbers included. ${MID_FROM} to ${VOLUME_FROM - 1} sub-accounts: ${midPrice(currency)} each. ${VOLUME_FROM} or more sub-accounts: ${volumePrice(currency)} each. The tier you reach applies to every sub-account.`,
     "No charge per message.",
     "Your own number, connected as a linked device.",
     "No verified badge and no template approval, because it isn't the official API.",

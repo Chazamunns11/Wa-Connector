@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { SignupForm } from "@/components/auth/SignupForm";
 import { brandConfig } from "@/lib/brand-config";
-import { TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
+import { TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
 import { signupStateFromParams } from "@/lib/site/signup";
 import { startSignupAction } from "./actions";
 
@@ -36,7 +36,7 @@ export default async function SignupPage({
           <p>
             Tell us who the account is for. We&apos;ll email you a link to confirm your address, then take you to
             checkout: a card is needed to start, and nothing is charged until the trial ends. The trial covers up to{" "}
-            {TRIAL_MAX_NUMBERS} numbers.
+            {TRIAL_MAX_SUB_ACCOUNTS} sub-accounts.
           </p>
           {claim ? (
             <p className="mt-3">You arrived from GoHighLevel. Create your account here to carry on.</p>

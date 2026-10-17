@@ -99,19 +99,21 @@ same organisation**.
 
 1. Open a Stripe account for PingWren. Leave **Test mode** on (switch at top
    right). Do everything in this part in test mode.
-2. **Product catalogue → Add product.** Name: `PingWren WhatsApp number`.
+2. **Product catalogue → Add product.** Name: `PingWren WhatsApp sub-account`.
 3. Add **one** price on that product. Not two. The code reads a single price id
-   and sets the quantity to the number of activated numbers.
+   and sets the quantity to the number of activated sub-accounts (up to 3 WhatsApp
+   numbers per sub-account are included, so extra numbers add no quantity).
    - Recurring, monthly, currency GBP.
    - Pricing model: **Volume pricing** (`tiers_mode = volume`,
      `billing_scheme = tiered`).
-   - Tier 1: first unit 1, last unit 9, **£14.99** per unit (1499 pence).
-   - Tier 2: first unit 10, last unit and above, **£7.99** per unit (799 pence).
-   - No flat fee on either tier.
+   - Tier 1: first unit 1, last unit 10, **£14.99** per unit (1499 pence).
+   - Tier 2: first unit 11, last unit 24, **£11.99** per unit (1199 pence).
+   - Tier 3: first unit 25, last unit and above, **£9.99** per unit (999 pence).
+   - No flat fee on any tier.
 
    That matches `stripeVolumeTiers()` in `src/lib/stripe/billing.ts`. Volume
-   means the whole order gets the tier price. Ten numbers cost 10 x £7.99, not
-   nine at £14.99 plus one at £7.99. If the prices in `src/lib/pricing.ts`
+   means the whole order gets the tier price. Twenty-five sub-accounts cost
+   25 x £9.99, not ten at £14.99, fourteen at £11.99 and one at £9.99. If the prices in `src/lib/pricing.ts`
    ever change, the Stripe price must change with them.
 4. Copy the price id (starts `price_`). It becomes `STRIPE_PRICE_ID`.
 5. **Developers → API keys.** Copy the secret key (starts `sk_test_`). It
@@ -280,8 +282,9 @@ Then walk this journey:
 3. **Activation.** Advance the clock past day 7. The first invoice is paid
    with the test card. Status becomes **active**. Charge should be 1 x
    £14.99 (plus tax if on).
-4. **Volume tier.** Activate ten numbers (use the comped FitClosers account's
-   locations, or a test account). Charge for the month should be 10 x £7.99.
+4. **Volume tiers.** Activate eleven sub-accounts (use the comped FitClosers
+   account's locations, or a test account). Charge for the month should be
+   11 x £11.99. At 25 it should be 25 x £9.99.
 5. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
    attaches, then declines). Advance one billing cycle. Status becomes
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the

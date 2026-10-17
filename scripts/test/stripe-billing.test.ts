@@ -11,7 +11,7 @@ import {
   parseSubscription,
   stripeVolumeTiers,
 } from "@/lib/stripe/billing";
-import { STANDARD_PENCE, VOLUME_PENCE, VOLUME_FROM } from "@/lib/pricing";
+import { STANDARD_PENCE, MID_PENCE, VOLUME_PENCE, MID_FROM, VOLUME_FROM } from "@/lib/pricing";
 
 type Call = { method: string; path: string; params: Record<string, unknown> | undefined };
 function fake(data: unknown = {}) {
@@ -162,11 +162,15 @@ test("stripeVolumeTiers: Stripe volume-price definition matches W40 pence", () =
     billing_scheme: "tiered",
     tiers_mode: "volume",
     tiers: [
-      { up_to: VOLUME_FROM - 1, unit_amount: STANDARD_PENCE },
+      { up_to: MID_FROM - 1, unit_amount: STANDARD_PENCE },
+      { up_to: VOLUME_FROM - 1, unit_amount: MID_PENCE },
       { up_to: "inf", unit_amount: VOLUME_PENCE },
     ],
   });
   assert.equal(STANDARD_PENCE, 1499);
-  assert.equal(VOLUME_PENCE, 799);
-  assert.equal(VOLUME_FROM, 10);
+  assert.equal(MID_PENCE, 1199);
+  assert.equal(VOLUME_PENCE, 999);
+  assert.equal(MID_FROM, 11);
+  assert.equal(VOLUME_FROM, 25);
+  assert.deepEqual(stripeVolumeTiers().tiers.map((t) => t.up_to), [10, 24, "inf"]);
 });

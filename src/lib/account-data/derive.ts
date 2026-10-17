@@ -1,4 +1,4 @@
-import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
+import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
 import type { AccountSummary, LocationRow } from "./types";
 
 const DAY_MS = 86_400_000;
@@ -59,11 +59,11 @@ export function activeCount(rows: LocationRow[]): number {
   return rows.filter((r) => r.activated).length;
 }
 
-/** e.g. "2 numbers active · £29.98/month". Volume pricing over activated numbers. */
+/** e.g. "2 sub-accounts active · £29.98/month". Volume pricing over activated sub-accounts. */
 export function headline(rows: LocationRow[]): string {
   const n = activeCount(rows);
   const cost = formatMoney(monthlyCostPence(n) / 100, pricingConfig().currency);
-  return `${n} ${n === 1 ? "number" : "numbers"} active · ${cost}/month`;
+  return `${n} ${n === 1 ? "sub-account" : "sub-accounts"} active · ${cost}/month`;
 }
 
 export interface RowActions {
@@ -101,4 +101,4 @@ export function primaryActionFor(row: LocationRow): PrimaryAction | null {
 }
 
 /** Shown when a trialing account tries to activate past the trial cap. */
-export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_NUMBERS} numbers. Start your paid plan now to add more.`;
+export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. Start your paid plan now to add more.`;

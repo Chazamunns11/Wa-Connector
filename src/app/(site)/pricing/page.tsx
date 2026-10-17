@@ -45,7 +45,7 @@ export default function PricingPage() {
               {price}
             </span>{" "}
             <span className="mt-2 block font-display text-[clamp(1.3rem,2.4vw,1.6rem)] font-extrabold leading-[1.2]">
-              per WhatsApp number, per month
+              per sub-account, per month
             </span>
           </h1>
           <p className={`${PROSE} mt-8 text-[1.3rem] font-medium leading-[1.4]`}>
@@ -74,7 +74,7 @@ export default function PricingPage() {
             <div>
               <h2 className={H2}>Reselling to your clients?</h2>
               <p className="mt-6 max-w-[44ch] text-[1.2rem] leading-[1.45]">
-                Many agencies include WhatsApp sending in a client package and charge for each number. {resaleExamplePrice(pricing.currency)} a number
+                Many agencies include WhatsApp sending in a client package and charge for each client. {resaleExamplePrice(pricing.currency)} a sub-account
                 is a common price, so it is the starting figure here. Change it to whatever you charge.
               </p>
               <p className="mt-4 max-w-[44ch] text-ink-dim">

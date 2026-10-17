@@ -1,5 +1,5 @@
 import type { BrandConfig } from "@/lib/brand-config";
-import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, pricingConfig, tierSentence } from "@/lib/pricing";
+import { TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS, pricingConfig, tierSentence } from "@/lib/pricing";
 
 export interface FaqEntry {
   id: string;
@@ -63,7 +63,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     stop: {
       question: "What if someone replies STOP?",
-      answer: "They're opted out and get no more messages from that number. A message already in the sending queue at that moment can still go out; nothing after it does.",
+      answer: "They're opted out and get no more messages from that sub-account. A message already in the sending queue at that moment can still go out; nothing after it does.",
     },
     "daily-cap": {
       question: "What is the daily cap?",
@@ -72,7 +72,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     trial: {
       question: "How does the free trial work?",
-      answer: `You get ${TRIAL_DAYS} days free with up to ${TRIAL_MAX_NUMBERS} numbers. We take a card up front and charge nothing until the trial ends. After that it's ${tiers}`,
+      answer: `You get ${TRIAL_DAYS} days free with up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. We take a card up front and charge nothing until the trial ends. After that it's ${tiers}`,
     },
     cancel: {
       question: "Can I cancel, and what happens if a payment fails?",
@@ -82,7 +82,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     "agency-or-single": {
       question: "Is it for agencies or a single business?",
       answer:
-        "Both. A single business connects one or more numbers to its own account; an agency connects numbers across its sub-accounts. Either way you pay per number. If you resell it to your own clients, you set your price and can work out what you would keep.",
+        "Both. A single business activates its one sub-account; an agency activates the sub-accounts it wants to use. Either way you pay per activated sub-account, and each sub-account can have up to 3 WhatsApp numbers at no extra cost. If you resell it to your own clients, you set your price and can work out what you would keep.",
       link: { text: "Try the resale calculator", href: "/pricing#resale" },
     },
     "white-label": {

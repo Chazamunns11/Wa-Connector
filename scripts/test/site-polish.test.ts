@@ -44,13 +44,13 @@ test("W34: the footnote link is a sibling of the h1, not inside it", () => {
   assert.match(p, /href="#own-result"/);
 });
 
-test("calculator label text matches its visible name (WCAG 2.5.3): no aria-label, only 'If I connect' in the label", () => {
+test("calculator label text matches its visible name (WCAG 2.5.3): no aria-label, only 'If I activate' in the label", () => {
   const c = read("src/components/site/PricingCalculator.tsx");
   assert.ok(!/aria-label=/.test(c));
   const label = c.slice(c.indexOf("<label"), c.indexOf("</label>"));
   assert.ok(!/<input/.test(label));
-  assert.match(label, /If I connect/);
-  assert.ok(!/numbers,/.test(label));
+  assert.match(label, /If I activate/);
+  assert.ok(!/sub-accounts,/.test(label));
 });
 
 test("calculator note region is a static status role", () => {

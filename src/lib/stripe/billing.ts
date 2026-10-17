@@ -1,5 +1,5 @@
 import { stripeConfig, stripeRequest, type StripeResult } from "./client";
-import { STANDARD_PENCE, VOLUME_PENCE, VOLUME_FROM, TRIAL_DAYS, CURRENCY } from "../pricing";
+import { STANDARD_PENCE, MID_PENCE, VOLUME_PENCE, MID_FROM, VOLUME_FROM, TRIAL_DAYS, CURRENCY } from "../pricing";
 
 export interface StripeSubscription {
   id: string;
@@ -169,8 +169,8 @@ export async function createPortalSession(
 
 /**
  * The Stripe Price definition that implements W40 volume pricing, built from
- * the pricing constants (pence). Volume mode: the tier the total quantity
- * lands in prices every unit. Used by the go-live checklist to create the
+ * the pricing constants (pence). The unit is an activated sub-account. Volume
+ * mode: the tier the total quantity lands in prices every unit. Used by the go-live checklist to create the
  * Price; the app itself only needs STRIPE_PRICE_ID.
  */
 export function stripeVolumeTiers() {
@@ -179,7 +179,8 @@ export function stripeVolumeTiers() {
     billing_scheme: "tiered" as const,
     tiers_mode: "volume" as const,
     tiers: [
-      { up_to: VOLUME_FROM - 1, unit_amount: STANDARD_PENCE },
+      { up_to: MID_FROM - 1, unit_amount: STANDARD_PENCE },
+      { up_to: VOLUME_FROM - 1, unit_amount: MID_PENCE },
       { up_to: "inf" as const, unit_amount: VOLUME_PENCE },
     ],
   };

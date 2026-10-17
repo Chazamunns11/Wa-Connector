@@ -21,7 +21,7 @@ test("pricing: coral top, slab calculator, ruled comparison, Mist billing band",
   assert.ok(calc.includes('aria-live="polite"'));
   assert.ok(calc.includes('role="status"'));
   assert.ok(!calc.includes("aria-label"));
-  assert.ok(calc.includes("If I connect"));
+  assert.ok(calc.includes("If I activate"));
 });
 
 test("setup guide: disclosure troubleshooting, Ink numerals, slab sample chrome", () => {

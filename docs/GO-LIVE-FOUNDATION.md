@@ -595,7 +595,7 @@ launch publicly until each of these is built or the copy is changed to match:
 
 Also before launch:
 
-- Confirm the launch prices in `src/lib/pricing.ts` (volume pricing in GBP: £14.99 a month per number below 10 numbers, £7.99 a month for every number at 10 or more). There is no price env var any more. See GO-LIVE-ACCOUNTS.md Part 2.
+- Confirm the launch prices in `src/lib/pricing.ts` (per activated sub-account, up to 3 WhatsApp numbers included on every tier, decided 17 Oct 2026; volume pricing in GBP: £14.99 a month per sub-account for 1 to 10 sub-accounts, £11.99 each for 11 to 24, £9.99 each for 25 or more, the tier reached applying to every sub-account). There is no price env var any more. The Stripe price must be a recurring, monthly, **volume-tiered** price with exactly these three tiers (1 to 10 at 1499p, 11 to 24 at 1199p, 25 and above at 999p), and must be changed whenever `src/lib/pricing.ts` changes. See GO-LIVE-ACCOUNTS.md Part 2.
 - Run a trademark search for "PingWren".
 
 ---

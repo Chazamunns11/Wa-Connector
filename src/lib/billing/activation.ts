@@ -1,5 +1,5 @@
 import type { BillingStatus } from "@/lib/types";
-import { TRIAL_MAX_NUMBERS } from "@/lib/pricing";
+import { TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
 
 export type ActivateRefusal = "already_active" | "billing_inactive" | "trial_cap" | "platform_cap";
 
@@ -25,7 +25,7 @@ export function canActivate(input: {
 }): { ok: true } | { ok: false; reason: ActivateRefusal } {
   if (input.alreadyActive) return { ok: false, reason: "already_active" };
   if (!BILLABLE.has(input.billingStatus)) return { ok: false, reason: "billing_inactive" };
-  if (input.billingStatus === "trialing" && input.accountActive >= TRIAL_MAX_NUMBERS) {
+  if (input.billingStatus === "trialing" && input.accountActive >= TRIAL_MAX_SUB_ACCOUNTS) {
     return { ok: false, reason: "trial_cap" };
   }
   if (input.platformCap !== null && input.platformActive >= input.platformCap) {

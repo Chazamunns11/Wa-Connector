@@ -25,7 +25,7 @@ export function ResaleCalculator({ currency }: { currency: string }) {
       <div className="grid gap-6 sm:grid-cols-2 sm:gap-8">
         <div>
           <label htmlFor={`${id}-count`} className="block text-[1.05rem] font-semibold">
-            Client WhatsApp numbers
+            Client sub-accounts
           </label>
           <input
             id={`${id}-count`}
@@ -46,7 +46,7 @@ export function ResaleCalculator({ currency }: { currency: string }) {
         </div>
         <div>
           <label htmlFor={`${id}-price`} className="block text-[1.05rem] font-semibold">
-            Your price per number, a month
+            Your price per sub-account, a month
           </label>
           <input
             id={`${id}-price`}

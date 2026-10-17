@@ -47,10 +47,10 @@ test("daily-cap, stop and white-label answers state the real behaviour", () => {
   const get = (id: string) => faqEntries(brand).find((e) => e.id === id)!.answer;
   assert.match(get("daily-cap"), /reported back to GoHighLevel as not sent/);
   assert.match(get("daily-cap"), /midnight \(UTC\)/);
-  assert.match(get("stop"), /from that number/);
+  assert.match(get("stop"), /from that sub-account/);
   assert.match(get("white-label"), /It depends on the agency/);
   assert.match(get("white-label"), /ask your agency to allow Testbrand/);
-  assert.match(get("trial"), /After that it's £14\.99 a month per number\. Connect 10 or more and every number drops to £7\.99 a month\./);
+  assert.match(get("trial"), /After that it's £14\.99 a month per sub-account, with up to 3 WhatsApp numbers included\. 11 to 24 sub-accounts: £11\.99 each\. 25 or more sub-accounts: £9\.99 each\. The tier you reach applies to every sub-account\./);
   assert.ok(!salesCopy(brand).safety.some((s) => /from your account/.test(s.body)));
 });
 
@@ -197,7 +197,7 @@ test("W40: no 'one price', 'same price' or 'flat price' wording survives", () =>
   assert.deepEqual(hits, []);
 });
 
-test("W40: the trial paragraph, our comparison column and the other price copy state the two prices", () => {
-  assert.match(pricingCopy().trialTerms[0], /£14\.99 a month per number\. Connect 10 or more and every number drops to £7\.99 a month\./);
-  assert.deepEqual(ourColumn("GBP")[0], "£14.99 a month per number, or £7.99 each once you connect 10 or more.");
+test("W40: the trial paragraph, our comparison column and the other price copy state the three prices", () => {
+  assert.match(pricingCopy().trialTerms[0], /£14\.99 a month per sub-account, with up to 3 WhatsApp numbers included\. 11 to 24 sub-accounts: £11\.99 each\. 25 or more sub-accounts: £9\.99 each\./);
+  assert.deepEqual(ourColumn("GBP")[0], "£14.99 a month per sub-account, with up to 3 WhatsApp numbers included. 11 to 24 sub-accounts: £11.99 each. 25 or more sub-accounts: £9.99 each. The tier you reach applies to every sub-account.");
 });

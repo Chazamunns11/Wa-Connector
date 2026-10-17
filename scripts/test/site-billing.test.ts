@@ -95,7 +95,7 @@ test("billingHref carries a fixed notice", () => {
 });
 
 test("trial cap message is the fixed sentence", () => {
-  assert.equal(TRIAL_CAP_MESSAGE, "Your trial includes 3 numbers. Start your paid plan now to add more.");
+  assert.equal(TRIAL_CAP_MESSAGE, "Your trial includes 3 sub-accounts. Start your paid plan now to add more.");
 });
 
 test("billing page is real: no sample markers, wired to the actions, tier sentence", () => {

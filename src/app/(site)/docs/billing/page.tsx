@@ -22,7 +22,7 @@ export default function BillingHelpPage() {
   return (
     <>
     <PageTop title="Billing">
-      <p>{tierSentence(pricing.currency)} Billed per active number.</p>
+      <p>{tierSentence(pricing.currency)} Billed per activated sub-account.</p>
     </PageTop>
     <section className="pb-12 pt-4 md:pb-20">
       <Container>

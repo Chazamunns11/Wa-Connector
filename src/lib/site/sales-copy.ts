@@ -26,7 +26,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
   return {
     heroSub: `${name} takes the reminders your GoHighLevel workflows already send and puts them on WhatsApp, from your own number. Replies come back into Conversations.`,
     ctaNote:
-      "We take a card up front. The trial covers up to 3 numbers, and you can cancel from the billing portal whenever you like.",
+      "We take a card up front. The trial covers up to 3 sub-accounts, and you can cancel from the billing portal whenever you like.",
     setup: {
       heading: "How you set it up",
       lead: "About ten minutes. The setup guide walks through every screen.",
@@ -79,7 +79,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     faqAllLink: "All the questions, on one page",
     priceStrip: {
       terms:
-        "The 7-day trial covers up to 3 numbers. We take a card up front, and you can cancel any time from the billing portal.",
+        "The 7-day trial covers up to 3 sub-accounts. We take a card up front, and you can cancel any time from the billing portal.",
     },
     ctaLabel: "Start 7-day free trial",
   };

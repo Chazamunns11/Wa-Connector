@@ -53,7 +53,7 @@ export function setupSteps(brand: BrandConfig): SetupStep[] {
         agency: [
           `Open the ${name} install link, or find ${name} in the Marketplace.`,
           "Install it at agency level, then choose the sub-accounts that should get it.",
-          "Steps 2 to 6 are per sub-account, so you repeat them for each number you connect.",
+          "Steps 2 to 6 are per sub-account, so you repeat them for each sub-account you activate.",
         ],
         business: [
           `Open the ${name} install link, or find ${name} in the Marketplace.`,

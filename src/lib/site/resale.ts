@@ -1,17 +1,17 @@
-import { formatMoney, monthlyCostPence, perNumberPence } from "@/lib/pricing";
+import { formatMoney, monthlyCostPence, perSubAccountPence } from "@/lib/pricing";
 import { CALC_MAX, CALC_MIN, calculatorValue } from "@/lib/site/calculator";
 
 /** The agency resale calculator's logic. Pure; whole pence throughout. */
 
 export const RESALE_DEFAULT_NUMBERS = "10";
-/** Charlie's own figure: what agencies typically charge a client per number. An example, never a promise. */
+/** Charlie's own figure: what agencies typically charge a client per sub-account. An example, never a promise. */
 export const RESALE_DEFAULT_PRICE = "50";
 export const RESALE_EXAMPLE_PRICE_PENCE = 5000;
 export const RESALE_EXAMPLE_COUNTS = [1, 5, 10, 25] as const;
 /** Upper bound on the price field, in pounds, so a typo cannot print a silly figure. */
 export const RESALE_PRICE_MAX = 1000;
 
-const PRICE_HELP = `Enter a price per number, from 0 to ${RESALE_PRICE_MAX}. Pence are fine, like 19.99.`;
+const PRICE_HELP = `Enter a price per sub-account, from 0 to ${RESALE_PRICE_MAX}. Pence are fine, like 19.99.`;
 
 export interface ParsedPrice {
   /** Whole pence, or null when the text is blank or unusable. */
@@ -67,7 +67,7 @@ export interface ResaleView {
   sentences: string[] | null;
   numbersNote: string | null;
   priceNote: string | null;
-  /** Set when the price is at or below what the agency pays us per number. */
+  /** Set when the price is at or below what the agency pays us per sub-account. */
   warning: string | null;
   numbersEmpty: boolean;
   priceInvalid: boolean;
@@ -91,10 +91,10 @@ export function resaleView(rawNumbers: string, rawPrice: string, currency: strin
       : f.keepPence === 0
         ? `You keep nothing: your price only covers what you pay us.`
         : `You lose ${pounds(f.keepPence, currency)} a month (${pounds(f.keepYearPence, currency)} a year).`;
-  const ours = perNumberPence(f.numbers);
+  const ours = perSubAccountPence(f.numbers);
   const warning =
     price.pence < ours
-      ? `That is below the ${pounds(ours, currency)} a month you pay us for each number at this size, so each number costs you money.`
+      ? `That is below the ${pounds(ours, currency)} a month you pay us for each sub-account at this size, so each sub-account costs you money.`
       : null;
   return {
     ...base,
@@ -124,7 +124,7 @@ export function resaleExamplePrice(currency: string): string {
 export function resaleFallbackLine(currency: string): string {
   const ex = resaleExamples(currency).map((e) => `${e.keep} with ${e.numbers}`);
   const list = `${ex.slice(0, -1).join(", ")} and ${ex[ex.length - 1]}`;
-  return `For example, at ${pounds(RESALE_EXAMPLE_PRICE_PENCE, currency)} a number you would keep ${list} numbers, each month.`;
+  return `For example, at ${pounds(RESALE_EXAMPLE_PRICE_PENCE, currency)} a sub-account you would keep ${list} sub-accounts, each month.`;
 }
 
 export { CALC_MAX as RESALE_MAX_NUMBERS, CALC_MIN as RESALE_MIN_NUMBERS };

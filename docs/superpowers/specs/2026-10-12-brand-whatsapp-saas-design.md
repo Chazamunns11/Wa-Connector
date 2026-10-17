@@ -17,7 +17,7 @@ A public, paid product that anyone running GoHighLevel can find (through ads or 
 | Topic | Decision |
 |---|---|
 | Customer | Anyone with GHL: **agency owners** (many sub-accounts) **and single sub-account owners** (often under a white-label like FitPro CRM). Both use the same system. |
-| Price | **Per activated sub-account, monthly** (decided 17 Oct), with **3 WhatsApp numbers included** per sub-account. Volume tiers and an annual discount; the amounts are Charlie's to set (market: $29, $22 at 3+, $19 at 10+ per sub-account; extra numbers $9–10). |
+| Price | **Per activated sub-account, monthly** (decided 17 Oct), with **3 WhatsApp numbers included** per sub-account. Volume pricing in GBP (the tier reached applies to every sub-account): **£14.99** per sub-account for 1–10, **£11.99** each for 11–24, **£9.99** each for 25+. Decided 17 Oct: undercut WAGHL ($29 per sub-account with 3 numbers, $19 at 11+). Annual discount still to be set. |
 | Trial | **7 days, no card** (decided 17 Oct). When the trial ends without a card, sending pauses until one is added. Trial limited to **3 active sub-accounts**. (Previously: card at signup. Every competitor checked runs a no-card trial.) |
 | Numbers per sub-account | Up to 3 included (decided 17 Oct). **One default sending number per sub-account; a contact who has messaged a particular number gets replies from that number** (sticky). See roadmap item B. |
 | Agency resale | **Decided 17 Oct:** at launch, agency branding that every sub-account inherits, plus auto-claiming sub-accounts added to an installed agency later. After the soft launch, a 20% recurring affiliate scheme. Custom domains later. |
