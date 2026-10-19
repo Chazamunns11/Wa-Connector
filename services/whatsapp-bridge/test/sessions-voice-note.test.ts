@@ -16,6 +16,7 @@ import { SessionManager } from "../src/sessions.js";
 import { GROUP_SYNC_OFF_REASON } from "../src/groups.js";
 import { SessionPacer } from "../src/pacing.js";
 import { PendingWrites } from "../src/pending-writes.js";
+import { OwnSendRegistry } from "../src/inbound.js";
 import { mapMimeToBaileysShape, sniffMime, type SniffedMime } from "../src/media.js";
 import type { ResolveOutboundAttachmentResult, resolveOutboundAttachment } from "../src/media-fetch.js";
 import { realFfmpegRunner, transcodeToVoiceNote, type TranscodeResult } from "../src/voice-transcode.js";
@@ -161,6 +162,7 @@ function makeHarness(opts: { bytes: Buffer; transcode?: TranscodeFn | null; leas
     reconnectAttempts: 0,
     stopping: false,
     pendingWrites: new PendingWrites(),
+    ownSends: new OwnSendRegistry(),
     mediaAbuseGate: null,
     enabledGroups: new Set<string>(opts.group ? [GROUP_JID] : []),
     enabledGroupsLoad: 0,

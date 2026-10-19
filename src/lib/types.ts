@@ -507,6 +507,15 @@ export interface WhatsappInboundMessage {
   targetWaMessageId?: string | null;
   /** Message events (0011) — whether that target message was sent by us (`true`) or the contact (`false`); `null` when unknown or not applicable. */
   targetFromMe?: boolean | null;
+  /** Baileys' own message id — the dedupe key (0001). */
+  waMessageId?: string;
+  /**
+   * Phone-sent mirror (`supabase/migrations/0016_whatsapp_phone_sent_mirror.sql`)
+   * — `'outbound'` for a message the business sent from the connected phone
+   * (then `fromPhone` is the CONTACT's number, the recipient), `'inbound'`
+   * for an ordinary client message.
+   */
+  direction?: "inbound" | "outbound";
 }
 
 /**

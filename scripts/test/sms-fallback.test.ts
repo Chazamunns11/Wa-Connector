@@ -188,6 +188,9 @@ function makeWorld(accountOverrides: Partial<GhlAccount> = {}) {
         e.ghlMessageId = ghlMessageId;
       }
     },
+    async isMirroredPhoneSentMessage() {
+      return false;
+    },
     async findSmsFallbackEcho(locationId: string, contactId: string, nowIso: string) {
       if (fail.find) throw new Error("db down");
       const e = echoes.get(`${locationId}|${contactId}`);

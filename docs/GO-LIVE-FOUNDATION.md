@@ -74,10 +74,10 @@ two are filled in a second pass once both domains exist. That is expected.
    (`0002_accounts.sql`, `0003_activation_cap.sql`, `0004_reliability.sql`,
    `0005_whatsapp_sessions_phone_linked_at.sql`, `0006_ghl_location_numbers.sql`,
    `0007_whatsapp_groups.sql`, `0008_whatsapp_messages_group_jid.sql`,
-   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, `0011_message_events.sql`, `0012_workflow_triggers.sql`, `0013_keep_pending_text_until_reported.sql`, `0014_sms_fallback.sql`, `0015_function_search_path.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
+   `0009_group_management.sql`, `0010_missed_calls_and_receipts.sql`, `0011_message_events.sql`, `0012_workflow_triggers.sql`, `0013_keep_pending_text_until_reported.sql`, `0014_sms_fallback.sql`, `0015_function_search_path.sql`, `0016_whatsapp_phone_sent_mirror.sql`, and any after), once each. The bridge writes `whatsapp_sessions.phone_linked_at` on
    every logout, so 0005 must be applied before the bridge is deployed.
-   **Status, 17 Oct 2026:** 0001 to 0015 are applied to the live Supabase project `Wa-Connector` (cvqaghghuyxolpcfuzrw) and its schema was checked against these files. 0002 went in as three parts (`0002a`–`0002c`) and skipped its `update profiles` line, which was a no-op on the empty table.
-   Likewise apply 0001 to 0015 in order before deploying the bridge and the
+   **Status, 19 Oct 2026:** 0001 to 0016 are applied to the live Supabase project `Wa-Connector` (cvqaghghuyxolpcfuzrw) and its schema was checked against these files. 0002 went in as three parts (`0002a`–`0002c`) and skipped its `update profiles` line, which was a no-op on the empty table. 0016 was applied on 19 Oct 2026.
+   Likewise apply 0001 to 0016 in order before deploying the bridge and the
    app: 0002 to 0004 add accounts, activation and held messages / STOP
    opt-outs (see `docs/GO-LIVE-ACCOUNTS.md`), 0006 the several-numbers
    tables, 0007 the group tables, 0008 the `whatsapp_messages.group_jid`
@@ -577,6 +577,36 @@ Rules to know once it is on:
 - A quoted text reply starts with the quote on its own line. A quoted media
   reply is unchanged.
 
+### Messages sent from the phone: checks before go-live
+
+Without this, a GHL conversation shows the contact's messages and whatever
+GHL itself sent, but nothing the business typed on the connected phone or
+WhatsApp Web. One flag, off by default:
+
+- `WA_MIRROR_PHONE_SENT_ENABLED` (Railway, bridge)
+
+Deploy order:
+
+1. Apply migration 0016. The app selects its `direction` column, so deploy
+   the app only after it.
+2. Deploy the app.
+3. Set `WA_MIRROR_PHONE_SENT_ENABLED=true` on the bridge.
+
+Check on the first sub-account (GHL's request shape is assumed from its
+docs, not yet confirmed live):
+
+1. Send a WhatsApp message from the connected phone to an existing contact.
+   Within a minute it shows in that contact's GHL conversation as a sent
+   (outbound) message, not as a message from the contact.
+2. Send one from GHL. It shows once in GHL and arrives once on the contact's
+   phone.
+3. From the phone, send "STOP" to a test contact. It is mirrored, but the
+   contact is not opted out and no workflow trigger fires.
+
+If step 1's message lands on the contact's side, GHL is ignoring the
+`direction` field: turn the flag off. Messages from before the flag was
+turned on are not backfilled.
+
 ### Workflow triggers (GHL): checks before go-live
 
 Apply migrations 0012 and 0013 first (0001 to 0013 apply on Postgres 16).
@@ -763,9 +793,10 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `WA_VOICE_TRANSCODE_ENABLED` | No | `false` | Send non-opus GHL audio as voice notes via ffmpeg. Turn on only after `ffmpeg -version` works in a Railway shell; see the bridge README, "Voice notes" |
 | `WA_MISSED_CALLS_ENABLED` | No | `false` | Log calls that ring out unanswered as missed-call messages. Off until the real-device check passes |
 | `WA_READ_RECEIPTS_ENABLED` | No | `false` | Record delivered and read times for one-to-one messages. Off until the real-device check passes |
+| `WA_MIRROR_PHONE_SENT_ENABLED` | No | `false` | Mirror messages the business sends from the phone into the GHL conversation. Apply migration 0016 first |
 | `WA_MEDIA_BUCKET` | No | `wa-media` | Storage bucket for inbound media |
 
-That is 34 variables, all read in `config.ts`.
+That is 35 variables, all read in `config.ts`.
 
 ---
 

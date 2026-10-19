@@ -243,9 +243,9 @@ test("buildOutboundText: combined length over 4096 is refused, never truncated",
 // it. Restore the real `fetch` after every test.
 // ---------------------------------------------------------------------------
 
-async function withStubbedFetch<T>(impl: () => Promise<Response>, run: () => Promise<T>): Promise<T> {
+async function withStubbedFetch<T>(impl: (url?: unknown, init?: RequestInit) => Promise<Response>, run: () => Promise<T>): Promise<T> {
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async () => impl()) as typeof fetch;
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => impl(url, init)) as typeof fetch;
   try {
     return await run();
   } finally {
@@ -323,7 +323,43 @@ test("addGhlInboundMessage: a 2xx response is still 'ok' (fetch stub sanity chec
     async () => new Response("{}", { status: 200 }),
     () => addGhlInboundMessage("token", { contactId: "contact-1", conversationProviderId: "provider-1", body: "hi" })
   );
-  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(result, { ok: true, messageId: null });
+});
+
+test("addGhlInboundMessage: direction 'outbound' (phone-sent mirror) sends direction + date, and returns GHL's messageId", async () => {
+  let sentBody: Record<string, unknown> | null = null;
+  const result = await withStubbedFetch(
+    async (_url: unknown, init?: RequestInit) => {
+      sentBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ success: true, messageId: "ghl-msg-9", conversationId: "conv-1" }), { status: 200 });
+    },
+    () =>
+      addGhlInboundMessage("token", {
+        contactId: "contact-1",
+        conversationProviderId: "provider-1",
+        body: "on my way",
+        timestampIso: "2026-08-01T09:00:00.000Z",
+        direction: "outbound",
+      })
+  );
+  assert.deepEqual(result, { ok: true, messageId: "ghl-msg-9" });
+  assert.equal(sentBody!.direction, "outbound");
+  assert.equal(sentBody!.date, "2026-08-01T09:00:00.000Z");
+  assert.equal(sentBody!.timestamp, undefined);
+  assert.equal(sentBody!.type, "SMS");
+});
+
+test("addGhlInboundMessage: an ordinary inbound reply never sends a direction field", async () => {
+  let sentBody: Record<string, unknown> | null = null;
+  await withStubbedFetch(
+    async (_url: unknown, init?: RequestInit) => {
+      sentBody = JSON.parse(String(init?.body));
+      return new Response("{}", { status: 200 });
+    },
+    () => addGhlInboundMessage("token", { contactId: "contact-1", conversationProviderId: "provider-1", body: "hi", timestampIso: "2026-08-01T09:00:00.000Z" })
+  );
+  assert.equal(sentBody!.direction, undefined);
+  assert.equal(sentBody!.timestamp, "2026-08-01T09:00:00.000Z");
 });
 
 test("addGhlInboundMessage: a 401/403 is classified 'unauthorized' and RETRYABLE, never a terminal 'rejected' (final cross-phase review finding 6)", async () => {
@@ -423,6 +459,7 @@ function createFakeRepo(
   // attachment parts, keyed by their own id (mirrors `rows` above).
   const attachments = new Map<string, GhlOutboundAttachment>();
   const calls: FakeCall[] = [];
+  const mirroredGhlMessageIds = new Set<string>();
   // Reliability (T7): session summaries by tenant and opt-outs keyed `${tenantId}:${phone}`.
   const sessionsByTenant = new Map<string, WhatsappSessionSummary>();
   const optOuts = new Set<string>();
@@ -667,6 +704,11 @@ function createFakeRepo(
       const wanted = new Set(outboundMessageIds);
       return [...attachments.values()].filter((a) => wanted.has(a.outboundMessageId)).sort((a, b) => a.seq - b.seq);
     },
+    /** Phone-sent mirror (0016) — GHL message ids this fake treats as ones WE posted from a phone-sent message. */
+    async isMirroredPhoneSentMessage(input: { locationId: string; defaultTenantId: string; ghlMessageId: string; toPhone: string | null; body: string }) {
+      calls.push({ method: "isMirroredPhoneSentMessage", args: [input] });
+      return mirroredGhlMessageIds.has(input.ghlMessageId);
+    },
     async updateGhlOutboundAttachmentSendState(
       id: string,
       patch: { sendState: GhlOutboundAttachment["sendState"]; sendAttempts?: number; refusalReason?: string }
@@ -681,7 +723,7 @@ function createFakeRepo(
     },
   };
 
-  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls, groupsLeft, sessionsByTenant, optOuts, notOnWhatsapp, memory };
+  return { repo, accountsByLocation, rows, bridgeLedger, attachments, calls, groupsLeft, sessionsByTenant, optOuts, notOnWhatsapp, memory, mirroredGhlMessageIds };
 }
 
 function makeSendResult(overrides: Partial<Extract<BridgeSendResult, { ok: true }>["message"]> = {}): BridgeSendResult {
@@ -776,6 +818,17 @@ test("handleProviderOutboundMessage: a strict E.164 phone passes through unchang
   await handleProviderOutboundMessage(repo, samplePayloadFor({ phone: "+447700900123" }), deps);
   assert.equal(sendCalls.length, 1);
   assert.equal(sendCalls[0].to, "+447700900123");
+});
+
+test("handleProviderOutboundMessage: a message WE posted as a mirrored phone-sent message is never delivered over WhatsApp again (echo guard)", async () => {
+  const { repo, rows, mirroredGhlMessageIds } = createFakeRepo([makeAccount()]);
+  mirroredGhlMessageIds.add("ghl-msg-mirrored");
+  const { deps, sendCalls, statusCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "ghl-msg-mirrored" }), deps);
+  assert.deepEqual(outcome, { kind: "ignored", reason: "mirrored_phone_send" });
+  assert.equal(sendCalls.length, 0);
+  assert.equal(statusCalls.length, 0);
+  assert.equal(rows.size, 0, "no intake row for a mirrored echo");
 });
 
 test("handleProviderOutboundMessage: a bare GB mobile number normalises before the bridge ever sees it", async () => {

@@ -128,6 +128,23 @@ events.
 - The absence of a read receipt means nothing: people turn read receipts off.
 - Logs carry fixed strings and error names only: no message ids or JIDs.
 
+## Messages sent from the phone
+
+Without this, a message the business types on the connected phone (or
+WhatsApp Web) never reaches GoHighLevel, so a GHL conversation only shows the
+contact's side plus whatever GHL itself sent.
+
+- **Flag:** `WA_MIRROR_PHONE_SENT_ENABLED` (default `false`). On, a plain
+  one-to-one `fromMe` message is recorded with `direction = 'outbound'` and
+  `from_phone` set to the contact, and the app posts it to the contact's GHL
+  conversation as an outbound message. Group messages, reactions, edits and
+  deletes by the business are still dropped, and media is never captured.
+- **Never mirrored:** the bridge's own sends (each send's id is chosen and
+  registered before `sendMessage`, so its echo is recognised; the app also
+  re-checks the send ledger), and the "message yourself" chat.
+- **Deploy order:** apply migration `0016_whatsapp_phone_sent_mirror.sql`,
+  deploy the app, then set the flag.
+
 ## Edits, reactions, deletes and quoted replies
 
 The bridge records a contact's edits, reactions and "delete for everyone" as

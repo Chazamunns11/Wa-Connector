@@ -149,6 +149,9 @@ interface WhatsappInboundMessageRow {
   /** Message events (0011) — see `WhatsappInboundMessage.targetWaMessageId`/`targetFromMe`. */
   target_wa_message_id?: string | null;
   target_from_me?: boolean | null;
+  wa_message_id?: string;
+  /** Phone-sent mirror (0016) — see `WhatsappInboundMessage.direction`. */
+  direction?: "inbound" | "outbound";
 }
 
 function mapWhatsappInboundMessage(row: WhatsappInboundMessageRow): WhatsappInboundMessage {
@@ -176,6 +179,8 @@ function mapWhatsappInboundMessage(row: WhatsappInboundMessageRow): WhatsappInbo
         : null,
     targetWaMessageId: row.target_wa_message_id ?? null,
     targetFromMe: row.target_from_me ?? null,
+    waMessageId: row.wa_message_id,
+    direction: row.direction ?? "inbound",
   };
 }
 
@@ -198,7 +203,7 @@ const MEDIA_BUCKET = process.env.WA_MEDIA_BUCKET?.trim() || "wa-media";
 // is "apply before the portal build that reads these", and a group row read
 // without `group_jid` would be pushed as a one-to-one reply from its sender.
 const WHATSAPP_INBOUND_BASE_COLUMNS =
-  "id, coach_id, from_phone, body, message_type, received_at, processed_at, resolution, push_attempts, push_error, created_at, group_jid, sender_name, event_kind, target_wa_message_id, target_from_me";
+  "id, coach_id, from_phone, wa_message_id, body, message_type, received_at, processed_at, resolution, push_attempts, push_error, created_at, group_jid, sender_name, event_kind, target_wa_message_id, target_from_me, direction";
 const WHATSAPP_INBOUND_MEDIA_COLUMNS = "media_status, media_path, media_mime, media_size_bytes";
 
 /**
@@ -1012,6 +1017,8 @@ export class SupabaseGhlRepository implements GhlRepository {
       .is("group_jid", null)
       // A missed call is not a message: it never makes a number eligible for a direct add.
       .is("event_kind", null)
+      // Nor is a message the business sent them (phone-sent mirror, 0016).
+      .eq("direction", "inbound")
       .gte("received_at", since)
       .limit(1);
     if (error) throw error;
@@ -1603,13 +1610,48 @@ export class SupabaseGhlRepository implements GhlRepository {
     return (data?.length ?? 0) > 0;
   }
 
-  async resolveGhlInboundMessage(id: string, patch: { resolution: string; pushError: string | null }) {
+  async resolveGhlInboundMessage(id: string, patch: { resolution: string; pushError: string | null; ghlMessageId?: string | null }) {
     const supabase = getServiceClient();
-    const { error } = await supabase
-      .from("whatsapp_inbound_messages")
-      .update({ resolution: patch.resolution, push_error: patch.pushError })
-      .eq("id", id);
+    const update: Record<string, unknown> = { resolution: patch.resolution, push_error: patch.pushError };
+    if (patch.ghlMessageId) update.ghl_message_id = patch.ghlMessageId; // mirrored outbound rows only (0016).
+    const { error } = await supabase.from("whatsapp_inbound_messages").update(update).eq("id", id);
     if (error) throw error;
+  }
+
+  async wasWhatsappMessageSentByBridge(tenantId: string, waMessageId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("whatsapp_messages")
+      .select("id")
+      .eq("coach_id", tenantId)
+      .eq("wa_message_id", waMessageId)
+      .limit(1);
+    if (error) throw error;
+    return (data?.length ?? 0) > 0;
+  }
+
+  async isMirroredPhoneSentMessage(input: { locationId: string; defaultTenantId: string; ghlMessageId: string; toPhone: string | null; body: string }) {
+    const supabase = getServiceClient();
+    // GHL message ids are globally unique, so no tenant scoping is needed here.
+    const byId = await supabase.from("whatsapp_inbound_messages").select("id").eq("ghl_message_id", input.ghlMessageId).limit(1);
+    if (byId.error) throw byId.error;
+    if ((byId.data?.length ?? 0) > 0) return true;
+    if (!input.toPhone || !input.body) return false;
+    const numbers = await listAllLocationNumberTenants([input.locationId]);
+    const tenantIds = [...new Set([input.defaultTenantId, ...numbers.map((n) => n.tenantId)])];
+    // Mid-post: claimed (processed_at set) but not yet resolved.
+    const inFlight = await supabase
+      .from("whatsapp_inbound_messages")
+      .select("id")
+      .in("coach_id", tenantIds)
+      .eq("direction", "outbound")
+      .eq("from_phone", input.toPhone)
+      .eq("body", input.body)
+      .not("processed_at", "is", null)
+      .is("resolution", null)
+      .limit(1);
+    if (inFlight.error) throw inFlight.error;
+    return (inFlight.data?.length ?? 0) > 0;
   }
 
   async recordGhlInboundPushFailure(id: string, patch: { attempts: number; pushError: string; unclaim: boolean }) {

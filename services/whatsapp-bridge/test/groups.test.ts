@@ -23,6 +23,7 @@ import {
 import { SessionManager } from "../src/sessions.js";
 import { SessionPacer } from "../src/pacing.js";
 import { PendingWrites } from "../src/pending-writes.js";
+import { OwnSendRegistry } from "../src/inbound.js";
 import { BridgeStore, type MessageRecord } from "../src/store.js";
 import type { BridgeConfig } from "../src/config.js";
 
@@ -237,6 +238,7 @@ function makeHarness(opts: {
     reconnectAttempts: 0,
     stopping: false,
     pendingWrites: new PendingWrites(),
+    ownSends: new OwnSendRegistry(),
     mediaAbuseGate: null,
     recentlyCreated: new Map<string, number>(),
     enabledGroups: new Set(opts.enabledGroups ?? [GROUP_JID]),

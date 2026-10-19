@@ -189,11 +189,32 @@
  * row `getUnprocessedGhlInboundMessages` can ever return already comes from
  * a GHL-tenant fence at the SQL level, so this module structurally cannot
  * touch a coach's row.
+ *
+ * ============ PHONE-SENT MIRROR (migration 0016) ============ A row with
+ * `direction = 'outbound'` is a message the BUSINESS sent from the
+ * connected phone (the bridge's `WA_MIRROR_PHONE_SENT_ENABLED`); `fromPhone`
+ * is then the contact it was sent to. It takes its own short path
+ * (`processPhoneSentRow`) with the same claim / retry table / at-most-once
+ * rules as a reply, but none of a reply's side effects: no STOP/START
+ * keyword check (the business typing "STOP" is not the contact opting
+ * out), no workflow trigger, no number stickiness, no "on WhatsApp after
+ * all" memory. In order:
+ *   - a row whose WhatsApp id is on the bridge's own send ledger
+ *     (`wasWhatsappMessageSentByBridge`) is resolved `'skipped_own_send'`
+ *     with no GHL call: GHL originated that message and already shows it.
+ *     (The bridge filters these itself; this is the second line of defence.)
+ *   - the POST carries `direction: "outbound"` and the usual `[label] `
+ *     number prefix; a media row gets the "sent from the WhatsApp phone"
+ *     placeholder (outbound media is never captured).
+ *   - on success GHL's message id is stored (`ghl_message_id`) so the
+ *     provider webhook can refuse to deliver it again
+ *     (`isMirroredPhoneSentMessage`, src/lib/ghl-provider.ts).
  */
 import {
   addGhlInboundMessage,
   describeInboundMediaPlaceholder,
   describeMissedCall,
+  describeOutboundMediaPlaceholder,
   describeStoredMediaLabel,
   describeTooLargeMediaPlaceholder,
   ghlConversationProviderId,
@@ -252,6 +273,8 @@ export type GhlInboundRepo = GhlTokenRefreshRepo &
     | "listTriggerSubscriptions"
     // SMS fallback — a contact who messages us is on WhatsApp after all.
     | "forgetNotOnWhatsapp"
+    // Phone-sent mirror (0016) — the bridge's own sends are never mirrored.
+    | "wasWhatsappMessageSentByBridge"
   >;
 
 /**
@@ -267,7 +290,14 @@ export interface GhlInboundDeps extends GhlTokenRefreshDeps {
   upsertGroupContact: (accessToken: string, locationId: string, input: { name: string; groupKey: string }) => Promise<UpsertGhlContactResult>;
   addInboundMessage: (
     accessToken: string,
-    input: { contactId: string; conversationProviderId: string; body: string; timestampIso?: string; attachments?: string[] }
+    input: {
+      contactId: string;
+      conversationProviderId: string;
+      body: string;
+      timestampIso?: string;
+      attachments?: string[];
+      direction?: "outbound";
+    }
   ) => Promise<AddGhlInboundMessageResult>;
   /** T10 — only called when `GHL_SYNC_DND === "true"`. */
   setContactDnd: (accessToken: string, contactId: string, dnd: boolean) => Promise<{ ok: true } | { ok: false; error: string }>;
@@ -347,6 +377,8 @@ export interface DrainGhlInboundRepliesResult {
   groupNotEnabled: number;
   /** Missed calls older than `MISSED_CALL_STALE_MS` — `resolution: 'missed_call_stale'`, never posted. */
   staleMissedCalls: number;
+  /** Phone-sent mirror rows that turned out to be the bridge's own sends — `resolution: 'skipped_own_send'`, no GHL call. */
+  skippedOwnSend: number;
   /** Reactions and deletes the sub-account has not turned on, and event rows of an unknown kind — `resolution: 'event_suppressed'`, never posted. */
   eventsSuppressed: number;
   /** Rows this pass whose text was a STOP-type keyword and recorded an opt-out (idempotent, so a retried row can count again). */
@@ -413,6 +445,7 @@ export async function drainGhlInboundReplies(
     claimLost: 0,
     groupNotEnabled: 0,
     staleMissedCalls: 0,
+    skippedOwnSend: 0,
     eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
@@ -555,6 +588,8 @@ async function processGhlInboundRow(
   result: DrainGhlInboundRepliesResult,
   breaker: CircuitBreakerState
 ): Promise<void> {
+  if (row.direction === "outbound") return processPhoneSentRow(repo, deps, row, envProviderId, memos, result, breaker);
+
   await forgetNotOnWhatsappBestEffort(repo, row, memos);
 
   // Exhaustion pre-check — mirrors `src/lib/ghl-provider.ts`'s
@@ -837,6 +872,117 @@ async function processGhlInboundRow(
   // request (a concurrent re-auth, a clock-skew edge, an in-flight
   // rotation) — not that GHL will refuse this message forever. A later pass
   // re-resolves the token from scratch before retrying.
+  await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: post.error, unclaim: true });
+  result.retried++;
+}
+
+/**
+ * Phone-sent mirror (file header) — one `direction = 'outbound'` row: the
+ * reply pipeline's exhaustion check, token, contact upsert, claim, POST and
+ * retry table, with none of a reply's side effects.
+ */
+async function processPhoneSentRow(
+  repo: GhlInboundRepo,
+  deps: GhlInboundDeps,
+  row: WhatsappInboundMessage,
+  envProviderId: string,
+  memos: PassMemos,
+  result: DrainGhlInboundRepliesResult,
+  breaker: CircuitBreakerState
+): Promise<void> {
+  if (row.pushAttempts >= MAX_PUSH_ATTEMPTS) {
+    const claimed = await repo.claimWhatsappInboundMessage(row.id);
+    if (!claimed) {
+      result.claimLost++;
+      return;
+    }
+    await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_push_failed", pushError: REASON_PUSH_EXHAUSTED });
+    result.failed++;
+    return;
+  }
+
+  if (row.waMessageId && (await repo.wasWhatsappMessageSentByBridge(row.coachId, row.waMessageId))) {
+    const claimed = await repo.claimWhatsappInboundMessage(row.id);
+    if (!claimed) {
+      result.claimLost++;
+      return;
+    }
+    await repo.resolveGhlInboundMessage(row.id, { resolution: "skipped_own_send", pushError: null });
+    result.skippedOwnSend++;
+    return;
+  }
+
+  const account = await repo.getGhlAccountByTenantId(row.coachId);
+  if (!account) {
+    await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: REASON_ACCOUNT_NOT_FOUND, unclaim: false });
+    result.retried++;
+    return;
+  }
+  const accessToken = await resolveGhlAccessToken(repo, deps, account);
+  if (!accessToken) {
+    await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: REASON_NO_ACCESS_TOKEN, unclaim: false });
+    result.retried++;
+    return;
+  }
+  const conversationProviderId = account.conversationProviderId ?? envProviderId;
+
+  const memoKey = `${row.coachId}:${row.fromPhone}`;
+  let contactId = memos.contactIdByKey.get(memoKey) ?? null;
+  if (!contactId) {
+    const upsert = await deps.upsertContact(accessToken, account.locationId, row.fromPhone);
+    if (!upsert.ok) {
+      breaker.consecutiveContactUpsertFailures++;
+      await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: upsert.error, unclaim: false });
+      result.retried++;
+      return;
+    }
+    breaker.consecutiveContactUpsertFailures = 0;
+    contactId = upsert.contactId;
+    memos.contactIdByKey.set(memoKey, contactId);
+  }
+
+  let locationNumbers = memos.numbersByLocation.get(account.locationId);
+  if (!locationNumbers) {
+    locationNumbers = await repo.listLocationNumbers(account.locationId);
+    memos.numbersByLocation.set(account.locationId, locationNumbers);
+  }
+  const numberPrefix = inboundNumberPrefix(locationNumbers, row.coachId);
+
+  const claimed = await repo.claimWhatsappInboundMessage(row.id);
+  if (!claimed) {
+    result.claimLost++;
+    return;
+  }
+
+  const post = await deps.addInboundMessage(accessToken, {
+    contactId,
+    conversationProviderId,
+    body: numberPrefix + (row.body ?? describeOutboundMediaPlaceholder(row.messageType)),
+    timestampIso: row.receivedAt,
+    direction: "outbound",
+  });
+
+  if (post.ok) {
+    breaker.consecutivePostFailures = 0;
+    await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_pushed", pushError: null, ghlMessageId: post.messageId ?? null });
+    result.pushed++;
+    return;
+  }
+
+  breaker.consecutivePostFailures++;
+  if (post.kind === "timeout_uncertain") {
+    await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_push_uncertain", pushError: post.error });
+    deps.notify(
+      `A phone-sent WhatsApp message push to GHL location ${account.locationId} (${account.label}) timed out — outcome uncertain, check that GHL conversation by hand (row ${row.id}).`
+    );
+    result.uncertain++;
+    return;
+  }
+  if (post.kind === "rejected") {
+    await repo.resolveGhlInboundMessage(row.id, { resolution: "ghl_rejected", pushError: post.error });
+    result.rejected++;
+    return;
+  }
   await repo.recordGhlInboundPushFailure(row.id, { attempts: row.pushAttempts + 1, pushError: post.error, unclaim: true });
   result.retried++;
 }

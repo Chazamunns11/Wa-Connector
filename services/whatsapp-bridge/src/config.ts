@@ -154,6 +154,14 @@ export interface BridgeConfig {
    * dropped and quotes ignored, exactly as before.
    */
   inboundEventsEnabled: boolean;
+  /**
+   * Phone-sent mirror (src/inbound.ts, "PHONE-SENT MIRROR") — off = every
+   * message the business sends from the phone is dropped, exactly as
+   * before. On = they are recorded as outbound rows the portal posts into
+   * the GHL conversation, so GHL shows both sides. Apply migration 0016
+   * first.
+   */
+  mirrorPhoneSentEnabled: boolean;
 }
 
 function required(name: string): string {
@@ -239,6 +247,7 @@ export function loadConfig(): BridgeConfig {
     missedCallsEnabled: boolWithDefault("WA_MISSED_CALLS_ENABLED", false),
     readReceiptsEnabled: boolWithDefault("WA_READ_RECEIPTS_ENABLED", false),
     inboundEventsEnabled: boolWithDefault("WA_INBOUND_EVENTS_ENABLED", false),
+    mirrorPhoneSentEnabled: boolWithDefault("WA_MIRROR_PHONE_SENT_ENABLED", false),
   };
 
   if (config.lockTtlMs <= config.lockHeartbeatMs) {
