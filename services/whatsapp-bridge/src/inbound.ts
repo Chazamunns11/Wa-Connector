@@ -45,7 +45,9 @@
  *      reliably for the linked device's own sends — including a coach
  *      texting their own prospect by hand, AND our own bridge's
  *      `sock.sendMessage` calls echoing back through this same event.
- *      Neither is a reply.
+ *      Neither is a reply. The ONE exception is the opt-in phone-sent
+ *      mirror (see "PHONE-SENT MIRROR" below): with it on, a 1:1 `fromMe`
+ *      message runs the rest of this chain as an OUTBOUND row instead.
  *   3. `remoteJid` must be a 1:1 chat: `isPnUser(jid) || isLidUser(jid)` —
  *      OR an opted-in WhatsApp group (see "GROUPS" below): an `@g.us` JID
  *      passes only when it is well-formed (`isGroupJid`, src/groups.ts) AND
@@ -181,6 +183,35 @@
  * was removed together with the coach path. Every OTHER step in the filter
  * chain above (1-7) runs exactly as before.
  *
+ * PHONE-SENT MIRROR (opt-in — `WA_MIRROR_PHONE_SENT_ENABLED`;
+ * `InboundDeps.phoneSentMirror`): without it, a message the business types
+ * on the connected phone (or WhatsApp Web, or any other linked device)
+ * never reaches GHL, so the GHL conversation only ever shows the client's
+ * half plus whatever GHL itself sent. With it on, a 1:1 `fromMe` message
+ * passes step 2 and runs steps 3-6, then:
+ *   - our OWN bridge sends are dropped `own_bridge_send` — GHL already has
+ *     those (it originated them). `sessions.ts` pre-generates every send's
+ *     message id and registers it in `OwnSendRegistry` BEFORE
+ *     `sock.sendMessage`, so Baileys' own-event echo (an `'append'` upsert
+ *     fired on `process.nextTick` after relay) can never beat the
+ *     registration. The portal drain re-checks against
+ *     `whatsapp_messages.wa_message_id` as a second line of defence.
+ *   - the contact is the CHAT (`remoteJid`), never `remoteJidAlt`: on a
+ *     `fromMe` stanza Baileys fills `remoteJidAlt` from the SENDER's alt
+ *     (`sender_pn`), i.e. the business's OWN number — trusting it would
+ *     file the message under the business itself. A PN chat maps directly;
+ *     a LID chat goes straight to `needs_lid_resolution` (the LID-mapping
+ *     store), and a chat that resolves to the business's own number (the
+ *     "message yourself" chat) is dropped `own_chat`.
+ *   - the business's own group messages, reactions, edits and deletes are
+ *     still dropped (`from_me`): only plain 1:1 messages are mirrored.
+ *   - the row is written with `direction = 'outbound'` (migration 0016),
+ *     `from_phone` holding the CONTACT's number, and media is never
+ *     captured. The portal drain posts it to GHL as an outbound message,
+ *     with no opt-out keyword check, trigger or stickiness.
+ * The same `'append'` recency gate (step 1) keeps first-link history from
+ * being replayed into GHL.
+ *
  * DEDUPE: Baileys redelivers on reconnect/offline-resync, so intake must be
  * idempotent on `key.id`. The AUTHORITATIVE mechanism is 0048's unique
  * `(coach_id, wa_message_id)` constraint — `BridgeStore.recordInboundMessage`
@@ -213,7 +244,11 @@ export type InboundDropReason =
   | "no_content"
   | "edit_reaction_or_system"
   | "reaction_removed"
-  | "unmappable_sender";
+  | "unmappable_sender"
+  /** Phone-sent mirror only: an echo of this bridge's own `sock.sendMessage` — GHL already has it. */
+  | "own_bridge_send"
+  /** Phone-sent mirror only: the business messaging its own number ("message yourself"). */
+  | "own_chat";
 
 /** Message events (WA_INBOUND_EVENTS_ENABLED) — 0010's `event_kind` values this classifier produces. */
 export type InboundEventKind = "edit" | "reaction" | "delete";
@@ -228,6 +263,8 @@ export interface ClassifyOptions {
    * `renderQuotePrefix` in front of its body.
    */
   events: boolean;
+  /** Phone-sent mirror (file header) — classify 1:1 `fromMe` messages as outbound rows instead of dropping them. */
+  includeFromMe?: boolean;
 }
 
 const EVENTS_OFF: ClassifyOptions = { events: false };
@@ -283,6 +320,13 @@ export interface InboundReply {
   targetWaMessageId?: string;
   /** Whether that target is one of OUR messages (true), the contact's (false), or unknown (null). Event rows only. */
   targetFromMe?: boolean | null;
+  /**
+   * Phone-sent mirror (file header) — `"outbound"` for a message the
+   * business sent from the connected phone, in which case `fromPhone` is
+   * the CONTACT's number (the recipient), not the sender's. Absent for an
+   * ordinary inbound reply.
+   */
+  direction?: "outbound";
 }
 
 /**
@@ -680,7 +724,8 @@ export function classifyInboundMessage(
     // Recent enough to be a genuine offline-resync reply — fall through and
     // run the exact same filter chain a 'notify' message would.
   }
-  if (msg.key.fromMe) return { kind: "dropped", reason: "from_me" };
+  const fromMe = msg.key.fromMe === true;
+  if (fromMe && !options.includeFromMe) return { kind: "dropped", reason: "from_me" };
 
   const remoteJid = msg.key.remoteJid ?? undefined;
   if (!remoteJid) return { kind: "dropped", reason: "not_one_to_one" };
@@ -699,6 +744,10 @@ export function classifyInboundMessage(
   }
 
   if (!msg.message) return { kind: "dropped", reason: "no_content" }; // stub/system row.
+
+  // Phone-sent mirror (file header): only the business's plain 1:1 messages
+  // are mirrored — its group messages, reactions, edits and deletes never.
+  if (fromMe && (isGroup || containsRejectedContentAtAnyDepth(msg.message))) return { kind: "dropped", reason: "from_me" };
 
   // Step 5 — see `containsRejectedContentAtAnyDepth`'s own JSDoc (adversarial-
   // review fix, lens 2 finding 4): recurses through the same transparent
@@ -754,7 +803,9 @@ export function classifyInboundMessage(
   // message, since normalisation already stripped the wrapper away by this
   // point). Everything else about this reply (body/messageType/dedupe) is
   // completely unaffected — only `mediaRef` is forced null.
-  const mediaRef = isViewOnceAtAnyDepth(msg.message) ? null : buildMediaRef(contentType, normalised[contentType as keyof typeof normalised]);
+  // A phone-sent (outbound) message is never captured at all.
+  const mediaRef =
+    fromMe || isViewOnceAtAnyDepth(msg.message) ? null : buildMediaRef(contentType, normalised[contentType as keyof typeof normalised]);
 
   const pending: Omit<InboundReply, "fromPhone"> = {
     waMessageId,
@@ -765,6 +816,7 @@ export function classifyInboundMessage(
     groupJid: isGroup ? remoteJid : null,
     senderName: isGroup ? sanitizeSenderName(msg.pushName) : null,
   };
+  if (fromMe) pending.direction = "outbound";
 
   return attributeSender(msg, remoteJid, isGroup, pending);
 }
@@ -776,7 +828,9 @@ function attributeSender(msg: WAMessage, remoteJid: string, isGroup: boolean, pe
   // A group message with no participant has no sender to attribute.
   const senderJid = isGroup ? (msg.key.participant ?? undefined) : remoteJid;
   if (!senderJid) return { kind: "dropped", reason: "unmappable_sender" };
-  const senderJidAlt = isGroup ? msg.key.participantAlt : msg.key.remoteJidAlt;
+  // Phone-sent mirror (file header): `remoteJidAlt` on a `fromMe` stanza is
+  // the business's OWN alt, never the contact's — so it is never consulted.
+  const senderJidAlt = isGroup ? msg.key.participantAlt : msg.key.fromMe ? undefined : msg.key.remoteJidAlt;
   const resolution = resolveSenderE164(senderJid, senderJidAlt ?? undefined);
   if (resolution.kind === "unmappable") return { kind: "dropped", reason: "unmappable_sender" };
   if (resolution.kind === "unresolved_lid") {
@@ -942,6 +996,7 @@ function sanitizeSenderName(pushName: string | null | undefined): string | null 
 
 export interface RecordInboundInput {
   coachId: string;
+  /** The client's number — for a `direction: "outbound"` row, the recipient of the business's message. */
   fromPhone: string;
   waMessageId: string;
   body: string | null;
@@ -968,6 +1023,56 @@ export interface RecordInboundInput {
   targetWaMessageId?: string;
   /** Event rows only (migration 0011): whether that target is ours; null when unknown. */
   targetFromMe?: boolean | null;
+  /** Phone-sent mirror (file header) — `"outbound"` writes `direction = 'outbound'` (0016). Omitted means an ordinary inbound reply. */
+  direction?: "outbound";
+}
+
+/**
+ * Phone-sent mirror (file header) — the ids of messages THIS process sent
+ * via `sock.sendMessage`, registered before the send so the own-event echo
+ * can always be recognised. Bounded and time-limited: an echo arrives within
+ * milliseconds, so ten minutes is generous, and the cap only matters for a
+ * pathological burst (oldest entries are evicted first).
+ */
+export class OwnSendRegistry {
+  private readonly sentAt = new Map<string, number>();
+
+  constructor(
+    private readonly ttlMs: number = 10 * 60_000,
+    private readonly maxEntries: number = 5_000
+  ) {}
+
+  add(waMessageId: string): void {
+    this.prune();
+    this.sentAt.delete(waMessageId);
+    this.sentAt.set(waMessageId, Date.now());
+    while (this.sentAt.size > this.maxEntries) {
+      const oldest = this.sentAt.keys().next().value;
+      if (oldest === undefined) break;
+      this.sentAt.delete(oldest);
+    }
+  }
+
+  has(waMessageId: string): boolean {
+    const at = this.sentAt.get(waMessageId);
+    return at !== undefined && Date.now() - at <= this.ttlMs;
+  }
+
+  private prune(): void {
+    const cutoff = Date.now() - this.ttlMs;
+    for (const [id, at] of this.sentAt) {
+      if (at >= cutoff) break; // insertion-ordered, so everything after is newer.
+      this.sentAt.delete(id);
+    }
+  }
+}
+
+/** Phone-sent mirror (file header) — wired by `sessions.ts` only when `WA_MIRROR_PHONE_SENT_ENABLED` is on. */
+export interface PhoneSentMirror {
+  /** `true` iff this process sent `waMessageId` itself (`OwnSendRegistry.has`). */
+  isOwnSend(waMessageId: string): boolean;
+  /** The connected number (strict E.164), or `null` before pairing completes. */
+  ownPhone(): string | null;
 }
 
 /**
@@ -1029,6 +1134,8 @@ export interface InboundDeps {
    * means today's behaviour exactly: events dropped, quotes ignored.
    */
   events?: boolean;
+  /** Phone-sent mirror (file header) — `undefined` (the default) means every `fromMe` message is dropped exactly as before. */
+  phoneSentMirror?: PhoneSentMirror;
   log: Logger;
 }
 
@@ -1045,9 +1152,13 @@ export async function processInboundBatch(
   coachId: string,
   deps: InboundDeps
 ): Promise<void> {
+  const mirror = deps.phoneSentMirror;
   for (const msg of messages) {
     try {
-      const result = classifyInboundMessage(msg, batchType, deps.enabledGroups ?? NO_GROUPS, { events: deps.events === true });
+      const result = classifyInboundMessage(msg, batchType, deps.enabledGroups ?? NO_GROUPS, {
+        events: deps.events === true,
+        includeFromMe: mirror !== undefined,
+      });
       if (result.kind === "dropped") {
         deps.log.debug({ coachId, reason: result.reason }, "inbound message dropped");
         continue;
@@ -1077,6 +1188,34 @@ export async function processInboundBatch(
       } else {
         reply = result.reply;
       }
+      if (reply.direction === "outbound") {
+        // Phone-sent mirror (file header). `mirror` is necessarily set here —
+        // `classifyInboundMessage` only yields outbound with `includeFromMe`.
+        const ownPhone = mirror!.ownPhone();
+        const reason: InboundDropReason | null = mirror!.isOwnSend(reply.waMessageId)
+          ? "own_bridge_send"
+          : ownPhone !== null && reply.fromPhone === ownPhone
+            ? "own_chat"
+            : null;
+        if (reason) {
+          deps.log.debug({ coachId, reason }, "phone-sent message not mirrored");
+          continue;
+        }
+        const { fresh } = await deps.recordInboundMessage({
+          coachId,
+          fromPhone: reply.fromPhone,
+          waMessageId: reply.waMessageId,
+          body: reply.body,
+          messageType: reply.messageType,
+          receivedAt: reply.receivedAt,
+          groupJid: null,
+          senderName: null,
+          direction: "outbound",
+        });
+        if (fresh) deps.schedulePoke();
+        continue;
+      }
+
       // No ledger gate — every session is a GHL location (file header, "NO
       // LEDGER GATE"): a reply surviving the filter chain above is recorded.
 

@@ -1122,7 +1122,8 @@ export async function setGhlContactDnd(accessToken: string, contactId: string, d
 const GHL_SUPPORTS_ATTACHMENTS_FIELD = true;
 
 export type AddGhlInboundMessageResult =
-  | { ok: true }
+  /** `messageId` is GHL's id for the created message, or `null` when the response didn't carry one (never treated as a failure). */
+  | { ok: true; messageId?: string | null }
   | { ok: false; kind: "rejected" | "rate_limited" | "server_error" | "unauthorized" | "unreachable" | "timeout_uncertain"; error: string };
 
 /**
@@ -1177,10 +1178,25 @@ export type AddGhlInboundMessageResult =
  * information degrades to a plain link line appended to `message` — still a
  * strict improvement over the old placeholder-only path, never a silent
  * drop.
+ *
+ * PHONE-SENT MIRROR (migration 0016) — `direction: "outbound"` records a
+ * message the business sent from the connected phone. GHL's
+ * `/conversations/messages/outbound` endpoint only accepts `type: "Call"`;
+ * this endpoint's documented `direction` field is how a provider adds an
+ * outbound SMS-type message to the thread. Its time goes in `date` (the
+ * field GHL's docs name). ASSUMED, NOT CONFIRMED against a live location —
+ * verify on the first mirrored message (docs/GHL-PROVIDER-GO-LIVE.md).
  */
 export async function addGhlInboundMessage(
   accessToken: string,
-  input: { contactId: string; conversationProviderId: string; body: string; timestampIso?: string; attachments?: string[] }
+  input: {
+    contactId: string;
+    conversationProviderId: string;
+    body: string;
+    timestampIso?: string;
+    attachments?: string[];
+    direction?: "outbound";
+  }
 ): Promise<AddGhlInboundMessageResult> {
   try {
     const attachments = input.attachments?.filter((url) => url.length > 0) ?? [];
@@ -1194,7 +1210,12 @@ export async function addGhlInboundMessage(
           : input.body,
     };
     if (attachments.length > 0 && GHL_SUPPORTS_ATTACHMENTS_FIELD) payload.attachments = attachments;
-    if (input.timestampIso) payload.timestamp = input.timestampIso;
+    if (input.direction === "outbound") {
+      payload.direction = "outbound";
+      if (input.timestampIso) payload.date = input.timestampIso;
+    } else if (input.timestampIso) {
+      payload.timestamp = input.timestampIso;
+    }
     const res = await fetch(`${API_BASE}/conversations/messages/inbound`, {
       method: "POST",
       headers: {
@@ -1227,7 +1248,10 @@ export async function addGhlInboundMessage(
       if (res.status >= 500) return { ok: false, kind: "server_error", error: `GHL inbound message rejected (HTTP ${res.status})` };
       return { ok: false, kind: "rejected", error: `GHL inbound message rejected (HTTP ${res.status})` };
     }
-    return { ok: true };
+    // The message is already created at this point — a body we can't read
+    // or parse only costs us the id, never the success.
+    const json = (await res.json().catch(() => null)) as { messageId?: unknown } | null;
+    return { ok: true, messageId: typeof json?.messageId === "string" ? json.messageId : null };
   } catch (err) {
     if (err instanceof Error && err.name === "TimeoutError") {
       console.error("[ghl] conversations/messages/inbound timed out — outcome uncertain:", err);
@@ -1486,6 +1510,21 @@ const STORED_MEDIA_LABEL_DEFAULT = "File received on WhatsApp";
 /** Plan §6.2 step 2 — the fixed label for a `media_status = 'stored'` row (attachment present, so the placeholder's "view it on the connected phone" tail no longer applies). */
 export function describeStoredMediaLabel(messageType: string): string {
   return STORED_MEDIA_LABELS[messageType] ?? STORED_MEDIA_LABEL_DEFAULT;
+}
+
+/** Phone-sent mirror (0016) — what a mirrored phone-sent media message reads as in GHL. The bridge never captures outbound media, so there is no file to attach. */
+const OUTBOUND_MEDIA_PLACEHOLDERS: Readonly<Record<string, string>> = {
+  imageMessage: "[Photo sent from the WhatsApp phone]",
+  audioMessage: "[Voice note sent from the WhatsApp phone]",
+  pttMessage: "[Voice note sent from the WhatsApp phone]",
+  videoMessage: "[Video sent from the WhatsApp phone]",
+  stickerMessage: "[Sticker sent from the WhatsApp phone]",
+  documentMessage: "[Document sent from the WhatsApp phone]",
+};
+const OUTBOUND_MEDIA_PLACEHOLDER_DEFAULT = "[WhatsApp message sent from the phone]";
+
+export function describeOutboundMediaPlaceholder(messageType: string): string {
+  return OUTBOUND_MEDIA_PLACEHOLDERS[messageType] ?? OUTBOUND_MEDIA_PLACEHOLDER_DEFAULT;
 }
 
 /** Plan §6.3's over-cap row — the honest placeholder survives, worded specifically for "we saw it, it was too big" rather than the generic "not fetched at all" wording `describeInboundMediaPlaceholder` uses. */

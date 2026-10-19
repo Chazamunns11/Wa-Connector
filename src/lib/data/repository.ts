@@ -600,7 +600,27 @@ export interface GhlRepository {
    * `pushError: null` clears any previously-stamped retryable-failure string
    * on a genuine success (`'ghl_pushed'`).
    */
-  resolveGhlInboundMessage(id: string, patch: { resolution: string; pushError: string | null }): Promise<void>;
+  resolveGhlInboundMessage(id: string, patch: { resolution: string; pushError: string | null; ghlMessageId?: string | null }): Promise<void>;
+
+  /**
+   * Phone-sent mirror (migration 0016) — `true` iff the bridge itself sent
+   * the WhatsApp message `waMessageId` for this tenant (it is on the send
+   * ledger, `whatsapp_messages.wa_message_id`). The GHL drain's second line
+   * of defence against mirroring a GHL-originated message back into GHL
+   * (the bridge's own `OwnSendRegistry` is the first).
+   */
+  wasWhatsappMessageSentByBridge(tenantId: string, waMessageId: string): Promise<boolean>;
+
+  /**
+   * Phone-sent mirror (migration 0016) — echo guard for the provider
+   * webhook. `true` iff this GHL message is one WE posted as a mirrored
+   * phone-sent message: either its id matches a stored `ghl_message_id`, or
+   * a mirrored row to the same contact, on any of the location's numbers,
+   * with the identical body is mid-post right now (claimed, not yet
+   * resolved — the window in which GHL could in theory echo it before we
+   * have its id).
+   */
+  isMirroredPhoneSentMessage(input: { locationId: string; defaultTenantId: string; ghlMessageId: string; toPhone: string | null; body: string }): Promise<boolean>;
 
   /**
    * Bounded-retry bookkeeping for a GHL-tenant row's push attempt that

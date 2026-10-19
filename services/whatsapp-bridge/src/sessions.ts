@@ -105,6 +105,7 @@ import makeWASocket, {
   DisconnectReason,
   downloadContentFromMessage,
   fetchLatestBaileysVersion,
+  generateMessageIDV2,
   makeCacheableSignalKeyStore,
 } from "@whiskeysockets/baileys";
 import type { WASocket } from "@whiskeysockets/baileys";
@@ -147,7 +148,7 @@ import {
   type ParticipantResult,
   type ParticipantsRequest,
 } from "./group-management.js";
-import { processInboundBatch, type InboundMediaRef } from "./inbound.js";
+import { OwnSendRegistry, processInboundBatch, type InboundMediaRef } from "./inbound.js";
 import { MissedCallTracker } from "./calls.js";
 import { ReceiptApplier } from "./receipts.js";
 import { MediaAbuseGate } from "./media-abuse-gate.js";
@@ -269,6 +270,12 @@ interface Session {
    * reintroducing the exact bug this whole package fixes.
    */
   pendingWrites: PendingWrites;
+  /**
+   * Phone-sent mirror (src/inbound.ts) — ids of every message this session
+   * sent itself, so their own-event echo is never mirrored back into GHL.
+   * Lives on the Session (not the socket) so it survives reconnects.
+   */
+  ownSends: OwnSendRegistry;
   /**
    * Media plan (docs/MEDIA-PLAN.md §9) — abuse-cap counters for inbound media
    * capture, constructed once per session (survives socket bounces, exactly
@@ -900,6 +907,7 @@ export class SessionManager {
       reconnectAttempts: 0,
       stopping: false,
       pendingWrites: new PendingWrites(),
+      ownSends: new OwnSendRegistry(),
       mediaAbuseGate: new MediaAbuseGate(this.config.inboundMediaPerSenderDaily, this.config.inboundMediaPerTenantDaily, {
         countSenderToday: (tenantId, senderPhone) => this.store.countInboundMediaAttemptsForSenderToday(tenantId, senderPhone),
         countTenantToday: (tenantId) => this.store.countInboundMediaAttemptsForTenantToday(tenantId),
@@ -1252,6 +1260,10 @@ export class SessionManager {
         // Edits, reactions, deletes and quoted replies (src/inbound.ts).
         // Off = events dropped and quotes ignored, exactly as before.
         events: this.config.inboundEventsEnabled,
+        // Phone-sent mirror (src/inbound.ts) — behind its own switch.
+        phoneSentMirror: this.config.mirrorPhoneSentEnabled
+          ? { isOwnSend: (id) => session.ownSends.has(id), ownPhone: () => session.phoneNumber }
+          : undefined,
         log: this.log,
       }).catch((err) => {
         // processInboundBatch is itself per-message try/catch'd — this
@@ -1727,8 +1739,13 @@ export class SessionManager {
           session.pacer.recordSend(units); // count the ATTEMPT, in cap units (5 for a group) — see pacer JSDoc.
           session.inFlightUnits = 0; // now in sentToday — never count them twice.
           try {
+            // Phone-sent mirror (src/inbound.ts) — the id is chosen HERE and
+            // registered before the send, so Baileys' own-event echo of this
+            // message can never be mistaken for one typed on the phone.
+            const waMessageId = generateMessageIDV2(sock.user?.id);
+            session.ownSends.add(waMessageId);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Baileys' AnyMessageContent union is intentionally not re-imported into media.ts (see buildBaileysMediaContent's own JSDoc); both branches above already produce a shape Baileys accepts.
-            const sent = await sock.sendMessage(jid, messageContent as any);
+            const sent = await sock.sendMessage(jid, messageContent as any, { messageId: waMessageId });
             await recordSent(this.store, this.outboundPoke, record.id, sent?.key?.id ?? null);
             // An ack may have beaten markMessageSent; apply it now (never throws).
             if (this.receipts && sent?.key?.id) await this.receipts.afterSent(session.coachId, sent.key.id);

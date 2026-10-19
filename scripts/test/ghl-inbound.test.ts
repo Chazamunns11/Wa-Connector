@@ -245,7 +245,12 @@ function createFakeRepo(
       row.pushError = patch.pushError;
       if (patch.unclaim) row.processedAt = null;
     },
-    async resolveGhlInboundMessage(id: string, patch: { resolution: string; pushError: string | null }) {
+    /** Phone-sent mirror (0016) — a wa id starting "BRIDGE" is one the bridge sent itself. */
+    async wasWhatsappMessageSentByBridge(tenantId: string, waMessageId: string) {
+      calls.push({ method: "wasWhatsappMessageSentByBridge", args: [tenantId, waMessageId] });
+      return waMessageId.startsWith("BRIDGE");
+    },
+    async resolveGhlInboundMessage(id: string, patch: { resolution: string; pushError: string | null; ghlMessageId?: string | null }) {
       calls.push({ method: "resolveGhlInboundMessage", args: [id, patch] });
       const row = rowsById.get(id);
       if (!row) throw new Error(`no such row ${id}`);
@@ -306,12 +311,12 @@ function makeDeps(overrides: Partial<GhlInboundDeps> = {}): {
   deps: GhlInboundDeps;
   upsertCalls: { accessToken: string; locationId: string; phoneE164: string }[];
   groupUpsertCalls: { accessToken: string; locationId: string; name: string; groupKey: string }[];
-  postCalls: { accessToken: string; contactId: string; conversationProviderId: string; body: string; timestampIso?: string }[];
+  postCalls: { accessToken: string; contactId: string; conversationProviderId: string; body: string; timestampIso?: string; direction?: "outbound" }[];
   notifyCalls: string[];
 } {
   const upsertCalls: { accessToken: string; locationId: string; phoneE164: string }[] = [];
   const groupUpsertCalls: { accessToken: string; locationId: string; name: string; groupKey: string }[] = [];
-  const postCalls: { accessToken: string; contactId: string; conversationProviderId: string; body: string; timestampIso?: string }[] = [];
+  const postCalls: { accessToken: string; contactId: string; conversationProviderId: string; body: string; timestampIso?: string; direction?: "outbound" }[] = [];
   const notifyCalls: string[] = [];
   const deps: GhlInboundDeps = {
     upsertContact: async (accessToken, locationId, phoneE164) => {
@@ -357,6 +362,7 @@ test("drainGhlInboundReplies: GHL_CONVERSATION_PROVIDER_ID unset -> zero repo re
     claimLost: 0,
     groupNotEnabled: 0,
     staleMissedCalls: 0,
+    skippedOwnSend: 0,
     eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
@@ -747,6 +753,7 @@ test("drainGhlInboundReplies: the LIST call itself throwing -> an all-zero resul
     claimLost: 0,
     groupNotEnabled: 0,
     staleMissedCalls: 0,
+    skippedOwnSend: 0,
     eventsSuppressed: 0,
     optedOut: 0,
     optedIn: 0,
@@ -2017,4 +2024,89 @@ test("fallback: a row for a tenant with no account never clears anything", async
   const { repo, calls } = createFakeRepo([], [makeRow()]);
   await drainGhlInboundReplies(repo, makeDeps().deps);
   assert.equal(calls.some((c) => c.method === "forgetNotOnWhatsapp"), false);
+});
+
+// ---------------------------------------------------------------------------
+// Phone-sent mirror (migration 0016) — direction = 'outbound' rows: messages
+// the business sent from the connected phone, posted into the same GHL
+// conversation so both sides of the chat show, with none of a reply's side
+// effects.
+// ---------------------------------------------------------------------------
+
+test("phone-sent mirror: an outbound row is posted with direction 'outbound' to the CONTACT, and GHL's message id is stored", async () => {
+  const row = makeRow({ direction: "outbound", waMessageId: "PHONE1", fromPhone: "+447700900555", body: "see you at 3", receivedAt: "2026-08-01T09:00:00.000Z" });
+  const { repo, rowsById, calls } = createFakeRepo([makeAccount()], [row]);
+  const { deps, upsertCalls, postCalls } = makeDeps({
+    addInboundMessage: async (accessToken, input) => {
+      postCalls.push({ accessToken, ...input });
+      return { ok: true, messageId: "ghl-msg-1" };
+    },
+  });
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(upsertCalls[0]?.phoneE164, "+447700900555", "the contact is the recipient of the phone-sent message");
+  assert.equal(postCalls[0]?.direction, "outbound");
+  assert.equal(postCalls[0]?.body, "see you at 3");
+  assert.equal(postCalls[0]?.timestampIso, "2026-08-01T09:00:00.000Z");
+  assert.equal(rowsById.get(row.id)?.resolution, "ghl_pushed");
+  const resolve = calls.find((c) => c.method === "resolveGhlInboundMessage");
+  assert.deepEqual(resolve?.args[1], { resolution: "ghl_pushed", pushError: null, ghlMessageId: "ghl-msg-1" });
+});
+
+test("phone-sent mirror: the business typing STOP never opts the contact out, fires no trigger, and records no stickiness", async () => {
+  const row = makeRow({ direction: "outbound", waMessageId: "PHONE2", body: "STOP" });
+  const { repo, calls, optOuts, sticky } = createFakeRepo([makeAccount()], [row]);
+  const { fired, fireTrigger } = fireRecorder();
+  const { deps } = makeDeps({ fireTrigger });
+
+  const result = await drainGhlInboundReplies(withTriggerReads(repo), deps);
+
+  assert.equal(result.pushed, 1);
+  assert.equal(result.optedOut, 0);
+  assert.equal(optOuts.size, 0);
+  assert.equal(fired.length, 0);
+  assert.equal(sticky.size, 0);
+  assert.equal(calls.some((c) => c.method === "forgetNotOnWhatsapp"), false);
+});
+
+test("phone-sent mirror: an outbound row the bridge itself sent (GHL originated it) is skipped — no upsert, no POST", async () => {
+  const row = makeRow({ direction: "outbound", waMessageId: "BRIDGE1" });
+  const { repo, rowsById } = createFakeRepo([makeAccount()], [row]);
+  const { deps, upsertCalls, postCalls } = makeDeps();
+
+  const result = await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(result.skippedOwnSend, 1);
+  assert.equal(upsertCalls.length, 0);
+  assert.equal(postCalls.length, 0);
+  assert.equal(rowsById.get(row.id)?.resolution, "skipped_own_send");
+});
+
+test("phone-sent mirror: an outbound media row gets the 'sent from the WhatsApp phone' placeholder, with the number prefix on a multi-number location", async () => {
+  const numbers = {
+    [LOCATION_ID]: [
+      { tenantId: TENANT_ID, slot: 1 as const, isDefault: true, label: "Sales" },
+      { tenantId: "33333333-3333-4333-8333-333333333333", slot: 2 as const, isDefault: false, label: "Support" },
+    ],
+  };
+  const row = makeRow({ direction: "outbound", waMessageId: "PHONE3", body: null, messageType: "imageMessage" });
+  const { repo } = createFakeRepo([makeAccount()], [row], numbers);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls[0]?.body, "[Sales] [Photo sent from the WhatsApp phone]");
+});
+
+test("phone-sent mirror: an ordinary inbound row never carries direction and never consults the bridge send ledger", async () => {
+  const { repo, calls } = createFakeRepo([makeAccount()], [makeRow({ direction: "inbound", waMessageId: "IN1" })]);
+  const { deps, postCalls } = makeDeps();
+
+  await drainGhlInboundReplies(repo, deps);
+
+  assert.equal(postCalls.length, 1);
+  assert.equal(postCalls[0]?.direction, undefined);
+  assert.equal(calls.filter((c) => c.method === "wasWhatsappMessageSentByBridge").length, 0);
 });

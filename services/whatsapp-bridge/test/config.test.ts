@@ -64,6 +64,15 @@ function withEnv(overrides: Record<string, string | undefined>, fn: () => void):
   }
 }
 
+test("config: WA_MIRROR_PHONE_SENT_ENABLED defaults off and is read when set", () => {
+  withEnv({}, () => {
+    assert.equal(loadConfig().mirrorPhoneSentEnabled, false);
+  });
+  withEnv({ WA_MIRROR_PHONE_SENT_ENABLED: "true" }, () => {
+    assert.equal(loadConfig().mirrorPhoneSentEnabled, true);
+  });
+});
+
 test("config: neither poke URL nor the shared secret set — boots fine, both poke targets null", () => {
   withEnv({}, () => {
     const config = loadConfig();

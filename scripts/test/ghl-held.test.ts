@@ -88,6 +88,9 @@ function setup(rowList: GhlOutboundMessage[]) {
     async listGhlOutboundAttachmentsForMessages(ids: string[]) {
       return [...parts.values()].filter((a) => ids.includes(a.outboundMessageId)).sort((a, b) => a.seq - b.seq).map((a) => ({ ...a }));
     },
+    async isMirroredPhoneSentMessage() {
+      return false;
+    },
     async updateGhlOutboundAttachmentSendState(id: string, patch: { sendState: GhlOutboundAttachment["sendState"]; refusalReason?: string }) {
       const part = parts.get(id)!;
       part.sendState = patch.sendState;

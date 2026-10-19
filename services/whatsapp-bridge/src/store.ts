@@ -601,6 +601,8 @@ export class BridgeStore {
     targetWaMessageId?: string | null;
     /** Edit/reaction/delete rows (migration 0011): whether that target is ours. Omitted or null -> column untouched (NULL). */
     targetFromMe?: boolean | null;
+    /** Phone-sent mirror (src/inbound.ts, migration 0016) — `"outbound"` for a message the business sent from the phone. Omitted -> the column's default (`'inbound'`). */
+    direction?: "outbound";
   }): Promise<{ fresh: boolean }> {
     if (input.groupJid != null && !isGroupJid(input.groupJid)) {
       throw new Error("[store] recordInboundMessage: refused a malformed group jid");
@@ -614,6 +616,7 @@ export class BridgeStore {
       received_at: input.receivedAt,
     };
     if (input.captureMedia) row.media_status = "pending";
+    if (input.direction === "outbound") row.direction = "outbound";
     if (input.eventKind) row.event_kind = input.eventKind;
     if (input.targetWaMessageId != null) row.target_wa_message_id = input.targetWaMessageId;
     if (input.targetFromMe != null) row.target_from_me = input.targetFromMe;
@@ -764,6 +767,8 @@ export class BridgeStore {
       .is("group_jid", null)
       // A missed call is not a message: it never makes a number eligible for a direct add.
       .is("event_kind", null)
+      // Nor is a message the business sent them (phone-sent mirror, 0016).
+      .eq("direction", "inbound")
       .gte("received_at", since)
       .limit(1);
     if (error) throw error;

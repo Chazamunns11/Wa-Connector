@@ -145,6 +145,8 @@ export type GhlProviderRepo = Pick<
   | "recordGhlOutboundAttachments"
   | "listGhlOutboundAttachmentsForMessages"
   | "updateGhlOutboundAttachmentSendState"
+  // Phone-sent mirror (0016) — the echo guard in `handleProviderOutboundMessage`.
+  | "isMirroredPhoneSentMessage"
   // Multiple numbers (Task 3) — which of the location's numbers an outbound
   // goes out from (`resolveOutboundSendingNumber` below).
   | "listLocationNumbers"
@@ -908,7 +910,7 @@ export function isReportedOutcome(outcome: GhlReportOutcome): boolean {
 }
 
 export type HandleProviderOutboundOutcome =
-  | { kind: "ignored"; reason: "non_sms_type" | "malformed_payload" | "unknown_location" }
+  | { kind: "ignored"; reason: "non_sms_type" | "malformed_payload" | "unknown_location" | "mirrored_phone_send" }
   | { kind: "duplicate" }
   | { kind: "accepted" }
   /** The number is offline (linked once before): the row is `held` and sends when it reconnects. Nothing is reported to GoHighLevel yet. */
@@ -1019,6 +1021,22 @@ export async function handleProviderOutboundMessage(
 
     rawMessage = typeof payload.message === "string" ? payload.message : "";
     attachments = Array.isArray(payload.attachments) ? payload.attachments.filter((a): a is string => typeof a === "string") : [];
+
+    // Phone-sent mirror echo guard (migration 0016, src/lib/ghl-inbound.ts):
+    // a message we posted into this conversation because the business
+    // already sent it from the phone must never be delivered over WhatsApp
+    // a second time, should GHL ever hand it to this Delivery URL.
+    if (
+      await repo.isMirroredPhoneSentMessage({
+        locationId: account.locationId,
+        defaultTenantId: account.tenantId,
+        ghlMessageId: messageId,
+        toPhone,
+        body: rawMessage,
+      })
+    ) {
+      return { kind: "ignored", reason: "mirrored_phone_send" };
+    }
     // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — with the flag
     // off, or with no attachments at all, `textResult` is built EXACTLY as
     // before (message + URL lines) and everything downstream is the

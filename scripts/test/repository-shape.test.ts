@@ -45,6 +45,8 @@ const METHODS = [
   "getInboundBodyByWaMessageId",
   "claimWhatsappInboundMessage",
   "resolveGhlInboundMessage",
+  "wasWhatsappMessageSentByBridge",
+  "isMirroredPhoneSentMessage",
   "recordGhlInboundPushFailure",
   "purgeOldWhatsappInboundMessages",
   "clearStaleOutboundPendingText",
@@ -108,15 +110,15 @@ const METHODS = [
   "getGhlOutboundMessage",
 ] as const;
 
-test("SupabaseGhlRepository implements all 97 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 97);
-  assert.equal(new Set(METHODS).size, 97);
+test("SupabaseGhlRepository implements all 99 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 99);
+  assert.equal(new Set(METHODS).size, 99);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 97", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 99", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });
