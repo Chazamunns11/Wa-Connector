@@ -22,7 +22,11 @@ export default function BillingHelpPage() {
   return (
     <>
     <PageTop title="Billing">
-      <p>{priceSentence(pricing.currency)} Billed monthly for the numbers on your active sub-accounts.</p>
+      <p>
+        {priceSentence(pricing.currency)} Billed monthly in advance for the numbers on your active sub-accounts. A number you add
+        is charged straight away for the rest of the month; if the card is declined, the number isn&rsquo;t added. A number you
+        remove is credited to your next bill.
+      </p>
     </PageTop>
     <section className="band">
       <Container>

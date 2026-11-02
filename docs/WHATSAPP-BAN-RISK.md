@@ -41,7 +41,7 @@ coach's other numbers.
    bridge (Railway). It only lowers caps for numbers linked less than 14 days
    ago; older numbers are unaffected.
 2. **Keep the daily cap at 150 or lower** per number. A coach who needs more
-   volume should add a second number (the £30 bolt-on) rather than raise the cap.
+   volume should add a second number (£7.99 a month) rather than raise the cap.
 3. **Use numbers that have a history**: the coach's real business number,
    at least a few weeks old, with normal person-to-person chats. Never a
    freshly bought SIM linked on day one.

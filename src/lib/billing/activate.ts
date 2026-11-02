@@ -69,7 +69,8 @@ export async function activateLocation(
     // numbers (at least 1), on top of what is already billed.
     const [billedNow, counts] = await Promise.all([countBillableNumbers(repo, accountId), repo.countNumbersByLocation([locationId])]);
     const target = billedNow + Math.max(1, counts[locationId] ?? 1);
-    const raised = await deps.setQuantity(itemId, target);
+    // Charged now; if the card can't pay, Stripe refuses and nothing is activated.
+    const raised = await deps.setQuantity(itemId, target, undefined, { refuseIfUnpaid: true });
     if (!raised.ok) return { ok: false, reason: "stripe_failed" };
     written = target;
   }

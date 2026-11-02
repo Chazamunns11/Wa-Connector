@@ -154,8 +154,16 @@ test("retrieve and mutate calls use the specified paths and params", async () =>
 
     f = fake({ id: "si_1", quantity: 0 });
     await setSubscriptionItemQuantity("si_1", 0, f.deps);
+    // Every change is invoiced at once (no build-up to month end); a re-sync is never blocked by the card.
     assert.deepEqual(f.calls[0], {
-      method: "POST", path: "/subscription_items/si_1", params: { quantity: 0, proration_behavior: "create_prorations" },
+      method: "POST", path: "/subscription_items/si_1", params: { quantity: 0, proration_behavior: "always_invoice", payment_behavior: "allow_incomplete" },
+    });
+
+    // An increase the customer asked for is charged now, or refused by Stripe if it can't be paid.
+    f = fake({ id: "si_1", quantity: 2 });
+    await setSubscriptionItemQuantity("si_1", 2, f.deps, { refuseIfUnpaid: true });
+    assert.deepEqual(f.calls[0], {
+      method: "POST", path: "/subscription_items/si_1", params: { quantity: 2, proration_behavior: "always_invoice", payment_behavior: "error_if_incomplete" },
     });
 
     f = fake(sub);

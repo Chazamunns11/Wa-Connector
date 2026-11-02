@@ -32,7 +32,7 @@ import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
 import { readSmallJsonBody } from "@/lib/bridge-panel-guard";
 import { authorizeGhlEmbedLocationRequest, guardFailureResponseBody } from "@/app/api/crm/embed/guard";
 import { decideAddNumber, decideRemoveNumber, decideUpdateNumber, type NumbersRouteResult } from "./logic";
-import { syncQuantityForLocation } from "@/lib/billing/sync-for-location";
+import { chargeBeforeAddingNumber, syncQuantityForLocation } from "@/lib/billing/sync-for-location";
 
 export const dynamic = "force-dynamic";
 
@@ -45,9 +45,14 @@ async function handle(request: Request, method: string, decide: Decide): Promise
       return NextResponse.json(guardFailureResponseBody(auth), { status: auth.status });
     }
     const body = await readSmallJsonBody(request);
+    // Per-number billing: a new number is paid for first; a declined card adds nothing.
+    if (method === "POST") {
+      const charge = await chargeBeforeAddingNumber(auth.location.locationId);
+      if (!charge.ok) return NextResponse.json({ ok: false, code: "payment_declined", message: charge.message }, { status: 402 });
+    }
     const result = await decide(auth.location.locationId, body, auth.location.ghlUserId ?? null);
-    // Per-number billing: a number added or removed changes the Stripe quantity.
-    if (result.status === 200 && (method === "POST" || method === "DELETE")) await syncQuantityForLocation(auth.location.locationId);
+    // A number added or removed changes the Stripe quantity (and credits back an add that then failed).
+    if (method === "POST" || (result.status === 200 && method === "DELETE")) await syncQuantityForLocation(auth.location.locationId);
     return NextResponse.json(result.body, { status: result.status });
   } catch (err) {
     // Never echoes `err` into the response.

@@ -151,10 +151,13 @@ example "Setter"), and scan its QR code with the second phone. A sub-account
 can have up to 3. **Make default** picks which number sends when nothing else
 decides. Each number has its own pacing and daily cap.
 
-Billing: `/admin` shows each sub-account's numbers with their status, and the
-total of extra numbers (every number after a sub-account's first). The same
-count is `extraNumbers` in `/api/cron/health`. Stripe does not charge for
-extra numbers automatically yet; bill the £30/month bolt-on from that count.
+Billing: £7.99 a month per WhatsApp number on an activated sub-account, no
+tiers (`src/lib/pricing.ts`). Stripe's quantity is that count. Every change is
+invoiced at once (`always_invoice`): a number you add is charged straight away
+for the rest of the month, and refused if the card declines
+(`error_if_incomplete`), so nobody reaches month end owing for numbers they
+haven't paid for. A removed number is credited to the next bill. `/admin`
+shows each sub-account's numbers and the extra-number total.
 
 ## AI Setter (HighLevel Conversation AI)
 
