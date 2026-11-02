@@ -185,3 +185,61 @@ test("LOCKSTEP (SOURCE-LEVEL): wipeCreds clears phone_linked_at so a re-linked n
   const wipe = STORE_SRC.slice(STORE_SRC.indexOf("async wipeCreds("));
   assert.match(wipe.slice(0, 800), /phone_linked_at: null/);
 });
+
+// ---------------------------------------------------------------------------
+// Conversation replies — short gap, no cap units, cold spacing untouched.
+// ---------------------------------------------------------------------------
+
+const REPLY_CONFIG = { minGapMs: 45_000, jitterMs: 30_000, dailyCap: 3, replyMinGapMs: 3_000, replyJitterMs: 2_000 };
+
+test("reply: waits only the reply gap + reply jitter after the last send of any kind", () => {
+  const clock = fixedClock(T0);
+  const pacer = new SessionPacer(REPLY_CONFIG, 0, clock.now, () => 0.5);
+  pacer.recordSend(); // cold
+  assert.equal(pacer.msUntilNextSendAllowed(true), 4_000); // 3s + 1s jitter
+  pacer.recordSend(0, true);
+  assert.equal(pacer.msUntilNextSendAllowed(true), 4_000);
+});
+
+test("reply: a cold send still waits the full gap + jitter after the last COLD send, however many replies went in between", () => {
+  const clock = fixedClock(T0);
+  const pacer = new SessionPacer(REPLY_CONFIG, 0, clock.now, () => 0);
+  pacer.recordSend(); // cold at T0
+  for (let i = 0; i < 5; i++) {
+    clock.advance(5_000);
+    pacer.recordSend(0, true);
+  }
+  // T0 + 25s: cold is due at T0 + 45s.
+  assert.equal(pacer.msUntilNextSendAllowed(), 20_000);
+  clock.advance(20_000);
+  assert.equal(pacer.msUntilNextSendAllowed(), 0);
+});
+
+test("reply: a cold send never goes out sooner than the reply gap after a reply", () => {
+  const clock = fixedClock(T0);
+  const pacer = new SessionPacer(REPLY_CONFIG, 0, clock.now, () => 0);
+  pacer.recordSend(0, true); // only replies so far today
+  assert.equal(pacer.msUntilNextSendAllowed(), 3_000);
+});
+
+test("reply: costs 0 cap units, so replies go on at the cap; cold sends are still capped", () => {
+  const clock = fixedClock(T0);
+  const pacer = new SessionPacer(REPLY_CONFIG, 3, clock.now, () => 0);
+  assert.equal(pacer.atDailyCap(), true);
+  pacer.recordSend(0, true);
+  assert.equal(pacer.sentTodayCount(), 3);
+});
+
+test("reply: without reply settings a reply is paced exactly like any send (the pre-reply behaviour)", () => {
+  const clock = fixedClock(T0);
+  const pacer = new SessionPacer(CONFIG, 0, clock.now, () => 0.5);
+  pacer.recordSend();
+  assert.equal(pacer.msUntilNextSendAllowed(true), 60_000);
+});
+
+test("reply: a restart seeds the cold clock too — the first cold send after a restart waits the full gap", () => {
+  const clock = fixedClock(T0);
+  const pacer = new SessionPacer(REPLY_CONFIG, 0, clock.now, () => 0, T0 - 10_000);
+  assert.equal(pacer.msUntilNextSendAllowed(), 35_000);
+  assert.equal(pacer.msUntilNextSendAllowed(true), 0);
+});

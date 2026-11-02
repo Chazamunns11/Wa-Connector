@@ -778,7 +778,10 @@ Required variables refuse to boot when missing. Defaults are in code and in
 | `PORT` | No | `8080` | HTTP port (Railway sets it) |
 | `WA_SEND_MIN_GAP_MS` | No | `45000` | Minimum gap between sends on one number |
 | `WA_SEND_JITTER_MS` | No | `30000` | Random jitter added to the gap |
-| `WA_DAILY_CAP` | No | `150` | Max sends per number per UTC day |
+| `WA_DAILY_CAP` | No | `150` | Max sends per number per UTC day. Conversation replies don't count |
+| `WA_REPLY_WINDOW_HOURS` | No | `24` | A 1:1 send to someone who messaged the number this recently is a conversation reply: no daily-cap cost (warm-up included) and the short gap below. `0` turns it off; max `168` |
+| `WA_REPLY_MIN_GAP_MS` | No | `3000` | Minimum gap before a conversation reply |
+| `WA_REPLY_JITTER_MS` | No | `2000` | Random jitter added to the reply gap |
 | `WA_WARMUP_ENABLED` | No | `false` | Ramp a newly linked number's daily cap: 20/day for days 0-2, 50 for 3-6, 100 for 7-13, then `WA_DAILY_CAP`. Leave off while moving established numbers across |
 | `WA_GROUP_CREATE_DAILY` | No | `3` | Groups one number may create per UTC day. Attempts count; failed creates are not refunded |
 | `WA_GROUP_ADD_DAILY` | No | `50` | People one number may add directly per UTC day. Attempts count; not refunded |

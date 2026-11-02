@@ -28,12 +28,31 @@ coach's other numbers.
 | --- | --- | --- |
 | Minimum gap between two sends on one number | `WA_SEND_MIN_GAP_MS` (bridge `src/pacing.ts`) | 45 s |
 | Random jitter on top of the gap | `WA_SEND_JITTER_MS` | 0–30 s |
-| Daily cap per number (UTC day, survives restarts) | `WA_DAILY_CAP` | 150 |
+| Daily cap per number (UTC day, survives restarts). Conversation replies don't count | `WA_DAILY_CAP` | 150 |
+| Conversation replies: a 1:1 send to someone who messaged the number in the window is exempt from the daily cap and warm-up, and only waits the reply gap. `0` turns it off | `WA_REPLY_WINDOW_HOURS` | 24 h |
+| Gap before a conversation reply, plus jitter | `WA_REPLY_MIN_GAP_MS`, `WA_REPLY_JITTER_MS` | 3 s + 0–2 s |
 | Warm-up for a newly linked number: 20/day for days 0–2, 50 for days 3–6, 100 for days 7–13, then the daily cap | `WA_WARMUP_ENABLED` | **off** |
 | STOP / START opt-outs honoured before any send | portal `src/lib/opt-out.ts` | on |
 | Group invites only to people who messaged the number in the last 90 days | bridge `group-management.ts` | on |
 | Banned number: credentials wiped, status `banned`, sends refused at once | bridge `sessions.ts` (403) | on |
 | Outage alert (email to coach and operator, with a reconnect link) | portal `src/lib/session-alerts.ts`, `/api/cron/health` | on once `RESEND_API_KEY` + `EMAIL_FROM` are set |
+
+### Why conversation replies are exempt
+
+Bans come from unsolicited volume: cold first touches, bulk sends, a new
+number blasting a list. Replying to someone who has just messaged you is what
+normal people do, and PingWren is mostly two-way chats, so pacing those like
+outreach burned the daily cap and held each reply 45–75 s.
+
+A send counts as a reply only when it is 1:1 and that phone sent the number a
+1:1 message (not a missed call, reaction or edit) within
+`WA_REPLY_WINDOW_HOURS`. Replies cost no daily-cap units, so they are never
+refused at the cap or by warm-up (warm-up is about unsolicited volume from a
+new number). They still go out one at a time per number, at least
+`WA_REPLY_MIN_GAP_MS` + jitter apart, and they go ahead of queued cold sends.
+Cold sends keep the full 45 s + jitter between each other, and the cap counts
+them exactly as before, including after a restart. Group sends are never
+replies. Group creates and adds stay blocked during warm-up.
 
 ## What we do to stay under it
 
