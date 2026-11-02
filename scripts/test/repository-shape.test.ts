@@ -24,6 +24,17 @@ const METHODS = [
   "updateGhlAccountBranding",
   "createGhlTenant",
   "saveGhlTokens",
+  "getGhlCompany",
+  "listOpsAlerts",
+  "markOpsAlertDown",
+  "claimOpsAlert",
+  "clearOpsAlert",
+  "getUserTenant",
+  "setUserTenant",
+  "upsertGhlCompany",
+  "saveGhlCompanyTokens",
+  "claimGhlCompanyTokenRefresh",
+  "markGhlCompanyNeedsReauth",
   "markGhlNeedsReauth",
   "claimGhlTokenRefresh",
   "bumpGhlConnectLinkVersion",
@@ -110,15 +121,15 @@ const METHODS = [
   "getGhlOutboundMessage",
 ] as const;
 
-test("SupabaseGhlRepository implements all 99 GhlRepository methods", () => {
-  assert.equal(METHODS.length, 99);
-  assert.equal(new Set(METHODS).size, 99);
+test("SupabaseGhlRepository implements all 110 GhlRepository methods", () => {
+  assert.equal(METHODS.length, 110);
+  assert.equal(new Set(METHODS).size, 110);
   for (const name of METHODS) {
     assert.equal(typeof SupabaseGhlRepository.prototype[name], "function", `missing method ${name}`);
   }
 });
 
-test("SupabaseGhlRepository exposes no methods beyond the 99", () => {
+test("SupabaseGhlRepository exposes no methods beyond the 110", () => {
   const own = Object.getOwnPropertyNames(SupabaseGhlRepository.prototype).filter((n) => n !== "constructor");
   assert.deepEqual([...own].sort(), [...METHODS].sort());
 });

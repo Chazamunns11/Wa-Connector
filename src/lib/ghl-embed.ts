@@ -278,7 +278,7 @@ export const EMBED_TOKEN_TTL_MS = 15 * 60 * 1000;
  * somewhere, which is a bug worth a loud failure, not a silent sign under
  * `CRON_SECRET` instead.
  */
-export function mintGhlEmbedToken(locationId: string): string {
+export function mintGhlEmbedToken(locationId: string, userId: string | null = null): string {
   if (!hasEmbedStateSecret()) {
     throw new Error(
       "mintGhlEmbedToken called with ONBOARD_STATE_SECRET unset — refusing to sign under getStateSecret()'s " +
@@ -286,7 +286,9 @@ export function mintGhlEmbedToken(locationId: string): string {
         "isGhlEmbedConfigured() first."
     );
   }
-  return signKindedState("ghl-embed", { locationId }, EMBED_TOKEN_TTL_MS);
+  // `userId` (setter seats, 0018): the HighLevel user the SSO payload named,
+  // signed in so "send MY replies from this number" can never name someone else.
+  return signKindedState("ghl-embed", userId ? { locationId, userId } : { locationId }, EMBED_TOKEN_TTL_MS);
 }
 
 /**
@@ -306,11 +308,11 @@ export function mintGhlEmbedToken(locationId: string): string {
  * — the correct shape for that boundary is "treat as invalid", matching
  * every other failure mode this function already folds into `null`.
  */
-export function verifyGhlEmbedToken(token: string): { locationId: string } | null {
+export function verifyGhlEmbedToken(token: string): { locationId: string; userId: string | null } | null {
   if (!hasEmbedStateSecret()) return null;
   const data = verifyKindedState("ghl-embed", token);
   if (!data) return null;
   const locationId = data.locationId;
   if (typeof locationId !== "string" || locationId.length === 0) return null;
-  return { locationId };
+  return { locationId, userId: typeof data.userId === "string" && data.userId.length > 0 ? data.userId : null };
 }

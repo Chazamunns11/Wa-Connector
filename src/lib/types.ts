@@ -121,7 +121,8 @@ export interface GhlAccount {
   conversationProviderId: string | null;
   accessToken: string | null;
   accessTokenExpiresAt: string | null;
-  refreshToken: string;
+  /** `null` (migration 0017) = installed via an agency install with no location refresh token — the access token is re-minted from `GhlCompany` for `companyId`. */
+  refreshToken: string | null;
   status: GhlAccountStatus;
   lastError: string | null;
   createdAt: string;
@@ -236,7 +237,19 @@ export interface GhlAccountDraft {
   companyId: string | null;
   accessToken: string;
   accessTokenExpiresAt: string;
+  /** `null` only for an agency-minted location (see `GhlAccount.refreshToken`). */
+  refreshToken: string | null;
+}
+
+/** The agency (Company) token from an agency/bulk install (`ghl_companies`, migration 0017), TOKENS INCLUDED — service-role reads only, never returned to a page. */
+export interface GhlCompany {
+  companyId: string;
+  accessToken: string;
+  accessTokenExpiresAt: string;
   refreshToken: string;
+  scope: string | null;
+  status: "active" | "needs_reauth";
+  lastError: string | null;
 }
 
 /** `'pending_send'` -> `'accepted'` (the bridge accepted the send) | `'refused'` (a terminal refusal reported inline — see the plan's D3 status table). Mirrors `ghl_outbound_messages.send_state`'s CHECK (0069). */

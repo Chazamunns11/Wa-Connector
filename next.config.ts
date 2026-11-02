@@ -63,7 +63,7 @@ const nextConfig: NextConfig = {
             key: "Content-Security-Policy",
             value: (() => {
               const extra = parseGhlEmbedFrameAncestors(process.env.GHL_EMBED_FRAME_ANCESTORS);
-              return `frame-ancestors https://app.gohighlevel.com https://*.gohighlevel.com https://*.leadconnectorhq.com${
+              return `frame-ancestors https://app.gohighlevel.com https://*.gohighlevel.com https://*.leadconnectorhq.com https://app.pingwren.co.uk https://*.pingwren.co.uk${
                 extra.length ? ` ${extra.join(" ")}` : ""
               }`;
             })(),
@@ -138,7 +138,7 @@ const nextConfig: NextConfig = {
             key: "Content-Security-Policy",
             value: (() => {
               const extra = parseGhlEmbedFrameAncestors(process.env.GHL_EMBED_FRAME_ANCESTORS);
-              return `frame-ancestors https://app.gohighlevel.com https://*.gohighlevel.com https://*.leadconnectorhq.com${
+              return `frame-ancestors https://app.gohighlevel.com https://*.gohighlevel.com https://*.leadconnectorhq.com https://app.pingwren.co.uk https://*.pingwren.co.uk${
                 extra.length ? ` ${extra.join(" ")}` : ""
               }`;
             })(),

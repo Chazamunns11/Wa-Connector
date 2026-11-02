@@ -1212,6 +1212,21 @@ test("handleProviderOutboundMessage: a contact sticky to a second number sends f
   assert.equal([...rows.values()][0].tenantId, SECOND_TENANT_ID);
 });
 
+test("handleProviderOutboundMessage (setter seats, 0018): the webhook's userId routes to that user's number, over the contact's sticky number", async () => {
+  const numbers = { [LOCATION_ID]: TWO_NUMBERS[LOCATION_ID].map((n) => ({ ...n })) };
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers, sticky: STICKY_TO_SECOND });
+  const seen: string[] = [];
+  (repo as unknown as { getUserTenant: (l: string, u: string) => Promise<string | null> }).getUserTenant = async (_l, userId) => {
+    seen.push(userId);
+    return userId === "user-coach" ? TENANT_ID : null;
+  };
+  const { deps, sendCalls } = makeDeps();
+  await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-user", userId: "user-coach" }), deps);
+  assert.deepEqual(seen, ["user-coach"]);
+  assert.equal(sendCalls[0].coachId, TENANT_ID, "the coach's own number, not the contact's sticky second number");
+  assert.equal([...rows.values()][0].tenantId, TENANT_ID);
+});
+
 test("handleProviderOutboundMessage: no sticky row -> the location's default number", async () => {
   const numbers = { [LOCATION_ID]: TWO_NUMBERS[LOCATION_ID].map((n) => ({ ...n, isDefault: n.slot === 2 })) };
   const { repo, rows } = createFakeRepo([makeAccount()], { numbers });
@@ -2714,32 +2729,57 @@ test("getGhlLocationTokenFromAgency: a normal Location-scoped response yields a 
     companyId: "company-1",
     userId: "user-2",
   };
-  const tokens = await withStubbedFetch(
+  const result = await withStubbedFetch(
     async () => new Response(JSON.stringify(body), { status: 200 }),
     () => getGhlLocationTokenFromAgency("agency-token", "company-1", "loc-2")
   );
-  assert.ok(tokens);
+  assert.ok(result.ok);
+  const tokens = result.ok ? result.tokens : null;
   assert.equal(tokens?.locationId, "loc-2");
   assert.equal(tokens?.accessToken, "location-access-token-2");
   assert.equal(tokens?.refreshToken, "location-refresh-token-2");
   assert.equal(tokens?.companyId, "company-1");
 });
 
-test("getGhlLocationTokenFromAgency: a response missing locationId returns null", async () => {
-  const body = { access_token: "x", refresh_token: "y", expires_in: 3600, companyId: "company-1" }; // no locationId anywhere in the body
-  const tokens = await withStubbedFetch(
+// HighLevel's OpenAPI response (GetLocationAccessTokenSuccessfulResponseDto)
+// has no refresh_token and no companyId — the shape that broke the agency install.
+test("getGhlLocationTokenFromAgency: the spec's response (no refresh_token, no companyId) yields tokens with a null refreshToken and the known companyId", async () => {
+  const body = {
+    access_token: "location-access-token-3",
+    token_type: "Bearer",
+    expires_in: 86399,
+    scope: "conversations/message.write",
+    locationId: "loc-3",
+    planId: "plan-1",
+    userId: "user-3",
+    appId: "app-1",
+    versionId: "app-1",
+  };
+  const result = await withStubbedFetch(
     async () => new Response(JSON.stringify(body), { status: 200 }),
     () => getGhlLocationTokenFromAgency("agency-token", "company-1", "loc-3")
   );
-  assert.equal(tokens, null);
+  assert.ok(result.ok);
+  assert.equal(result.ok && result.tokens.refreshToken, null);
+  assert.equal(result.ok && result.tokens.companyId, "company-1");
+  assert.equal(result.ok && result.tokens.locationId, "loc-3");
 });
 
-test("getGhlLocationTokenFromAgency: a non-2xx response returns null, never throws", async () => {
-  const tokens = await withStubbedFetch(
-    async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 401 }),
+test("getGhlLocationTokenFromAgency: a response missing locationId is a failure", async () => {
+  const body = { access_token: "x", refresh_token: "y", expires_in: 3600, companyId: "company-1" }; // no locationId anywhere in the body
+  const result = await withStubbedFetch(
+    async () => new Response(JSON.stringify(body), { status: 200 }),
+    () => getGhlLocationTokenFromAgency("agency-token", "company-1", "loc-3")
+  );
+  assert.equal(result.ok, false);
+});
+
+test("getGhlLocationTokenFromAgency: a non-2xx response returns HighLevel's own error text, never throws", async () => {
+  const result = await withStubbedFetch(
+    async () => new Response(JSON.stringify({ statusCode: 401, message: "The token is not authorized for this scope." }), { status: 401 }),
     () => getGhlLocationTokenFromAgency("agency-token", "company-1", "loc-4")
   );
-  assert.equal(tokens, null);
+  assert.deepEqual(result, { ok: false, error: "HighLevel refused a location token: HTTP 401: The token is not authorized for this scope." });
 });
 
 test("getGhlLocationTokenFromAgency: a thrown network error returns null, never throws", async () => {
@@ -2750,7 +2790,7 @@ test("getGhlLocationTokenFromAgency: a thrown network error returns null, never 
       },
       () => getGhlLocationTokenFromAgency("agency-token", "company-1", "loc-5")
     );
-    assert.equal(tokens, null);
+    assert.equal(tokens.ok, false);
   });
 });
 
@@ -2819,15 +2859,15 @@ test("listGhlInstalledLocations: a successful fetch is parsed via parseGhlInstal
     async () => new Response(JSON.stringify({ locations: [{ _id: "loc-1", name: "One" }] }), { status: 200 }),
     () => listGhlInstalledLocations("agency-token", "company-1", "app-1")
   );
-  assert.deepEqual(result, [{ locationId: "loc-1", name: "One" }]);
+  assert.deepEqual(result, { ok: true, locations: [{ locationId: "loc-1", name: "One" }] });
 });
 
-test("listGhlInstalledLocations: a non-2xx response returns null", async () => {
+test("listGhlInstalledLocations: a non-2xx response returns HighLevel's error text", async () => {
   const result = await withStubbedFetch(
-    async () => new Response("", { status: 500 }),
+    async () => new Response(JSON.stringify({ message: "The token is not authorized for this scope." }), { status: 401 }),
     () => listGhlInstalledLocations("agency-token", "company-1", "app-1")
   );
-  assert.equal(result, null);
+  assert.deepEqual(result, { ok: false, error: "HighLevel would not list the installed sub-accounts: HTTP 401: The token is not authorized for this scope." });
 });
 
 test("listGhlInstalledLocations: an unreachable endpoint returns null, never throws", async () => {
@@ -2838,7 +2878,7 @@ test("listGhlInstalledLocations: an unreachable endpoint returns null, never thr
       },
       () => listGhlInstalledLocations("agency-token", "company-1", "app-1")
     );
-    assert.equal(result, null);
+    assert.equal(result.ok, false);
   });
 });
 

@@ -108,6 +108,8 @@ interface EmbedNumber {
   label: string | null;
   isDefault: boolean;
   summary: GhlEmbedWhatsappSummary | null;
+  /** Setter seats: the number the HighLevel user viewing this page sends their replies from. */
+  mine?: boolean;
 }
 
 type Phase = "handshaking" | "handshake_error" | "not_installed" | "disabled" | "unclaimed" | "billing_paused" | "not_activated" | "ready";
@@ -626,12 +628,18 @@ function EmbedNumberCard({
         <div className="flex items-center gap-2">
           <h2 className="text-sm font-semibold text-ink">{number.label ?? `Number ${slot}`}</h2>
           {number.isDefault ? <Chip tone="accent">Default</Chip> : null}
+          {number.mine ? <Chip tone="accent">Your replies</Chip> : null}
         </div>
         {mode === "idle" ? (
           <div className="flex flex-wrap items-center gap-1">
             {!number.isDefault ? (
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run("PATCH", { slot, makeDefault: true })}>
                 Make default
+              </Button>
+            ) : null}
+            {!onlyNumber ? (
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run("PATCH", { slot, myReplies: !number.mine })}>
+                {number.mine ? "Stop sending my replies from here" : "Send my replies from this number"}
               </Button>
             ) : null}
             <Button

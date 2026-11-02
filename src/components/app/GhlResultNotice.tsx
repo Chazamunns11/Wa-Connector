@@ -65,17 +65,21 @@ export function GhlResultNotice({
   installed,
   failed,
   conflicts,
+  error,
 }: {
   reason?: string;
   installed?: number;
   failed?: number;
   conflicts?: number;
+  /** HighLevel's own reason for a failed install (`?error=`), shown under a non-success notice only. React-escaped text, capped here. */
+  error?: string;
 }) {
   const m = ghlNoticeMessage(reason, { installed, failed, conflicts });
   if (!m) return null;
   return (
     <p role="status" className={`mt-4 rounded-lg border p-3 font-medium text-ink ${TONE[m.tone]}`}>
       {m.text}
+      {m.tone !== "win" && error ? <span className="mt-1 block text-sm font-normal text-ink-dim">HighLevel said: {error.slice(0, 500)}</span> : null}
     </p>
   );
 }

@@ -23,7 +23,7 @@ import type { GhlRepository } from "@/lib/data";
 import type { LocationNumber } from "@/lib/types";
 
 /** The two repository reads `resolveSendingTenant` needs — both on `GhlRepository` (Task 2). */
-export type SendingNumberRepo = Pick<GhlRepository, "getStickyTenant" | "listLocationNumbers">;
+export type SendingNumberRepo = Pick<GhlRepository, "getStickyTenant" | "listLocationNumbers"> & Partial<Pick<GhlRepository, "getUserTenant">>;
 
 export interface SendingNumber {
   tenantId: string;
@@ -54,7 +54,9 @@ export async function resolveSendingTenant(
   repo: SendingNumberRepo,
   locationId: string,
   ghlContactId: string,
-  fallbackDefaultTenantId: string
+  fallbackDefaultTenantId: string,
+  /** The HighLevel user who sent it (`ProviderOutboundMessage.userId`), when known. Their own number (0018) beats the contact's sticky number — HighLevel's order for its own numbers (user-assigned, then last-used, then default). */
+  ghlUserId: string | null = null
 ): Promise<SendingNumber> {
   const numbers = await repo.listLocationNumbers(locationId);
   if (numbers.length === 0) {
@@ -67,8 +69,13 @@ export async function resolveSendingTenant(
   const defaultNumber = numbers.find((n) => n.isDefault) ?? numbers[0];
   let chosen = defaultNumber;
   if (multi) {
-    const stickyTenantId = await repo.getStickyTenant(locationId, ghlContactId);
-    chosen = numbers.find((n) => n.tenantId === stickyTenantId) ?? defaultNumber;
+    const userTenantId = ghlUserId && repo.getUserTenant ? await repo.getUserTenant(locationId, ghlUserId) : null;
+    const userNumber = userTenantId ? numbers.find((n) => n.tenantId === userTenantId) : undefined;
+    if (userNumber) chosen = userNumber;
+    else {
+      const stickyTenantId = await repo.getStickyTenant(locationId, ghlContactId);
+      chosen = numbers.find((n) => n.tenantId === stickyTenantId) ?? defaultNumber;
+    }
   }
   return { tenantId: chosen.tenantId, slot: chosen.slot, label: chosen.label, multi, isDefault: chosen === defaultNumber };
 }

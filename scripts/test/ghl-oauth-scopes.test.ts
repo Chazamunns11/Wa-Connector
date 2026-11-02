@@ -37,3 +37,17 @@ test("oauth scopes: the firing flag alone never asks for workflows.readonly", ()
     assert.equal(ghlOAuthScopes().includes("workflows.readonly"), false);
   });
 });
+
+test("oauth scopes: oauth.readonly + oauth.write (agency installs) only when GHL_REQUEST_AGENCY_SCOPES is exactly \"true\"", () => {
+  withEnv({ GHL_REQUEST_AGENCY_SCOPES: undefined }, () => {
+    assert.equal(ghlOAuthScopes().includes("oauth.write"), false);
+  });
+  withEnv({ GHL_REQUEST_AGENCY_SCOPES: "true" }, () => {
+    assert.ok(ghlOAuthScopes().includes("oauth.readonly"));
+    assert.ok(ghlOAuthScopes().includes("oauth.write"));
+    assert.ok(ghlOAuthScopes().includes("conversations/message.write"));
+  });
+  withEnv({ GHL_REQUEST_AGENCY_SCOPES: "yes" }, () => {
+    assert.equal(ghlOAuthScopes().includes("oauth.write"), false);
+  });
+});

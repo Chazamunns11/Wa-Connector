@@ -18,6 +18,7 @@ import type {
   GhlAccount,
   GhlAccountBrandingPatch,
   GhlAccountDraft,
+  GhlCompany,
   GhlAccountStatus,
   GhlAccountSummary,
   GhlOutboundAttachment,
@@ -249,7 +250,7 @@ interface GhlAccountRow {
   conversation_provider_id: string | null;
   access_token: string | null;
   access_token_expires_at: string | null;
-  refresh_token: string;
+  refresh_token: string | null;
   status: string;
   last_error: string | null;
   created_at: string;
@@ -875,6 +876,26 @@ export class SupabaseGhlRepository implements GhlRepository {
     return data ? (data as { tenant_id: string }).tenant_id : null;
   }
 
+  async getUserTenant(locationId: string, ghlUserId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_user_numbers")
+      .select("tenant_id")
+      .eq("location_id", locationId)
+      .eq("ghl_user_id", ghlUserId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? (data as { tenant_id: string }).tenant_id : null;
+  }
+
+  async setUserTenant(locationId: string, ghlUserId: string, tenantId: string | null) {
+    const supabase = getServiceClient();
+    const { error } = tenantId
+      ? await supabase.from("ghl_user_numbers").upsert({ location_id: locationId, ghl_user_id: ghlUserId, tenant_id: tenantId }, { onConflict: "location_id,ghl_user_id" })
+      : await supabase.from("ghl_user_numbers").delete().eq("location_id", locationId).eq("ghl_user_id", ghlUserId);
+    if (error) throw error;
+  }
+
   async recordInboundForStickiness(locationId: string, ghlContactId: string, tenantId: string, receivedAtIso: string) {
     const supabase = getServiceClient();
     const readExisting = async () => {
@@ -1159,10 +1180,66 @@ export class SupabaseGhlRepository implements GhlRepository {
     return (data as { id: string }).id;
   }
 
-  async saveGhlTokens(locationId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string }) {
+  async saveGhlTokens(locationId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string | null }) {
     const supabase = getServiceClient();
     const { error } = await supabase
       .from("ghl_accounts")
+      .update({
+        access_token: tokens.accessToken,
+        access_token_expires_at: tokens.accessTokenExpiresAt,
+        // An agency-minted token has no refresh token: never null out a stored one.
+        ...(tokens.refreshToken ? { refresh_token: tokens.refreshToken } : {}),
+        status: "active",
+        last_error: null,
+        token_refresh_claimed_at: null,
+      })
+      .eq("location_id", locationId);
+    if (error) throw error;
+  }
+
+  async getGhlCompany(companyId: string): Promise<GhlCompany | null> {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_companies")
+      .select("company_id, access_token, access_token_expires_at, refresh_token, scope, status, last_error")
+      .eq("company_id", companyId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const row = data as Record<string, string | null>;
+    return {
+      companyId: row.company_id as string,
+      accessToken: row.access_token as string,
+      accessTokenExpiresAt: row.access_token_expires_at as string,
+      refreshToken: row.refresh_token as string,
+      scope: row.scope,
+      status: row.status === "needs_reauth" ? "needs_reauth" : "active",
+      lastError: row.last_error,
+    };
+  }
+
+  async upsertGhlCompany(company: { companyId: string; accessToken: string; accessTokenExpiresAt: string; refreshToken: string; scope: string | null }) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_companies").upsert(
+      {
+        company_id: company.companyId,
+        access_token: company.accessToken,
+        access_token_expires_at: company.accessTokenExpiresAt,
+        refresh_token: company.refreshToken,
+        scope: company.scope,
+        status: "active",
+        last_error: null,
+        token_refresh_claimed_at: null,
+      },
+      { onConflict: "company_id" }
+    );
+    if (error) throw error;
+  }
+
+  async saveGhlCompanyTokens(companyId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string }) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_companies")
       .update({
         access_token: tokens.accessToken,
         access_token_expires_at: tokens.accessTokenExpiresAt,
@@ -1171,7 +1248,29 @@ export class SupabaseGhlRepository implements GhlRepository {
         last_error: null,
         token_refresh_claimed_at: null,
       })
-      .eq("location_id", locationId);
+      .eq("company_id", companyId);
+    if (error) throw error;
+  }
+
+  async claimGhlCompanyTokenRefresh(companyId: string) {
+    const supabase = getServiceClient();
+    const staleBefore = new Date(Date.now() - 30_000).toISOString();
+    const { data, error } = await supabase
+      .from("ghl_companies")
+      .update({ token_refresh_claimed_at: new Date().toISOString() })
+      .eq("company_id", companyId)
+      .or(`token_refresh_claimed_at.is.null,token_refresh_claimed_at.lt.${staleBefore}`)
+      .select("company_id");
+    if (error) throw error;
+    return (data?.length ?? 0) > 0;
+  }
+
+  async markGhlCompanyNeedsReauth(companyId: string, error_: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_companies")
+      .update({ status: "needs_reauth", last_error: error_.slice(0, 500), token_refresh_claimed_at: null })
+      .eq("company_id", companyId);
     if (error) throw error;
   }
 
@@ -2411,6 +2510,45 @@ export class SupabaseGhlRepository implements GhlRepository {
     const supabase = getServiceClient();
     const { error } = await supabase.from("whatsapp_sessions").update({ trigger_phone: phoneE164 }).eq("coach_id", tenantId);
     if (error) throw error;
+  }
+
+  async listOpsAlerts() {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ops_alerts").select("key, down_since, alerted_at");
+    if (error) throw error;
+    return ((data ?? []) as { key: string; down_since: string; alerted_at: string | null }[]).map((r) => ({
+      key: r.key,
+      downSince: r.down_since,
+      alertedAt: r.alerted_at,
+    }));
+  }
+
+  async markOpsAlertDown(key: string, detail: string | null) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ops_alerts")
+      .upsert({ key, detail: detail?.slice(0, 500) ?? null }, { onConflict: "key", ignoreDuplicates: true });
+    if (error) throw error;
+  }
+
+  async claimOpsAlert(key: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ops_alerts")
+      .update({ alerted_at: new Date().toISOString() })
+      .eq("key", key)
+      .is("alerted_at", null)
+      .select("key");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async clearOpsAlert(key: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ops_alerts").delete().eq("key", key).select("alerted_at");
+    if (error) throw error;
+    const row = (data ?? [])[0] as { alerted_at: string | null } | undefined;
+    return row ? { wasAlerted: row.alerted_at !== null } : null;
   }
 
   async listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]> {

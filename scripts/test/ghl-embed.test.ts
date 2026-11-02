@@ -321,7 +321,12 @@ test("isGhlEmbedConfigured: FALSE when GHL_SSO_SHARED_SECRET is set but ONBOARD_
 test("embed token: mint -> verify round trip returns the exact locationId", () => {
   const token = mintGhlEmbedToken("loc-42");
   const verified = verifyGhlEmbedToken(token);
-  assert.deepEqual(verified, { locationId: "loc-42" });
+  assert.deepEqual(verified, { locationId: "loc-42", userId: null });
+});
+
+test("embed token: carries the HighLevel user id when minted with one (setter seats)", () => {
+  const verified = verifyGhlEmbedToken(mintGhlEmbedToken("loc-42", "user-setter"));
+  assert.deepEqual(verified, { locationId: "loc-42", userId: "user-setter" });
 });
 
 test("embed token: an expired token verifies as null", () => {

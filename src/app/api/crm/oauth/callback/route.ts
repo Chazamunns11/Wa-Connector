@@ -177,7 +177,8 @@ export async function GET(request: NextRequest) {
   const accountId = sessionAccountId;
   const dest = marketplace ? "/signup" : accountId ? "/dashboard" : "/admin";
   const brandName = brandConfig().name;
-  const fail = (reason: string): NextResponse => (marketplace ? finish(reason, {}) : back(reason, undefined, dest));
+  // `extra.error` carries HighLevel's own reason to the admin/dashboard banner (never to the public signup page).
+  const fail = (reason: string, extra?: Record<string, string>): NextResponse => (marketplace ? finish(reason, {}) : back(reason, extra, dest));
   const conflictNote = (locationId: string) =>
     void notifyText(`GHL location ${locationId} is already connected to another ${brandName} account; install by ${accountId} skipped.`);
 
@@ -230,8 +231,35 @@ export async function GET(request: NextRequest) {
   // matching this file's own "never 500s" contract over "this can't happen".
   if (!appId) return fail("unavailable");
 
-  const locations = await listGhlInstalledLocations(exchange.accessToken, exchange.companyId, appId);
-  if (!locations) return fail("bulk_locations_failed");
+  // Nov 2026 fix: the scope HighLevel actually granted is not secret and is
+  // the first thing to check when an agency install fails (locationToken
+  // needs oauth.write, installedLocations needs oauth.readonly).
+  const grantedScopes = exchange.scope?.split(/\s+/).filter(Boolean) ?? null;
+  console.log(`[ghl/oauth/callback] agency install for company ${exchange.companyId} — granted scope: ${exchange.scope ?? "(not reported)"}`);
+  const missingOauthScopes = grantedScopes ? ["oauth.readonly", "oauth.write"].filter((scope) => !grantedScopes.includes(scope)) : [];
+  const scopeHint = missingOauthScopes.length > 0 ? ` HighLevel did not grant ${missingOauthScopes.join(" or ")}: tick it on the app in the developer portal, then install again.` : "";
+
+  // Keep the agency token: HighLevel's locationToken response has no refresh
+  // token (apps/oauth.json), so each location's token is re-minted from this
+  // one when it expires (resolveGhlAccessToken, migration 0017). Without a
+  // refresh token here those locations would stop working within a day.
+  if (!exchange.refreshToken) return fail("no_refresh_token");
+  try {
+    await repo.upsertGhlCompany({
+      companyId: exchange.companyId,
+      accessToken: exchange.accessToken,
+      accessTokenExpiresAt: exchange.expiresAt,
+      refreshToken: exchange.refreshToken,
+      scope: exchange.scope,
+    });
+  } catch (err) {
+    console.error("[ghl/oauth/callback] could not save the agency token:", err);
+    return fail("save_failed", { error: "Could not save the agency connection (is migration 0017_ghl_company_tokens applied?)" });
+  }
+
+  const listed = await listGhlInstalledLocations(exchange.accessToken, exchange.companyId, appId);
+  if (!listed.ok) return fail("bulk_locations_failed", { error: `${listed.error}${scopeHint}`.slice(0, 500) });
+  const locations = listed.locations;
   if (locations.length === 0) return fail("bulk_no_locations");
 
   const agencyAccessToken = exchange.accessToken;
@@ -248,6 +276,12 @@ export async function GET(request: NextRequest) {
   if (result.failed > 0) extra.failed = String(result.failed);
   if (result.skippedOverCap > 0) extra.capped = String(result.skippedOverCap);
   if (result.conflicts > 0) extra.conflicts = String(result.conflicts);
+  // The real reason, not just a count: the first few HighLevel errors.
+  if (result.errors.length > 0) {
+    const more = result.errors.length > 3 ? ` (+${result.errors.length - 3} more in the logs)` : "";
+    extra.error = `${result.errors.slice(0, 3).join(" | ")}${more}${scopeHint}`.slice(0, 500);
+    console.error(`[ghl/oauth/callback] agency install: ${result.failed} failed —`, result.errors.join(" | "));
+  }
   const reason = result.installed === 0 && result.failed === 0 && result.conflicts > 0 ? "conflict" : result.installed === 0 && result.failed > 0 ? "bulk_failed" : result.failed > 0 ? "bulk_partial" : "bulk_installed";
   return finish(reason, extra);
 }

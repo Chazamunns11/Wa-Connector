@@ -216,9 +216,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, ...embedState });
     }
 
-    const token = mintGhlEmbedToken(account.locationId);
+    const token = mintGhlEmbedToken(account.locationId, userContext.userId);
     // See this file's header, "SEVERAL NUMBERS PER LOCATION".
-    const numbers = await listEmbedNumbers(repo, account.locationId);
+    const numbers = await listEmbedNumbers(repo, account.locationId, userContext.userId);
     const slotOne = numbers.find((n) => n.slot === 1);
     const summary = slotOne ? slotOne.summary : toEmbedSummary(await repo.getWhatsappSessionSummary(account.tenantId));
 

@@ -57,6 +57,8 @@ export type EmbedNumbersRepo = Pick<
   // applies before it mints a token (`embedStateFor`).
   | "getGhlAccountByLocationId"
   | "getAccountById"
+  | "getUserTenant"
+  | "setUserTenant"
 >;
 
 /** What the browser sees for one number. Structurally unable to carry a tenant id. */
@@ -67,6 +69,8 @@ export interface EmbedNumberView {
   label: string | null;
   isDefault: boolean;
   summary: GhlEmbedWhatsappSummary | null;
+  /** Setter seats (0018): this is the number the HighLevel user looking at the page sends their replies from. */
+  mine: boolean;
 }
 
 /**
@@ -93,7 +97,7 @@ export function embedNumberKey(tenantId: string): string {
   return createHash("sha256").update(`embed-number:${tenantId}`).digest("hex").slice(0, 12);
 }
 
-async function toEmbedNumberView(repo: Pick<EmbedNumbersRepo, "getWhatsappSessionSummary">, number: LocationNumber): Promise<EmbedNumberView> {
+async function toEmbedNumberView(repo: Pick<EmbedNumbersRepo, "getWhatsappSessionSummary">, number: LocationNumber, myTenantId: string | null): Promise<EmbedNumberView> {
   const summary = await repo.getWhatsappSessionSummary(number.tenantId);
   return {
     slot: number.slot,
@@ -101,16 +105,19 @@ async function toEmbedNumberView(repo: Pick<EmbedNumbersRepo, "getWhatsappSessio
     label: number.label,
     isDefault: number.isDefault,
     summary: toEmbedSummary(summary),
+    mine: myTenantId !== null && number.tenantId === myTenantId,
   };
 }
 
 /** The location's numbers, by slot, each with its redacted session summary (one summary read per number). */
 export async function listEmbedNumbers(
-  repo: Pick<EmbedNumbersRepo, "listLocationNumbers" | "getWhatsappSessionSummary">,
-  locationId: string
+  repo: Pick<EmbedNumbersRepo, "listLocationNumbers" | "getWhatsappSessionSummary"> & Partial<Pick<EmbedNumbersRepo, "getUserTenant">>,
+  locationId: string,
+  ghlUserId: string | null = null
 ): Promise<EmbedNumberView[]> {
   const numbers = await repo.listLocationNumbers(locationId);
-  return Promise.all(numbers.map((n) => toEmbedNumberView(repo, n)));
+  const myTenantId = ghlUserId && repo.getUserTenant ? await repo.getUserTenant(locationId, ghlUserId) : null;
+  return Promise.all(numbers.map((n) => toEmbedNumberView(repo, n, myTenantId)));
 }
 
 export type NumbersRouteResult =
@@ -136,10 +143,11 @@ const LIMIT = () => failure(409, "limit", "This sub-account already has 3 WhatsA
  */
 const NOT_SENDABLE = (state: string) =>
   failure(409, state, "Activate WhatsApp for this sub-account, with billing up to date, before adding another number.");
+const NO_USER = () => failure(400, "no_user", "We couldn't tell which HighLevel user you are. Reload this page inside HighLevel and try again.");
 const LOGOUT_FAILED = () => failure(502, "logout_failed", "Couldn't disconnect that WhatsApp number. Please try again.");
 
-async function okList(repo: EmbedNumbersRepo, locationId: string, slot?: LocationSlot): Promise<NumbersRouteResult> {
-  const numbers = await listEmbedNumbers(repo, locationId);
+async function okList(repo: EmbedNumbersRepo, locationId: string, slot?: LocationSlot, ghlUserId: string | null = null): Promise<NumbersRouteResult> {
+  const numbers = await listEmbedNumbers(repo, locationId, ghlUserId);
   return { status: 200, body: slot === undefined ? { ok: true, numbers } : { ok: true, numbers, slot } };
 }
 
@@ -224,7 +232,9 @@ export async function decideRemoveNumber(
 export async function decideUpdateNumber(
   repo: EmbedNumbersRepo,
   locationId: string,
-  body: Record<string, unknown> | null
+  body: Record<string, unknown> | null,
+  /** From the signed embed token (setter seats) — the only user `myReplies` can ever change. */
+  ghlUserId: string | null = null
 ): Promise<NumbersRouteResult> {
   if (body === null) return INVALID_BODY();
   const slot = parseSlotParam(body.slot, { required: true });
@@ -235,7 +245,11 @@ export async function decideUpdateNumber(
   const hasLabel = Object.prototype.hasOwnProperty.call(body, "label");
   const label = hasLabel ? parseLabelInput(body.label) : null;
   if (label && !label.ok) return INVALID_LABEL();
-  if (!hasMakeDefault && !hasLabel) return INVALID_BODY();
+  // `myReplies: true | false` — send (or stop sending) the CURRENT user's replies from this number.
+  const hasMyReplies = body.myReplies !== undefined;
+  if (hasMyReplies && typeof body.myReplies !== "boolean") return INVALID_BODY();
+  if (hasMyReplies && !ghlUserId) return NO_USER();
+  if (!hasMakeDefault && !hasLabel && !hasMyReplies) return INVALID_BODY();
 
   const target = await repo.getLocationNumberBySlot(locationId, slot.slot);
   if (!target) return UNKNOWN_NUMBER();
@@ -246,5 +260,10 @@ export async function decideUpdateNumber(
   if (hasMakeDefault) {
     if (!(await repo.setDefaultLocationNumber(locationId, slot.slot))) return UNKNOWN_NUMBER();
   }
-  return okList(repo, locationId);
+  if (hasMyReplies && ghlUserId) {
+    if (body.myReplies === true) await repo.setUserTenant(locationId, ghlUserId, target.tenantId);
+    // Clearing only clears THIS number's assignment, never another one.
+    else if ((await repo.getUserTenant(locationId, ghlUserId)) === target.tenantId) await repo.setUserTenant(locationId, ghlUserId, null);
+  }
+  return okList(repo, locationId, undefined, ghlUserId);
 }

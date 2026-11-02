@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { AttentionFilter } from "@/components/app/AttentionFilter";
-import { LocationQrPanel } from "@/components/app/LocationQrPanel";
+import { LocationNumbersPanel } from "@/components/app/LocationNumbersPanel";
 import { LocationTable } from "@/components/app/LocationTable";
 import { PlanHeader } from "@/components/app/PlanHeader";
 import { GhlResultNotice } from "@/components/app/GhlResultNotice";
@@ -9,7 +9,6 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { getAccountDataSource } from "@/lib/account-data";
 import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
 import { fleetSummary, headline, needsAttention, needsCard, planStatus, TRIAL_REMINDER_DAYS, trialDaysLeft } from "@/lib/account-data/derive";
-import { panelSummaryFromRow } from "@/lib/account-data/map";
 import { isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
@@ -68,10 +67,9 @@ export default async function DashboardPage({
       ? {
           locationId: qrRow.id,
           panel: (
-            <LocationQrPanel
+            <LocationNumbersPanel
               locationId={qrRow.id}
               name={qrRow.name}
-              summary={panelSummaryFromRow(qrRow)}
               bridgeConfigured={isWhatsappBridgeConfigured()}
               nowMs={now.getTime()}
             />
@@ -118,6 +116,7 @@ export default async function DashboardPage({
           installed={count(params.installed)}
           failed={count(params.failed)}
           conflicts={count(params.conflicts)}
+          error={first(params.error)}
         />
 
         <section aria-labelledby="subaccounts">
@@ -125,13 +124,24 @@ export default async function DashboardPage({
             <h2 id="subaccounts" className="h-section font-display">
               Sub-accounts
             </h2>
-            <AttentionFilter filter={filter} total={rows.length} attention={attentionCount} />
+            <div className="flex flex-wrap items-center gap-3">
+              <AttentionFilter filter={filter} total={rows.length} attention={attentionCount} />
+              {/* The install starts here for agency owners (the OAuth start route already accepts an account session). */}
+              <a href="/api/crm/oauth/start" className={siteButton("ink")}>
+                Add sub-accounts
+              </a>
+            </div>
           </div>
           <div className="mt-6">
             {rows.length === 0 ? (
               <EmptyState
                 title="No sub-accounts yet"
                 description="Connect GoHighLevel to see your sub-accounts here."
+                action={
+                  <a href="/api/crm/oauth/start" className={siteButton("ink")}>
+                    Connect GoHighLevel
+                  </a>
+                }
               />
             ) : visible.length === 0 ? (
               <EmptyState

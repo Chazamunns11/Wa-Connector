@@ -14,6 +14,7 @@ import type {
   GhlAccount,
   GhlAccountBrandingPatch,
   GhlAccountDraft,
+  GhlCompany,
   GhlAccountSummary,
   GhlHealthSnapshot,
   GhlOutboundAttachment,
@@ -119,6 +120,12 @@ export interface GhlRepository {
 
   /** The tenant a contact most recently messaged on, or null (fall back to the default number). */
   getStickyTenant(locationId: string, ghlContactId: string): Promise<string | null>;
+
+  /** Setter seats (0018): the number (tenant) a HighLevel user's replies go out from in this location, or null (sticky/default routing). */
+  getUserTenant(locationId: string, ghlUserId: string): Promise<string | null>;
+
+  /** Set (tenantId) or clear (null) a HighLevel user's sending number in this location. The tenant must be one of the location's numbers (FK). */
+  setUserTenant(locationId: string, ghlUserId: string, tenantId: string | null): Promise<void>;
 
   /** Upsert the contact's sticky number, overwriting only when `receivedAtIso` is strictly newer. */
   recordInboundForStickiness(
@@ -277,7 +284,21 @@ export interface GhlRepository {
    * credential is good again. Called from `src/lib/ghl-provider.ts`'s
    * `resolveGhlAccessToken` (Phase 2).
    */
-  saveGhlTokens(locationId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string }): Promise<void>;
+  saveGhlTokens(locationId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string | null }): Promise<void>;
+
+  /**
+   * Agency installs (migration 0017) — the Company token an agency install
+   * hands back, one row per HighLevel company. Upserted by the OAuth callback
+   * (resets status to active); read and refreshed by `resolveGhlAccessToken`
+   * to mint location tokens for accounts with no refresh token of their own.
+   * Same single-flight claim contract as `claimGhlTokenRefresh`: HighLevel
+   * refresh tokens rotate on use, so only the claim winner may spend one.
+   */
+  getGhlCompany(companyId: string): Promise<GhlCompany | null>;
+  upsertGhlCompany(company: { companyId: string; accessToken: string; accessTokenExpiresAt: string; refreshToken: string; scope: string | null }): Promise<void>;
+  saveGhlCompanyTokens(companyId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string }): Promise<void>;
+  claimGhlCompanyTokenRefresh(companyId: string): Promise<boolean>;
+  markGhlCompanyNeedsReauth(companyId: string, error: string): Promise<void>;
 
   /**
    * GHL rejected the refresh token (`invalid_grant`) — flips `status` to
@@ -914,6 +935,19 @@ export interface GhlRepository {
   stampSessionTriggerPhone(tenantId: string, phoneE164: string): Promise<void>;
   /** Sessions (with slot and label) of the given locations' numbers, for the connection watcher. */
   listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]>;
+
+  /**
+   * Health alerts (migration 0019, `src/lib/session-alerts.ts`). `listOpsAlerts`
+   * reads every open outage; `markOpsAlertDown` records one (no-op if already
+   * open); `claimOpsAlert` stamps `alerted_at` and is true only for the ONE
+   * caller that flipped it from null (that caller sends the email);
+   * `clearOpsAlert` deletes the row and returns whether it HAD been alerted
+   * (only that caller sends "back up"), or null if there was no row.
+   */
+  listOpsAlerts(): Promise<{ key: string; downSince: string; alertedAt: string | null }[]>;
+  markOpsAlertDown(key: string, detail: string | null): Promise<void>;
+  claimOpsAlert(key: string): Promise<boolean>;
+  clearOpsAlert(key: string): Promise<{ wasAlerted: boolean } | null>;
   /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */
   recordStripeEvent(eventId: string, type: string): Promise<boolean>;
   /** Releases a recorded Stripe event id after a processing failure so Stripe's retry is handled, not dropped as a duplicate. */

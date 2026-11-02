@@ -29,7 +29,7 @@
  * moving here would break this file's whole reason for existing.
  */
 import type { GhlRepository } from "@/lib/data";
-import type { GhlTokens } from "@/lib/ghl";
+import type { GhlLocationTokenResult, GhlTokens } from "@/lib/ghl";
 
 /**
  * The narrow repo slice this file touches — exactly the three methods
@@ -71,6 +71,22 @@ export type InstallOutcome = "installed" | "conflict" | "failed";
 export async function installGhlLocation(
   repo: GhlOauthCallbackRepo,
   tokens: GhlTokens,
+  locationName?: string | null,
+  accountId: string | null = null
+): Promise<InstallOutcome> {
+  return (await installGhlLocationDetailed(repo, tokens, locationName, accountId)).outcome;
+}
+
+/**
+ * `installGhlLocation` plus the reason a `"failed"` failed, so the install
+ * callback can show it. A token with no refresh token is accepted when it
+ * carries a `companyId`: that is an agency-minted location token (migration
+ * 0017) — refreshed by re-minting from the agency token, which the callback
+ * saves before calling this.
+ */
+export async function installGhlLocationDetailed(
+  repo: GhlOauthCallbackRepo,
+  tokens: GhlTokens,
   /**
    * The sub-account's real business name, when the caller happens to know it.
    *
@@ -96,8 +112,9 @@ export async function installGhlLocation(
    * refreshes tokens on any row and leaves account_id as it was.
    */
   accountId: string | null = null
-): Promise<InstallOutcome> {
-  if (!tokens.locationId || !tokens.refreshToken) return "failed";
+): Promise<{ outcome: InstallOutcome; error?: string }> {
+  if (!tokens.locationId) return { outcome: "failed", error: "HighLevel's token did not name a sub-account" };
+  if (!tokens.refreshToken && !tokens.companyId) return { outcome: "failed", error: "HighLevel did not grant long-term access (no refresh token)" };
   const locationId = tokens.locationId;
   const refreshToken = tokens.refreshToken;
   // Normalised to `undefined` rather than left as-is, because `??` only
@@ -108,7 +125,7 @@ export async function installGhlLocation(
   const resolvedName = locationName?.trim() ? locationName.trim() : undefined;
   try {
     const existing = await repo.getGhlAccountByLocationId(locationId);
-    if (accountId && existing?.accountId && existing.accountId !== accountId) return "conflict";
+    if (accountId && existing?.accountId && existing.accountId !== accountId) return { outcome: "conflict" };
     // KNOWN RACE (adversarial-review finding 10, accepted as harmless/
     // cosmetic — not fixed here, carried over verbatim from `route.ts`):
     // two concurrent callbacks for the SAME genuinely-new `locationId` can
@@ -143,12 +160,13 @@ export async function installGhlLocation(
     // conflict rather than a silent steal.
     if (accountId && !existing?.accountId) {
       const claimed = await repo.claimGhlAccount(locationId, accountId);
-      if (!claimed) return "conflict";
+      if (!claimed) return { outcome: "conflict" };
     }
-    return "installed";
+    return { outcome: "installed" };
   } catch (err) {
     console.error("[ghl/oauth/callback] could not save account:", err);
-    return "failed";
+    const message = typeof (err as { message?: unknown })?.message === "string" ? (err as { message: string }).message : "unknown error";
+    return { outcome: "failed", error: `Could not save the sub-account: ${message}`.slice(0, 300) };
   }
 }
 
@@ -176,8 +194,8 @@ export const GHL_BULK_INSTALL_CAP = 25;
 
 /** Every external dependency `runGhlBulkInstall` needs beyond the repo — injected so tests can fake per-location success/failure without a real GHL endpoint. `defaultGhlBulkInstallDeps`-equivalent wiring lives in `route.ts` itself (a one-line closure over the agency access token), not exported from here — there is nothing else to default. */
 export interface GhlBulkInstallDeps {
-  /** `getGhlLocationTokenFromAgency` (src/lib/ghl.ts) in production, bound to this callback's own agency access token — `null` means that ONE location's exchange failed and counts against `failed`, never aborts the run. */
-  getLocationToken: (companyId: string, locationId: string) => Promise<GhlTokens | null>;
+  /** `getGhlLocationTokenFromAgency` (src/lib/ghl.ts) in production, bound to this callback's own agency access token — `ok: false` means that ONE location's exchange failed (its HighLevel error goes into `errors`) and counts against `failed`, never aborts the run. */
+  getLocationToken: (companyId: string, locationId: string) => Promise<GhlLocationTokenResult>;
   /** Called with each location id skipped because another account owns it (the route sends the Slack note). */
   onConflict?: (locationId: string) => void;
 }
@@ -191,6 +209,8 @@ export interface GhlBulkInstallResult {
   conflicts: number;
   /** `totalFound` minus however many were actually attempted this run. `> 0` means `GHL_BULK_INSTALL_CAP` was hit — these locations were never even tried, so they must never be folded into `failed` (that would claim GHL rejected them, which is false) or silently dropped (see `GHL_BULK_INSTALL_CAP`'s own JSDoc, "NOT A SILENT CAP"). */
   skippedOverCap: number;
+  /** One `<locationId>: <reason>` per failure, in order — HighLevel's own error text where it gave one, so the callback can show the real cause instead of a bare count. */
+  errors: string[];
 }
 
 /**
@@ -228,21 +248,26 @@ export async function runGhlBulkInstall(
   let installed = 0;
   let failed = 0;
   let conflicts = 0;
+  const errors: string[] = [];
   for (const location of toProcess) {
-    const tokens = await deps.getLocationToken(companyId, location.locationId);
-    if (!tokens) {
+    const minted = await deps.getLocationToken(companyId, location.locationId);
+    if (!minted.ok) {
       failed++;
+      errors.push(`${location.locationId}: ${minted.error}`);
       continue;
     }
     // `location.name` is the whole reason the bulk path reads
     // `installedLocations` rather than working from ids alone — see
     // `installGhlLocation`'s `locationName` JSDoc.
-    const outcome = await installGhlLocation(repo, tokens, location.name, accountId);
+    const { outcome, error } = await installGhlLocationDetailed(repo, minted.tokens, location.name, accountId);
     if (outcome === "installed") installed++;
     else if (outcome === "conflict") {
       conflicts++;
       deps.onConflict?.(location.locationId);
-    } else failed++;
+    } else {
+      failed++;
+      errors.push(`${location.locationId}: ${error ?? "unknown error"}`);
+    }
   }
-  return { totalFound, installed, failed, conflicts, skippedOverCap: totalFound - toProcess.length };
+  return { totalFound, installed, failed, conflicts, skippedOverCap: totalFound - toProcess.length, errors };
 }

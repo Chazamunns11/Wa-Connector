@@ -79,3 +79,37 @@ test("inboundNumberPrefix: label when set, else 'Number <slot>'; empty with a si
   assert.equal(inboundNumberPrefix([], T1), "");
   assert.equal(inboundNumberPrefix([{ ...THREE[0], label: "  " }, THREE[1]], T1), "[Number 1] ", "a blank label counts as no label");
 });
+
+// ---------------------------------------------------------------------------
+// Setter seats (0018) — the sending user's own number beats sticky and default.
+// ---------------------------------------------------------------------------
+
+function withUsers(numbers: LocationNumber[], sticky: string | null, users: Record<string, string>) {
+  const base = fakeRepo(numbers, sticky);
+  const repo: SendingNumberRepo = { ...base.repo, getUserTenant: async (_loc, userId) => users[userId] ?? null };
+  return { repo, stickyCalls: base.stickyCalls };
+}
+
+test("resolveSendingTenant: the sending user's own number beats the contact's sticky number", async () => {
+  const { repo, stickyCalls } = withUsers(THREE, T3, { "user-setter": T1 });
+  const resolved = await resolveSendingTenant(repo, LOC, CONTACT, T2, "user-setter");
+  assert.equal(resolved.tenantId, T1);
+  assert.equal(stickyCalls.length, 0);
+});
+
+test("resolveSendingTenant: a user with no number of their own falls back to sticky, then default", async () => {
+  const { repo } = withUsers(THREE, T3, { "someone-else": T1 });
+  assert.equal((await resolveSendingTenant(repo, LOC, CONTACT, T2, "user-owner")).tenantId, T3);
+  const noSticky = withUsers(THREE, null, {});
+  assert.equal((await resolveSendingTenant(noSticky.repo, LOC, CONTACT, T2, "user-owner")).tenantId, T2);
+});
+
+test("resolveSendingTenant: no userId (workflow, bulk action, bot) routes exactly as before", async () => {
+  const { repo } = withUsers(THREE, T3, { "user-setter": T1 });
+  assert.equal((await resolveSendingTenant(repo, LOC, CONTACT, T2)).tenantId, T3);
+});
+
+test("resolveSendingTenant: a user's number no longer on the location is ignored", async () => {
+  const { repo } = withUsers(THREE, null, { "user-setter": "99999999-9999-4999-8999-999999999999" });
+  assert.equal((await resolveSendingTenant(repo, LOC, CONTACT, T2, "user-setter")).tenantId, T2);
+});

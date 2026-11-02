@@ -135,6 +135,18 @@ test("the account WhatsApp actions each re-check the session's ownership", () =>
   assert.doesNotMatch(src, /assertOwner/);
 });
 
+test("every dashboard number action re-checks the session and the account's ownership of the sub-account", () => {
+  const src = read("src/app/(app)/dashboard/number-actions.ts");
+  assert.match(src, /^"use server"/m);
+  const exported = src.match(/export async function \w+/g) ?? [];
+  assert.equal(exported.length, 7);
+  assert.equal((src.match(/await requireAccountSession\(\)/g) ?? []).length, 7);
+  // 4 list/change actions check ownsLocation; 3 QR actions go through runOwnedNumberAction (which checks it too).
+  assert.equal((src.match(/ownsLocation\(repo, session\.accountId, locationId\)/g) ?? []).length, 4);
+  assert.equal((src.match(/runOwnedNumberAction\(repo, session\.accountId, locationId, slot,/g) ?? []).length, 3);
+  assert.doesNotMatch(src, /tenantId/);
+});
+
 test("the QR panel is a client component over the shared WhatsApp panel", () => {
   const src = read("src/components/app/LocationQrPanel.tsx");
   assert.match(src, /^"use client"/);
