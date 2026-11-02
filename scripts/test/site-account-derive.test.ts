@@ -58,7 +58,7 @@ test("planStatus pending: an abandoned Checkout shows the trial has not started"
   assert.deepEqual(planStatus(acct("pending"), NOW), {
     label: "Trial not started",
     tone: "warn",
-    banner: "Finish signing up to start your 7-day free trial. No card needed.",
+    banner: "Finish signing up to start your 7-day free trial.",
   });
 });
 
@@ -105,12 +105,13 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
 });
 
-test("headline counts active sub-accounts and their numbers at £7.99 per number (Nov 2026)", () => {
+test("headline counts active sub-accounts and their numbers: £7.99 each, £5.99 each from 25 (Nov 2026)", () => {
   const rows = [row(), row(), row({ activated: false, state: { kind: "not_active" } })];
   assert.equal(headline(rows), "2 sub-accounts active · 2 numbers · £15.98/month");
   assert.equal(headline([row()]), "1 sub-account active · 1 number · £7.99/month");
   assert.equal(headline([]), "0 sub-accounts active · 0 numbers · £0.00/month");
-  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · 25 numbers · £199.75/month");
+  assert.equal(headline(Array.from({ length: 24 }, () => row())), "24 sub-accounts active · 24 numbers · £191.76/month");
+  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · 25 numbers · £149.75/month");
   // Extra numbers are billed; numbers on an inactive sub-account are not.
   assert.equal(
     headline([row({ numbers: 3 }), row({ numbers: 2 }), row({ activated: false, numbers: 3, state: { kind: "not_active" } })]),

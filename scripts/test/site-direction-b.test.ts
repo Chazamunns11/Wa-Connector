@@ -169,6 +169,6 @@ test("14B sales-copy: step 2 carries the path chip; sampleCaption gone; other st
     "Set PingWren as the Telephony Provider and the Send SMS steps you already have go out on WhatsApp. When the customer writes back, the reply lands in Conversations.",
   );
   assert.equal(c.faqAllLink, "All the questions, on one page");
-  assert.equal(c.priceStrip.terms, "7-day free trial, no card needed. The trial covers up to 3 WhatsApp numbers, and you can cancel any time from the billing portal.");
+  assert.equal(c.priceStrip.terms, "7-day free trial for up to 3 WhatsApp numbers. Add your card when you start: nothing is charged for 7 days, then your card is charged automatically unless you cancel first. You can cancel any time from the billing portal.");
   assert.ok(c.safety[0].body.startsWith("Messages leave at a steady rate"));
 });

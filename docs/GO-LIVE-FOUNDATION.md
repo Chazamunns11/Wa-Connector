@@ -843,7 +843,7 @@ launch publicly until each of these is built or the copy is changed to match:
 
 Also before launch:
 
-- Confirm the launch price in `src/lib/pricing.ts`: £7.99 a month per WhatsApp number on an activated sub-account, no tiers (Charlie, Nov 2026; replaced the 17 Oct per-sub-account volume tiers). There is no price env var. The Stripe price must be a recurring, monthly, **per-unit** price of 799p, and must be changed whenever `src/lib/pricing.ts` changes. See GO-LIVE-ACCOUNTS.md Part 2.
+- Confirm the launch price in `src/lib/pricing.ts`: £7.99 a month per WhatsApp number on an activated sub-account, and £5.99 for every number from 25 (Charlie, Nov 2026; replaced the 17 Oct per-sub-account tiers). There is no price env var. The Stripe price must be a recurring, monthly, **volume-tiered** price: 1 to 24 at 799p, 25 and above at 599p, and must be changed whenever `src/lib/pricing.ts` changes. See GO-LIVE-ACCOUNTS.md Part 2.
 - Run a trademark search for "PingWren".
 
 ---

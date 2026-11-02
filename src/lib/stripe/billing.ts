@@ -1,5 +1,5 @@
 import { stripeConfig, stripeRequest, type StripeResult } from "./client";
-import { PRICE_PER_NUMBER_PENCE, TRIAL_DAYS, CURRENCY } from "../pricing";
+import { PRICE_PER_NUMBER_PENCE, VOLUME_FROM_NUMBERS, VOLUME_PRICE_PER_NUMBER_PENCE, TRIAL_DAYS, CURRENCY } from "../pricing";
 
 export interface StripeSubscription {
   id: string;
@@ -117,8 +117,9 @@ export async function createCheckoutSession(
     ...(input.customerId ? { customer: input.customerId } : { customer_email: input.customerEmail }),
     client_reference_id: input.accountId,
     line_items: [{ price: cfg.priceId, quantity: 1 }],
-    // The trial takes no card. If it ends without one Stripe pauses the
-    // subscription (status `paused`), which stops sending until a card is added.
+    // Nov 2026 (Charlie: "it must charge"): the trial TAKES A CARD at checkout
+    // and Stripe charges it automatically on day 7. `pause` stays as a safety
+    // net for a card later removed: then sending stops until one is added.
     subscription_data: trial
       ? {
           trial_period_days: TRIAL_DAYS,
@@ -127,8 +128,8 @@ export async function createCheckoutSession(
         }
       : { metadata: { account_id: input.accountId } },
     metadata: { account_id: input.accountId, owner_email: input.customerEmail },
-    // A restart bills today, so it still needs a card up front.
-    payment_method_collection: trial ? "if_required" : "always",
+    // Always collect a card: a trial is charged on day 7, a restart today.
+    payment_method_collection: "always",
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
   };
@@ -267,16 +268,21 @@ export async function createPortalSession(
 }
 
 /**
- * The Stripe Price the app expects behind STRIPE_PRICE_ID (Nov 2026): one
- * flat monthly price per unit, where a unit is a connected WhatsApp number
- * (src/lib/billing/quantity.ts sets the quantity). Used by the go-live
- * checklist to create the Price; the app itself only needs STRIPE_PRICE_ID.
+ * The Stripe Price the app expects behind STRIPE_PRICE_ID (Nov 2026): a
+ * monthly VOLUME-tiered price per connected WhatsApp number (the quantity,
+ * set by src/lib/billing/quantity.ts): 1-24 numbers at 799p each, 25 or
+ * more at 599p each, for ALL of them. Used by the go-live checklist to
+ * create the Price; the app itself only needs STRIPE_PRICE_ID.
  */
 export function stripeNumberPrice() {
   return {
     currency: CURRENCY.toLowerCase(),
-    unit_amount: PRICE_PER_NUMBER_PENCE,
-    billing_scheme: "per_unit" as const,
+    billing_scheme: "tiered" as const,
+    tiers_mode: "volume" as const,
+    tiers: [
+      { up_to: VOLUME_FROM_NUMBERS - 1, unit_amount: PRICE_PER_NUMBER_PENCE },
+      { up_to: "inf" as const, unit_amount: VOLUME_PRICE_PER_NUMBER_PENCE },
+    ],
     recurring: { interval: "month" as const },
   };
 }

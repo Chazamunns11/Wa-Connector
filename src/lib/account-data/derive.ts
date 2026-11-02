@@ -32,7 +32,7 @@ export function planStatus(account: AccountSummary, now: Date, opts: { hasCard?:
   switch (account.billingStatus) {
     case "pending":
       // Checkout abandoned: the dashboard offers a working "start your trial" button.
-      return { label: "Trial not started", tone: "warn", banner: `Finish signing up to start your ${TRIAL_DAYS}-day free trial. No card needed.` };
+      return { label: "Trial not started", tone: "warn", banner: `Finish signing up to start your ${TRIAL_DAYS}-day free trial.` };
     case "trialing": {
       const n = trialDaysLeft(account.trialEndsAt, now);
       if (n === 0) return { label: "Trial ended", tone: "warn", banner: null };

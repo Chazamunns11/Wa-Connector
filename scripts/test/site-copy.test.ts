@@ -50,7 +50,7 @@ test("daily-cap, stop and white-label answers state the real behaviour", () => {
   assert.match(get("stop"), /from that sub-account/);
   assert.match(get("white-label"), /It depends on the agency/);
   assert.match(get("white-label"), /ask your agency to allow Testbrand/);
-  assert.match(get("trial"), /After that it's £7\.99 a month for each WhatsApp number you connect, up to 3 per sub-account\. Every number costs the same, however many you run\./);
+  assert.match(get("trial"), /After that it's £7\.99 a month for each WhatsApp number you connect, up to 3 per sub-account\. From 25 numbers, every number is £5\.99\./);
   assert.ok(!salesCopy(brand).safety.some((s) => /from your account/.test(s.body)));
 });
 
@@ -207,15 +207,15 @@ test("W40: no 'one price', 'same price' or 'flat price' wording survives", () =>
   assert.deepEqual(hits, []);
 });
 
-test("Nov 2026 pricing: the trial paragraph and our comparison column state £7.99 per WhatsApp number, no tiers", () => {
-  assert.match(pricingCopy().trialTerms[0], /£7\.99 a month for each WhatsApp number you connect, up to 3 per sub-account\. Every number costs the same, however many you run\./);
-  assert.deepEqual(ourColumn("GBP")[0], "£7.99 a month for each WhatsApp number you connect, up to 3 per sub-account. Every number costs the same, however many you run.");
+test("Nov 2026 pricing: the trial paragraph and our comparison column state £7.99 per number, £5.99 for all from 25", () => {
+  assert.match(pricingCopy().trialTerms[0], /£7\.99 a month for each WhatsApp number you connect, up to 3 per sub-account\. From 25 numbers, every number is £5\.99\./);
+  assert.deepEqual(ourColumn("GBP")[0], "£7.99 a month for each WhatsApp number you connect, up to 3 per sub-account. From 25 numbers, every number is £5.99.");
   for (const text of [pricingCopy().trialTerms.join(" "), ourColumn("GBP").join(" ")]) {
-    assert.doesNotMatch(text, /£9\.99|£5\.99|tier you reach|numbers included/);
+    assert.doesNotMatch(text, /£9\.99|tier you reach|numbers included|per activ(e|ated) sub-account/);
   }
 });
 
-test("trial copy says no card is needed and never that we take one", () => {
+test("trial copy (Nov 2026): a card is taken at the start and charged automatically on day 7; never 'no card needed'", () => {
   const signup = readFileSync(join(process.cwd(), "src/app/(site)/signup/page.tsx"), "utf8");
   const sources = {
     sales: strings(salesCopy(brand)).join(" "),
@@ -224,7 +224,9 @@ test("trial copy says no card is needed and never that we take one", () => {
     signup,
   };
   for (const [k, v] of Object.entries(sources)) {
-    assert.doesNotMatch(v, /take a card|card up front|card is needed|card when you sign up/i, k);
-    assert.match(v, /-day free trial, no card needed/, k);
+    assert.doesNotMatch(v, /no card needed|needs no card|without a card/i, k);
+    // The signup page renders the shared sentence; the rest contain it as text.
+    if (k === "signup") assert.match(v, /trialSentence\(\)/, k);
+    else assert.match(v, /charged automatically unless you cancel first/, k);
   }
 });

@@ -45,7 +45,7 @@ function withEnv(env: Record<string, string | undefined>, fn: () => Promise<void
 const input = { accountId: "acc-1", customerEmail: "a£7\.99.co", successUrl: "S", cancelUrl: "C" };
 const base = { STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_9", STRIPE_WEBHOOK_SECRET: "whsec" };
 
-test("createCheckoutSession: 7-day trial with no card, pausing when it ends without one; no tax by default", async () => {
+test("createCheckoutSession: 7-day trial that TAKES a card (charged on day 7), pausing only if no card is left; no tax by default", async () => {
   await withEnv({ ...base, STRIPE_AUTOMATIC_TAX: undefined }, async () => {
     const { calls, deps } = fake({ id: "cs_1", url: "U" });
     await createCheckoutSession(input, deps);
@@ -62,7 +62,7 @@ test("createCheckoutSession: 7-day trial with no card, pausing when it ends with
         metadata: { account_id: "acc-1" },
       },
       metadata: { account_id: "acc-1", owner_email: "a£7\.99.co" },
-      payment_method_collection: "if_required",
+      payment_method_collection: "always",
       success_url: "S",
       cancel_url: "C",
     });
@@ -220,13 +220,18 @@ test("default payment method and resume calls", async () => {
   assert.ok(r.ok && r.data.status === "active");
 });
 
-test("stripeNumberPrice: one flat £7.99 monthly price per WhatsApp number, no tiers (Nov 2026)", () => {
+test("stripeNumberPrice: monthly volume price per number, 799p for 1-24 and 599p for all from 25 (Nov 2026)", () => {
   assert.equal(PRICE_PER_NUMBER_PENCE, 799);
   assert.deepEqual(stripeNumberPrice(), {
     currency: "gbp",
-    unit_amount: 799,
-    billing_scheme: "per_unit",
+    billing_scheme: "tiered",
+    tiers_mode: "volume",
+    tiers: [
+      { up_to: 24, unit_amount: 799 },
+      { up_to: "inf", unit_amount: 599 },
+    ],
     recurring: { interval: "month" },
   });
 });
+
 

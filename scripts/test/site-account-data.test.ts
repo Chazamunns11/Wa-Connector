@@ -111,10 +111,10 @@ test("getBilling given the rows does not list locations again", async () => {
   assert.equal(f.calls.slice(before).filter((c) => c.name === "listGhlAccountsForAccount").length, 0);
 });
 
-test("getBilling at 25 active sub-accounts with one number each: 25 x £7.99", async () => {
+test("getBilling at 25 numbers: every number drops to £5.99 (25 x £5.99)", async () => {
   const many = Array.from({ length: 25 }, (_, i) => loc(`l${i}`, `L${i}`, true));
   const b = await make(fakes({ locations: many })).getBilling();
-  assert.equal(b.nextInvoiceAmount, 199.75);
+  assert.equal(b.nextInvoiceAmount, 149.75);
 });
 
 test("getBilling bills every number on active sub-accounts, none on inactive ones (£7.99 each)", async () => {

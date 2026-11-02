@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { siteButton } from "@/components/site/button";
 import { SITE_ROUTES } from "@/lib/site/routes";
-import { MAX_NUMBERS_PER_SUB_ACCOUNT, pricePerNumber, pricingConfig } from "@/lib/pricing";
+import { MAX_NUMBERS_PER_SUB_ACCOUNT, VOLUME_FROM_NUMBERS, pricePerNumber, pricingConfig, volumePricePerNumber } from "@/lib/pricing";
 
 /** The closing price strip, on the coral ground: the price as the headline, one plain terms line, an Ink pill. */
 export function PricingSummary({ ctaLabel, terms }: { ctaLabel: string; terms: string }) {
@@ -13,7 +13,7 @@ export function PricingSummary({ ctaLabel, terms }: { ctaLabel: string; terms: s
           {pricePerNumber(pricing.currency)} a month per WhatsApp number
         </h2>
         <p className="mt-3.5 max-w-[52ch] text-[1.15rem] font-semibold">
-          Up to {MAX_NUMBERS_PER_SUB_ACCOUNT} numbers per sub-account. Every number costs the same, however many you run.
+          Up to {MAX_NUMBERS_PER_SUB_ACCOUNT} numbers per sub-account. From {VOLUME_FROM_NUMBERS} numbers, every number is {volumePricePerNumber(pricing.currency)}.
         </p>
         <p className="mt-2 max-w-[52ch] font-medium">Every feature on every plan. No setup fee, no charge per message.</p>
         <p className="mt-2 max-w-[52ch] font-medium">{terms}</p>

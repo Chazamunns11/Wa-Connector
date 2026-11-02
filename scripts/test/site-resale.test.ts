@@ -22,12 +22,12 @@ test("defaults: 10 numbers at 50 pounds", () => {
   assert.equal(RESALE_DEFAULT_PRICE, "50");
 });
 
-test("examples at 50 pounds, £7.99 per number: keep 42.01, 210.05, 420.10 and 1,050.25 a month", () => {
+test("examples at 50 pounds: keep 42.01, 210.05, 420.10 a month, and 1,100.25 at 25 (every number £5.99)", () => {
   const cases: [number, number][] = [
     [1, 4201],
     [5, 21005],
     [10, 42010],
-    [25, 105025],
+    [25, 110025],
   ];
   for (const [n, keep] of cases) {
     const f = resaleFigures(n, 5000);
@@ -117,11 +117,11 @@ test("fallback line and examples at 50 pounds", () => {
       [1, "£42.01"],
       [5, "£210.05"],
       [10, "£420.10"],
-      [25, "£1,050.25"],
+      [25, "£1,100.25"],
     ],
   );
   const line = resaleFallbackLine(GBP);
-  for (const s of ["£50", "£42.01", "£210.05", "£420.10", "£1,050.25"]) assert.ok(line.includes(s), s);
+  for (const s of ["£50", "£42.01", "£210.05", "£420.10", "£1,100.25"]) assert.ok(line.includes(s), s);
   assert.match(line, /example/i);
 });
 

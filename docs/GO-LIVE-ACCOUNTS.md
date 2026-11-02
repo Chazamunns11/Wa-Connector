@@ -104,16 +104,19 @@ same organisation**.
    and sets the quantity to the number of WhatsApp numbers on the account's
    activated sub-accounts (Nov 2026: per-number billing, see `src/lib/pricing.ts`).
    - Recurring, monthly, currency GBP.
-   - Pricing model: **Standard pricing** (per unit, `billing_scheme = per_unit`).
-   - Price: **£7.99** per unit (799 pence). No tiers, no flat fee.
+   - Pricing model: **Volume pricing** (`billing_scheme = tiered`,
+     `tiers_mode = volume`).
+   - Tier 1: first unit 1, last unit 24, **£7.99** per unit (799 pence).
+   - Tier 2: first unit 25, last unit and above, **£5.99** per unit (599 pence).
+   - No flat fee on either tier.
 
-   That matches `stripeNumberPrice()` in `src/lib/stripe/billing.ts`. Three
-   numbers cost 3 x £7.99 = £23.97 a month. If the price in `src/lib/pricing.ts`
-   ever changes, the Stripe price must change with it.
+   That matches `stripeNumberPrice()` in `src/lib/stripe/billing.ts`. Volume
+   means the tier the total reaches prices every number: 3 numbers cost
+   3 x £7.99 = £23.97; 25 numbers cost 25 x £5.99 = £149.75. If the prices in
+   `src/lib/pricing.ts` ever change, the Stripe price must change with them.
 
-   Already made the old tiered "sub-account" price? Create this new one, put
-   its id in `STRIPE_PRICE_ID`, and archive the old price. No subscription on
-   this app was ever created against it.
+   Already made an older price (the per-sub-account tiers, or a flat £7.99)?
+   Create this one, put its id in `STRIPE_PRICE_ID`, and archive the old one.
 4. Copy the price id (starts `price_`). It becomes `STRIPE_PRICE_ID`.
 5. **Developers → API keys.** Copy the secret key (starts `sk_test_`). It
    becomes `STRIPE_SECRET_KEY`. Do not use the publishable key. The app never
@@ -122,7 +125,9 @@ same organisation**.
    - Update payment method
    - View invoice history
 
-   The trial takes no card. "Add a card" on the billing page does not use the
+   The trial TAKES a card at checkout and Stripe charges it on day 7 (Nov
+   2026). "Add a card" stays for changing the card, and for the rare trial
+   whose card was removed. It does not use the
    portal: it opens a Stripe Checkout in setup mode, and the webhook then makes
    the card the default and resumes the subscription if the trial had already
    ended. (Adding a card in the portal does not resume a paused subscription.)
@@ -293,9 +298,14 @@ Then walk this journey:
    dashboard will not let you attach an existing customer, create the
    customer and subscription from the dashboard on a clock, and use the
    Stripe CLI or dashboard to replay the events at the webhook.
-2. **Signup and trial.** Checkout asks for no card. Status trialing. Trial
-   end date visible on the billing page, and "No card on file".
-3. **Trial ends with no card, sending pauses.** Activate one sub-account and
+2. **Signup and trial.** Checkout asks for a card (`4242 4242 4242 4242`) and
+   says nothing is charged today. Status trialing; the trial end date and the
+   card's last four digits show on the billing page.
+2b. **Day 7 charges the card.** Advance the clock past day 7: Stripe charges
+   the first invoice (£7.99 x the active numbers) and the status becomes
+   **active**. Never paused.
+3. **Card removed during the trial, sending pauses** (safety net only).
+   Detach the card in Stripe, then activate one sub-account and
    check it sends. Advance the clock to 2 days before the trial ends: the
    dashboard shows "Your trial ends in 2 days. Add a card to keep sending."
    with an **Add a card** button. Advance past day 7 without adding a card.
