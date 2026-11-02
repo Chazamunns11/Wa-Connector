@@ -63,9 +63,11 @@ same organisation**.
    opened, so nobody can sign up with an address they cannot read. Keep
    **Confirm email** on. In **Authentication → Email Templates**,
    new people get Supabase's "Confirm signup" template and returning people
-   get "Magic Link". Customise both, and keep the wording neutral, for example
-   "Follow this link to continue:", rather than "Sign in". Part 6 checks which
-   one arrives.
+   get "Magic Link". Both are ready-made in the PingWren branding: paste
+   `docs/email-templates/confirm-signup.html` into "Confirm signup" and
+   `docs/email-templates/magic-link.html` into "Magic Link", with the subject
+   `Your PingWren link` on both. They keep the wording neutral ("Follow this
+   link to continue") rather than "Sign in". Part 6 checks which one arrives.
 6. **Custom SMTP, before any real sign-up.** Supabase's built-in sender is
    rate-limited to a handful of emails an hour and is not for production. Set
    up Resend on the brand domain, then **Project Settings → Authentication →
@@ -139,11 +141,16 @@ same organisation**.
    link to `<app>/dashboard/billing`.
 7. **Settings → Billing → Subscriptions and emails → Manage failed payments.**
    Use smart retries and set the last step to mark the subscription
-   **unpaid** after about 7 days. The app turns `past_due` into the "payment
-   failed" banner (sending keeps working), and `unpaid` into paused.
+   **unpaid** after about 7 days (not "cancel" and not "pause": the app is
+   built around `unpaid`). The app turns `past_due` into the "payment failed"
+   banner (sending keeps working), and `unpaid` into "Not sending: payment
+   due". The numbers stay connected, the owner gets a daily email, and
+   **Update card and pay** (or a card change in the portal) pays the latest
+   invoice, which makes Stripe mark the subscription active again. Sending
+   restarts straight away and the owner gets a "sending again" email.
 8. **Developers → Webhooks → Add endpoint.**
    - URL: `<app>/api/webhooks/billing`
-   - Events, exactly these seven (the handler ignores anything else):
+   - Events, exactly these eight (the handler ignores anything else):
      - `checkout.session.completed` (signup, restarts, and "Add a card")
      - `customer.subscription.created`
      - `customer.subscription.updated`
@@ -151,6 +158,8 @@ same organisation**.
      - `customer.subscription.paused` (the trial ended with no card)
      - `customer.subscription.resumed` (a card was added after that)
      - `invoice.payment_failed`
+     - `customer.updated` (a card changed in the billing portal while the
+       account owes money: the app pays what's due with it)
 
      `customer.subscription.trial_will_end` is not needed: there is no
      trial-ending email yet (the app has no email sending of its own). The
@@ -158,6 +167,20 @@ same organisation**.
      instead.
    - Copy the **signing secret** (starts `whsec_`). It becomes
      `STRIPE_WEBHOOK_SECRET`. Test mode and live mode have different ones.
+9. **Branding, so every Stripe page and email says PingWren.** Checkout, the
+   billing portal, invoices and receipts all take their look from these
+   settings, not from the app:
+   - **Settings → Business → Public details:** business name `PingWren`,
+     support email, website `https://pingwren.co.uk`. Statement descriptor
+     `PINGWREN` (what shows on the card statement).
+   - **Settings → Branding:** icon `public/brand/pingwren-app-icon-512.png`,
+     logo `public/brand/pingwren-logo@3x.png`, brand colour `#FF5A36`
+     (Coral), accent colour `#1B1F2A` (Ink).
+   - **Settings → Billing → Subscriptions and emails / Revenue recovery →
+     Emails:** turn on emails for successful payments (receipts) and failed
+     payments. They carry the branding above.
+   - **Product name:** `PingWren WhatsApp number` (it is the line on every
+     invoice).
 9. **Stripe Tax decision.** Pick one before launch:
    - Off: Stripe adds no tax. Leave `STRIPE_AUTOMATIC_TAX` unset. Fine if you
      are under the VAT threshold and take advice.
@@ -344,7 +367,16 @@ Then walk this journey:
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the
    "Stripe payment failed" note, and **sending keeps working** while Stripe
    retries. Advance until the retries run out. Status becomes **paused** and
-   sending stops.
+   sending stops: the dashboard says "Not sending: payment due", GoHighLevel
+   shows each message as failed ("Nothing sends until the account owner
+   updates billing"), and within the hour the owner gets the first daily
+   "Nothing is sending" email (needs `RESEND_API_KEY` and `EMAIL_FROM`).
+   Then press **Update card and pay** with `4242 4242 4242 4242`. The
+   outstanding invoice is paid, status goes back to **active**, sending
+   restarts with no QR rescan, the daily emails stop, and within the hour the
+   owner gets "Payment received: your PingWren numbers are sending again".
+   Repeat once using the billing portal to change the card instead: the same
+   should happen (the `customer.updated` webhook).
 8. **Cancel.** In the Customer Portal, cancel. The billing page should say
    "Cancels at the end of this period". Advance past the period end. Status
    becomes **cancelled**.

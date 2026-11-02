@@ -14,6 +14,7 @@ import {
   resumeSubscription,
   parseSubscription,
   stripeNumberPrice,
+  settleInvoice,
 } from "@/lib/stripe/billing";
 import { PRICE_PER_NUMBER_PENCE } from "@/lib/pricing";
 
@@ -116,8 +117,11 @@ test("parseSubscription: typed shape, object customer, missing items", () => {
     itemId: "si_1",
     quantity: 3,
     cardLast4: "4242",
+    latestInvoice: null,
     metadata: {},
   });
+  assert.equal(parseSubscription({ ...raw, latest_invoice: "in_9" })?.latestInvoice, "in_9");
+  assert.equal(parseSubscription({ ...raw, latest_invoice: { id: "in_8" } })?.latestInvoice, "in_8");
   assert.equal(parseSubscription({ ...raw, customer: { id: "cus" } })?.customer, "cus");
   const { items: _items, ...noItems } = raw;
   void _items;
@@ -236,3 +240,49 @@ test("stripeNumberPrice: monthly GRADUATED price per number, 999p for numbers 1-
 
 
 
+
+/** A scripted Stripe: each call returns the next invoice status. */
+function scripted(statuses: string[], failPay = false) {
+  const calls: { method: string; path: string; params: Record<string, unknown> | undefined; key?: string }[] = [];
+  const request = (async (method: string, path: string, params?: Record<string, unknown>, opts?: { idempotencyKey?: string }) => {
+    calls.push({ method, path, params, key: opts?.idempotencyKey });
+    if (failPay && path.endsWith("/pay")) return { ok: false, status: 402, code: "card_declined", message: "declined" };
+    return { ok: true, data: { id: "in_1", status: statuses.shift() ?? "paid" } };
+  }) as never;
+  return { calls, deps: { request } };
+}
+
+test("settleInvoice: an open invoice is paid with the named card, keyed so one card change charges once", async () => {
+  const f = scripted(["open", "paid"]);
+  const r = await settleInvoice("in_1", { paymentMethod: "pm_9" }, f.deps);
+  assert.deepEqual(r, { ok: true, data: { id: "in_1", status: "paid" } });
+  assert.deepEqual(
+    f.calls.map((c) => `${c.method} ${c.path}`),
+    ["GET /invoices/in_1", "POST /invoices/in_1/pay"],
+  );
+  assert.deepEqual(f.calls[1].params, { payment_method: "pm_9" });
+  assert.equal(f.calls[1].key, "settle-in_1-pm_9");
+});
+
+test("settleInvoice: a draft (renewal while unpaid) is finalised first, then paid", async () => {
+  const f = scripted(["draft", "open", "paid"]);
+  await settleInvoice("in_1", { paymentMethod: "pm_9" }, f.deps);
+  assert.deepEqual(
+    f.calls.map((c) => `${c.method} ${c.path}`),
+    ["GET /invoices/in_1", "POST /invoices/in_1/finalize", "POST /invoices/in_1/pay"],
+  );
+  assert.deepEqual(f.calls[1].params, { auto_advance: false });
+});
+
+test("settleInvoice: an invoice that is already paid is never charged again", async () => {
+  const f = scripted(["paid"]);
+  const r = await settleInvoice("in_1", {}, f.deps);
+  assert.equal(r.ok && r.data.status, "paid");
+  assert.equal(f.calls.length, 1);
+});
+
+test("settleInvoice: a decline comes back as not ok", async () => {
+  const f = scripted(["open"], true);
+  const r = await settleInvoice("in_1", { paymentMethod: "pm_9" }, f.deps);
+  assert.equal(r.ok, false);
+});

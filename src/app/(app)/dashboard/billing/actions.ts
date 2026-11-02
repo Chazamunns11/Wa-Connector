@@ -37,7 +37,7 @@ export async function endTrialNowAction(): Promise<void> {
   redirect(out.kind === "not_trialing" ? billingHref() : billingHref({ error: "stripe_failed" }));
 }
 
-/** "Add a card": during the trial, or once a trial has ended with no card and sending is paused. */
+/** "Add a card": during the trial, once a trial has ended with no card, or to pay what is owed (unpaid or past due). */
 export async function addCardAction(): Promise<void> {
   const session = await requireAccountSession();
   const account = await repo.getAccountById(session.accountId);

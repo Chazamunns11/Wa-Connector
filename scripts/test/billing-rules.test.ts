@@ -21,7 +21,7 @@ test("mapStripeSubscriptionStatus maps every known status", () => {
   for (const [input, expected] of pairs) assert.equal(mapStripeSubscriptionStatus(input), expected, input);
 });
 
-const INACTIVE = "PingWren subscription inactive — the account owner needs to update billing";
+const INACTIVE = "Not sent: PingWren subscription inactive. Nothing sends until the account owner updates billing.";
 const all: Array<BillingStatus | null> = ["pending", "trialing", "active", "past_due", "paused", "cancelled", "comped", null];
 
 test("sendingGate: not activated refuses with the fixed string whatever the status", () => {

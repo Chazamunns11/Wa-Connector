@@ -11,6 +11,7 @@ import { notifyText } from "@/lib/slack";
 import { verifyStripeSignature } from "@/lib/stripe/webhook";
 import {
   endTrialNow,
+  settleInvoice,
   resumeSubscription,
   retrieveCheckoutSession,
   retrieveSubscription,
@@ -19,6 +20,7 @@ import {
   setSubscriptionItemQuantity,
 } from "@/lib/stripe/billing";
 import { applyCardSetup } from "@/lib/billing/card";
+import { payWhatsDue } from "@/lib/billing/reactivate";
 import { handleBillingEvent, type StripeEvent } from "@/lib/billing/webhook-handler";
 import { syncSubscriptionQuantity } from "@/lib/billing/quantity";
 import { applyCheckoutSession } from "@/lib/billing/onboard";
@@ -63,6 +65,7 @@ export async function POST(request: NextRequest) {
               setSubscriptionDefault: setSubscriptionDefaultPaymentMethod,
               resume: resumeSubscription,
               endTrial: endTrialNow,
+              settleInvoice,
             },
             session,
           ),
@@ -70,6 +73,14 @@ export async function POST(request: NextRequest) {
         retrieveSubscription,
         syncQuantity: (account) =>
           syncSubscriptionQuantity(repo, { retrieveSubscription, setQuantity: setSubscriptionItemQuantity, notify }, account),
+        cardChanged: async (account, pm) => {
+          // The subscription's own card outranks the customer's default, so point it at the new card first.
+          if (account.stripeSubscriptionId) {
+            const s = await setSubscriptionDefaultPaymentMethod(account.stripeSubscriptionId, pm);
+            if (!s.ok) throw new Error(`card change: subscription default failed: ${s.message}`);
+          }
+          return payWhatsDue(repo, { retrieveSubscription, settleInvoice }, account, pm);
+        },
         notify,
       },
       event,

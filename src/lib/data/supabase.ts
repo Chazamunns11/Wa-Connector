@@ -2023,6 +2023,17 @@ export class SupabaseGhlRepository implements GhlRepository {
     }));
   }
 
+  async listAccountsByBillingStatus(status: BillingStatus) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("accounts")
+      .select(ACCOUNT_COLUMNS)
+      .eq("billing_status", status)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return ((data ?? []) as unknown as AccountRow[]).map(mapAccount);
+  }
+
   async listAccountsCancelledBefore(iso: string) {
     const supabase = getServiceClient();
     const { data, error } = await supabase

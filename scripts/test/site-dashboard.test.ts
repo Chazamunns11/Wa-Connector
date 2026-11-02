@@ -53,7 +53,7 @@ test("the banner button is a working form: start the trial when pending, add a c
   assert.match(header, /<form action=\{bannerAction\.action\}/);
   const page = read("src/app/(app)/dashboard/page.tsx");
   assert.match(page, /\{ action: startCheckoutAction, label: "Start your free trial" \}/);
-  assert.match(page, /\{ action: addCardAction, label: "Add a card" \}/);
+  assert.match(page, /\{ action: addCardAction, label: owesPayment\(account\) \? "Update card and pay" : "Add a card" \}/);
   assert.match(page, /bannerAction=\{bannerAction\}/);
   assert.match(read("src/app/(app)/dashboard/billing/actions.ts"), /export async function startCheckoutAction/);
   assert.match(read("src/app/(app)/dashboard/billing/actions.ts"), /export async function addCardAction/);

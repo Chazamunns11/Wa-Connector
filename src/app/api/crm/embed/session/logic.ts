@@ -12,8 +12,10 @@ export type EmbedState =
   | { state: "not_activated" }
   | { state: "ok" };
 
-export const EMBED_PAUSED_MESSAGE = "The account owner needs to update billing.";
-export const EMBED_TRIAL_ENDED_MESSAGE = "The free trial has ended. The account owner needs to add a card to keep sending.";
+export const EMBED_PAUSED_MESSAGE =
+  "Messages sent now fail and won't go out later. Nothing sends until the account owner updates billing.";
+export const EMBED_TRIAL_ENDED_MESSAGE =
+  "The free trial has ended. Messages sent now fail and won't go out later. Nothing sends until the account owner adds a card.";
 
 /** The line under "Sending is paused" in the embed. */
 export function embedPausedMessage(trialEnded: boolean): string {

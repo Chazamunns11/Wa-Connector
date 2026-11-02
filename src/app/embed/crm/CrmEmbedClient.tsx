@@ -492,7 +492,7 @@ export function CrmEmbedClient({ embedConfigured, bridgeConfigured, nowMs, brand
       <Card>
         <CardHeader title="WhatsApp" />
         <EmptyState
-          title="Sending is paused"
+          title="Nothing is sending"
           description={embedPausedMessage(trialEnded)}
         />
       </Card>

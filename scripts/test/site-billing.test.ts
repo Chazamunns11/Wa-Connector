@@ -75,9 +75,8 @@ test("addCardFlow: setup Checkout for a trial or a trial paused with no card, ba
   });
   await addCardFlow(acct(), { appUrl: "https://app.test", setup, then: "end_trial" });
   assert.equal((calls[1] as { then?: string }).then, "end_trial");
-  // unpaid (paused with no trial end) goes to the portal; other statuses never need it.
+  // Other statuses never need it (unpaid and past due are covered below).
   for (const a of [
-    acct({ billingStatus: "paused", trialEndsAt: null }),
     acct({ billingStatus: "active" }),
     acct({ billingStatus: "pending" }),
     acct({ billingStatus: "cancelled" }),
@@ -89,6 +88,13 @@ test("addCardFlow: setup Checkout for a trial or a trial paused with no card, ba
   assert.equal(calls.length, 2);
   const bad = async () => ({ ok: false as const, status: 500, code: null, message: "x" });
   assert.deepEqual(await addCardFlow(acct(), { appUrl: "u", setup: bad }), { kind: "failed" });
+});
+
+test("addCardFlow: an account that owes money (unpaid or past due) gets the card form, so the webhook can pay what's due", async () => {
+  const setup = async () => ({ ok: true as const, data: { url: "https://checkout.stripe.test/s" } });
+  for (const a of [acct({ billingStatus: "paused", trialEndsAt: null }), acct({ billingStatus: "past_due", trialEndsAt: null })]) {
+    assert.deepEqual(await addCardFlow(a, { appUrl: "u", setup }), { kind: "redirect", url: "https://checkout.stripe.test/s" });
+  }
 });
 
 test("startCheckoutFlow for pending and cancelled accounts only", async () => {

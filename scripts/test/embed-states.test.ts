@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { embedPausedMessage, embedStateFor } from "@/app/api/crm/embed/session/logic";
+import { EMBED_PAUSED_MESSAGE, EMBED_TRIAL_ENDED_MESSAGE, embedPausedMessage, embedStateFor } from "@/app/api/crm/embed/session/logic";
 import type { BillingStatus, GhlAccount } from "@/lib/types";
 
 function acct(overrides: Partial<GhlAccount> = {}): GhlAccount {
@@ -61,6 +61,8 @@ test("embedStateFor: unpaid or paused-without-trial stays the generic billing_pa
 });
 
 test("embedPausedMessage: trial-ended copy, else the generic billing line", () => {
-  assert.equal(embedPausedMessage(true), "The free trial has ended. The account owner needs to add a card to keep sending.");
-  assert.equal(embedPausedMessage(false), "The account owner needs to update billing.");
+  assert.equal(embedPausedMessage(true), EMBED_TRIAL_ENDED_MESSAGE);
+  assert.match(embedPausedMessage(true), /Nothing sends until the account owner adds a card/);
+  assert.equal(embedPausedMessage(false), EMBED_PAUSED_MESSAGE);
+  assert.match(embedPausedMessage(false), /Nothing sends until the account owner updates billing/);
 });

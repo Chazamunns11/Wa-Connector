@@ -12,7 +12,7 @@
  * hour even if every poke silently fails.
  *
  * ORDER (copied from the reminders route): outbound statuses, then inbound
- * replies, then the 90-day inbound purge, then the 14-day cancelled-account cleanup — a row must be fully processed
+ * replies, then the 90-day inbound purge, then the 14-day cancelled-account cleanup, then the daily unpaid reminder email — a row must be fully processed
  * before it's ever eligible to be deleted. Each pass is non-fatal: its own
  * try/catch, so one failing never stops the others.
  *
@@ -26,6 +26,9 @@ import { drainGhlOutboundStatuses, drainGhlReadReceipts } from "@/lib/ghl-provid
 import { releaseHeldOutboundMessages } from "@/lib/ghl-held";
 import { drainGhlInboundReplies } from "@/lib/ghl-inbound";
 import { purgeCancelledAccounts } from "@/lib/billing/cleanup";
+import { sendUnpaidReminders } from "@/lib/billing/reminders";
+import { sendEmail } from "@/lib/email";
+import { brandConfig } from "@/lib/brand-config";
 import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
 import { defaultGhlProviderDeps } from "@/lib/ghl-provider";
 import { defaultTriggerDeps, isWorkflowTriggersEnabled } from "@/lib/ghl-triggers";
@@ -177,5 +180,17 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] cancelled-account cleanup failed (non-fatal):", err instanceof Error ? err.name : "error");
   }
 
-  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlReadReceipts, ghlInboundReplies, sessionTriggers, whatsappInboundPurged, cancelledCleanup });
+  // Daily "nothing is sending until you pay" email to unpaid account owners (src/lib/billing/reminders.ts).
+  let unpaidReminders = { accounts: 0, sent: 0, failed: 0, restarted: 0 };
+  try {
+    const brand = brandConfig();
+    unpaidReminders = await sendUnpaidReminders(repo, { sendEmail, brandName: brand.name, appUrl: brand.appUrl, now: () => new Date(now) });
+    if (unpaidReminders.sent > 0 || unpaidReminders.failed > 0 || unpaidReminders.restarted > 0) {
+      console.log(`[cron/drain] unpaid reminders: sent ${unpaidReminders.sent}, failed ${unpaidReminders.failed}, sending-again ${unpaidReminders.restarted}.`);
+    }
+  } catch (err) {
+    console.error("[cron/drain] unpaid reminders failed (non-fatal):", err instanceof Error ? err.name : "error");
+  }
+
+  return NextResponse.json({ ok: true, heldRelease, ghlOutboundStatuses, ghlReadReceipts, ghlInboundReplies, sessionTriggers, whatsappInboundPurged, cancelledCleanup, unpaidReminders });
 }

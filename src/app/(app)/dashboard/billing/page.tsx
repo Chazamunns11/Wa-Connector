@@ -5,7 +5,7 @@ import { siteButton } from "@/components/site/button";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { getAccountDataSource } from "@/lib/account-data";
-import { headline, needsCard, planStatus } from "@/lib/account-data/derive";
+import { headline, needsCard, owesPayment, planStatus } from "@/lib/account-data/derive";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { formatMoney, pricingConfig, priceSentence } from "@/lib/pricing";
@@ -24,7 +24,7 @@ const DATE = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", y
 
 const NOTICE = {
   trial_ended: "Your free trial has ended and monthly billing has started. This page can take a moment to catch up.",
-  card_added: "Card saved. If sending was paused it restarts once Stripe confirms, which can take a moment.",
+  card_added: "Card saved. If a payment was due we're charging it now, and sending restarts once Stripe confirms. This can take a moment.",
   no_portal: "There is no billing portal for this account yet.",
   stripe_failed: "We could not reach billing just now, so nothing was changed. Please try again.",
 } as const;
@@ -110,12 +110,14 @@ export default async function BillingPage({
             {offerCard ? (
               <form action={addCardAction}>
                 <button type="submit" className={siteButton("coral")}>
-                  Add a card
+                  {owesPayment(account) ? "Update card and pay" : "Add a card"}
                 </button>
                 <p className="mt-2 text-sm text-ink-dim">
-                  {account.billingStatus === "paused"
-                    ? "Sending restarts as soon as the card is saved. Monthly billing starts today."
-                    : "Nothing is charged until your trial ends. Without a card, sending pauses when it does."}
+                  {owesPayment(account)
+                    ? "We charge what's due to this card straight away. Once it goes through, sending restarts."
+                    : account.billingStatus === "paused"
+                      ? "Sending restarts as soon as the card is saved. Monthly billing starts today."
+                      : "Nothing is charged until your trial ends. Without a card, sending pauses when it does."}
                 </p>
               </form>
             ) : null}

@@ -7,6 +7,8 @@ import {
   headline,
   needsAttention,
   needsCard,
+  owesPayment,
+  UNPAID_BANNER,
   planStatus,
   primaryActionFor,
   rowActionsFor,
@@ -49,7 +51,8 @@ test("planStatus per billing status", () => {
     banner: "Payment failed — update your card. Sending continues while we retry.",
   });
   const paused = planStatus(acct("paused"), NOW);
-  assert.equal(paused.banner, "Sending is paused — update billing to resume");
+  assert.equal(paused.banner, UNPAID_BANNER);
+  assert.equal(paused.label, "Not sending: payment due");
   assert.equal(paused.tone, "loss");
   assert.deepEqual(planStatus(acct("cancelled"), NOW), { label: "Cancelled", tone: "muted", banner: null });
 });
@@ -66,7 +69,7 @@ test("planStatus paused after a trial with no card says the trial ended; unpaid 
   const ended = new Date(NOW.getTime() - day).toISOString();
   assert.deepEqual(planStatus(acct("paused", ended), NOW), { label: "Trial ended", tone: "loss", banner: TRIAL_ENDED_NO_CARD });
   assert.equal(TRIAL_ENDED_NO_CARD, "Your trial has ended. Add a card to keep sending.");
-  assert.equal(planStatus(acct("paused", null), NOW).banner, "Sending is paused — update billing to resume");
+  assert.equal(planStatus(acct("paused", null), NOW).banner, UNPAID_BANNER);
 });
 
 test("planStatus reminds a trial with no card in its last 2 days, and only when the card is known to be missing", () => {
@@ -80,17 +83,27 @@ test("planStatus reminds a trial with no card in its last 2 days, and only when 
   assert.equal(planStatus(acct("trialing", in2), NOW).banner, null);
 });
 
-test("needsCard: a trial ended with no card, or a card-less trial in its last days", () => {
+test("needsCard: a trial ended with no card, a card-less trial in its last days, or an account that owes money", () => {
   const ended = new Date(NOW.getTime() - day).toISOString();
   const in2 = new Date(NOW.getTime() + 2 * day).toISOString();
   const in4 = new Date(NOW.getTime() + 4 * day).toISOString();
   assert.equal(needsCard(acct("paused", ended), NOW, undefined), true);
-  assert.equal(needsCard(acct("paused", null), NOW, undefined), false);
+  // Unpaid (stored as paused with no trial end) and past due: "Update card and pay".
+  assert.equal(needsCard(acct("paused", null), NOW, undefined), true);
+  assert.equal(needsCard(acct("past_due", null), NOW, true), true);
   assert.equal(needsCard(acct("trialing", in2), NOW, false), true);
   assert.equal(needsCard(acct("trialing", in2), NOW, true), false);
   assert.equal(needsCard(acct("trialing", in2), NOW, undefined), false);
   assert.equal(needsCard(acct("trialing", in4), NOW, false), false);
-  for (const s of ["pending", "active", "past_due", "cancelled", "comped"] as const) assert.equal(needsCard(acct(s, ended), NOW, false), false, s);
+  for (const s of ["pending", "active", "cancelled", "comped"] as const) assert.equal(needsCard(acct(s, ended), NOW, false), false, s);
+});
+
+test("owesPayment: unpaid (paused with no trial end) and past due only", () => {
+  const ended = new Date(NOW.getTime() - day).toISOString();
+  assert.equal(owesPayment(acct("paused", null)), true);
+  assert.equal(owesPayment(acct("past_due", null)), true);
+  assert.equal(owesPayment(acct("paused", ended)), false);
+  for (const s of ["pending", "trialing", "active", "cancelled", "comped"] as const) assert.equal(owesPayment(acct(s, null)), false, s);
 });
 
 test("needsAttention reasons in priority order: disconnected, waiting_qr, providerNudge, cap, null", () => {

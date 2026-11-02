@@ -5,7 +5,7 @@ export const REASON_NOT_ACTIVATED = "WhatsApp isn't activated for this sub-accou
 
 /** Fixed refusal shown in GoHighLevel when the owning account's billing is not live. */
 export function reasonSubscriptionInactive(brandName: string): string {
-  return `${brandName} subscription inactive — the account owner needs to update billing`;
+  return `Not sent: ${brandName} subscription inactive. Nothing sends until the account owner updates billing.`;
 }
 
 /** Statuses that may send. `past_due` keeps sending while Stripe retries the card. */
