@@ -1,5 +1,4 @@
 import type { BrandConfig } from "@/lib/brand-config";
-import { MID_FROM } from "@/lib/pricing";
 import { OWN_RESULTS_AVERAGE } from "@/lib/site/proof";
 
 export interface SalesCopy {
@@ -89,7 +88,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
         },
         {
           title: "Made for agencies",
-          body: `One dashboard shows every sub-account and its numbers. From ${MID_FROM} sub-accounts every sub-account drops to the lower price, and you set what your clients pay.`,
+          body: `One dashboard shows every sub-account and its numbers. Every number costs the same however many you run, and you set what your clients pay.`,
         },
         {
           title: "Careful with your number",

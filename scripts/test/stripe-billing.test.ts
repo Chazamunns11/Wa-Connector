@@ -13,9 +13,9 @@ import {
   setSubscriptionDefaultPaymentMethod,
   resumeSubscription,
   parseSubscription,
-  stripeVolumeTiers,
+  stripeNumberPrice,
 } from "@/lib/stripe/billing";
-import { STANDARD_PENCE, MID_PENCE, VOLUME_PENCE, MID_FROM, VOLUME_FROM } from "@/lib/pricing";
+import { PRICE_PER_NUMBER_PENCE } from "@/lib/pricing";
 
 type Call = { method: string; path: string; params: Record<string, unknown> | undefined };
 function fake(data: unknown = {}) {
@@ -212,21 +212,13 @@ test("default payment method and resume calls", async () => {
   assert.ok(r.ok && r.data.status === "active");
 });
 
-test("stripeVolumeTiers: Stripe volume-price definition matches W40 pence", () => {
-  assert.deepEqual(stripeVolumeTiers(), {
+test("stripeNumberPrice: one flat £7.99 monthly price per WhatsApp number, no tiers (Nov 2026)", () => {
+  assert.equal(PRICE_PER_NUMBER_PENCE, 799);
+  assert.deepEqual(stripeNumberPrice(), {
     currency: "gbp",
-    billing_scheme: "tiered",
-    tiers_mode: "volume",
-    tiers: [
-      { up_to: MID_FROM - 1, unit_amount: STANDARD_PENCE },
-      { up_to: VOLUME_FROM - 1, unit_amount: MID_PENCE },
-      { up_to: "inf", unit_amount: VOLUME_PENCE },
-    ],
+    unit_amount: 799,
+    billing_scheme: "per_unit",
+    recurring: { interval: "month" },
   });
-  assert.equal(STANDARD_PENCE, 999);
-  assert.equal(MID_PENCE, 799);
-  assert.equal(VOLUME_PENCE, 599);
-  assert.equal(MID_FROM, 11);
-  assert.equal(VOLUME_FROM, 25);
-  assert.deepEqual(stripeVolumeTiers().tiers.map((t) => t.up_to), [10, 24, "inf"]);
 });
+

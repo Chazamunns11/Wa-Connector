@@ -1,5 +1,6 @@
 import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
 import type { AccountSummary, LocationRow } from "./types";
+import { billableNumbers } from "@/lib/billing/quantity";
 
 const DAY_MS = 86_400_000;
 
@@ -118,11 +119,12 @@ export function activeCount(rows: LocationRow[]): number {
   return rows.filter((r) => r.activated).length;
 }
 
-/** e.g. "2 sub-accounts active · £29.98/month". Volume pricing over activated sub-accounts. */
+/** e.g. "2 sub-accounts active · 3 numbers · £23.97/month". Per-number pricing over activated sub-accounts. */
 export function headline(rows: LocationRow[]): string {
   const n = activeCount(rows);
-  const cost = formatMoney(monthlyCostPence(n) / 100, pricingConfig().currency);
-  return `${n} ${n === 1 ? "sub-account" : "sub-accounts"} active · ${cost}/month`;
+  const numbers = billableNumbers(rows);
+  const cost = formatMoney(monthlyCostPence(numbers) / 100, pricingConfig().currency);
+  return `${n} ${n === 1 ? "sub-account" : "sub-accounts"} active · ${numbers} ${numbers === 1 ? "number" : "numbers"} · ${cost}/month`;
 }
 
 export interface RowActions {

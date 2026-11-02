@@ -8,7 +8,7 @@ import { ResaleCalculator } from "@/components/site/ResaleCalculator";
 import { PricingTable } from "@/components/site/PricingTable";
 import { TierList } from "@/components/site/TierList";
 import { brandConfig } from "@/lib/brand-config";
-import { pricingConfig, standardPrice, tierSentence } from "@/lib/pricing";
+import { pricingConfig, pricePerNumber, priceSentence } from "@/lib/pricing";
 import { COMPARISON, ourColumn, sourceParts } from "@/lib/site/comparison";
 import { faqEntries } from "@/lib/site/faq";
 import { pricingCopy } from "@/lib/site/pricing-copy";
@@ -18,7 +18,7 @@ export function generateMetadata(): Metadata {
   const { name } = brandConfig();
   return {
     title: `Pricing — ${name}`,
-    description: `${tierSentence(pricingConfig().currency)} 7-day free trial, cancel any time.`,
+    description: `${priceSentence(pricingConfig().currency)} 7-day free trial, cancel any time.`,
   };
 }
 
@@ -32,7 +32,7 @@ const PROSE = "max-w-[62ch]";
 export default function PricingPage() {
   const brand = brandConfig();
   const pricing = pricingConfig();
-  const price = standardPrice(pricing.currency);
+  const price = pricePerNumber(pricing.currency);
   const copy = pricingCopy();
   const all = faqEntries(brand);
   const faq = BILLING_FAQ.flatMap((id) => all.filter((e) => e.id === id));
@@ -43,11 +43,11 @@ export default function PricingPage() {
           <h1 className="h-hero">
             <span className="num-display block">{price}</span>{" "}
             <span className="h-section mt-2 block">
-              per sub-account, per month
+              per WhatsApp number, per month
             </span>
           </h1>
           <p className={`${PROSE} mt-8 text-[1.3rem] font-medium leading-[1.4]`}>
-            {tierSentence(pricing.currency)} There is no setup fee, and {brand.name} does not charge per message.
+            {priceSentence(pricing.currency)} There is no setup fee, and {brand.name} does not charge per message.
           </p>
         </Container>
       </section>

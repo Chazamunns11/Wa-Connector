@@ -1,5 +1,5 @@
 import { stripeConfig, stripeRequest, type StripeResult } from "./client";
-import { STANDARD_PENCE, MID_PENCE, VOLUME_PENCE, MID_FROM, VOLUME_FROM, TRIAL_DAYS, CURRENCY } from "../pricing";
+import { PRICE_PER_NUMBER_PENCE, TRIAL_DAYS, CURRENCY } from "../pricing";
 
 export interface StripeSubscription {
   id: string;
@@ -251,20 +251,16 @@ export async function createPortalSession(
 }
 
 /**
- * The Stripe Price definition that implements W40 volume pricing, built from
- * the pricing constants (pence). The unit is an activated sub-account. Volume
- * mode: the tier the total quantity lands in prices every unit. Used by the go-live checklist to create the
- * Price; the app itself only needs STRIPE_PRICE_ID.
+ * The Stripe Price the app expects behind STRIPE_PRICE_ID (Nov 2026): one
+ * flat monthly price per unit, where a unit is a connected WhatsApp number
+ * (src/lib/billing/quantity.ts sets the quantity). Used by the go-live
+ * checklist to create the Price; the app itself only needs STRIPE_PRICE_ID.
  */
-export function stripeVolumeTiers() {
+export function stripeNumberPrice() {
   return {
     currency: CURRENCY.toLowerCase(),
-    billing_scheme: "tiered" as const,
-    tiers_mode: "volume" as const,
-    tiers: [
-      { up_to: MID_FROM - 1, unit_amount: STANDARD_PENCE },
-      { up_to: VOLUME_FROM - 1, unit_amount: MID_PENCE },
-      { up_to: "inf" as const, unit_amount: VOLUME_PENCE },
-    ],
+    unit_amount: PRICE_PER_NUMBER_PENCE,
+    billing_scheme: "per_unit" as const,
+    recurring: { interval: "month" as const },
   };
 }

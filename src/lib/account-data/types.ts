@@ -31,6 +31,8 @@ export interface LocationRow {
   failedLast7Days: { count: number; reasons: string[] };
   optOuts: number;
   providerNudge: boolean;
+  /** How many WhatsApp numbers the sub-account has (per-number billing counts these while it is activated). */
+  numbers: number;
 }
 
 export interface BillingSummary {

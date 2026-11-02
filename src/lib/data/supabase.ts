@@ -876,6 +876,16 @@ export class SupabaseGhlRepository implements GhlRepository {
     return data ? (data as { tenant_id: string }).tenant_id : null;
   }
 
+  async countNumbersByLocation(locationIds: string[]) {
+    if (locationIds.length === 0) return {};
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_location_numbers").select("location_id").in("location_id", locationIds);
+    if (error) throw error;
+    const counts: Record<string, number> = {};
+    for (const row of (data ?? []) as { location_id: string }[]) counts[row.location_id] = (counts[row.location_id] ?? 0) + 1;
+    return counts;
+  }
+
   async getUserTenant(locationId: string, ghlUserId: string) {
     const supabase = getServiceClient();
     const { data, error } = await supabase
