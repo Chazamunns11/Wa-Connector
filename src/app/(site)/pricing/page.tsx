@@ -7,6 +7,7 @@ import { PricingCalculator } from "@/components/site/PricingCalculator";
 import { ResaleCalculator } from "@/components/site/ResaleCalculator";
 import { PricingTable } from "@/components/site/PricingTable";
 import { TierList } from "@/components/site/TierList";
+import { DashboardSample } from "@/components/site/samples/DashboardSample";
 import { brandConfig } from "@/lib/brand-config";
 import { pricingConfig, pricePerNumber, priceSentence } from "@/lib/pricing";
 import { COMPARISON, ourColumn, sourceParts } from "@/lib/site/comparison";
@@ -66,6 +67,20 @@ export default function PricingPage() {
               <IncludedList brand={brand} />
             </div>
           </div>
+        </Container>
+      </section>
+
+      <section className="band">
+        <Container>
+          <h2 className={H2}>One dashboard for every client</h2>
+          <p className="mt-3 max-w-[60ch] text-ink-dim">
+            Every sub-account and its WhatsApp numbers in one place: who&rsquo;s connected, what&rsquo;s waiting, and the one
+            thing to fix next. Send a client their connect link in a click.
+          </p>
+          <figure className="mt-6">
+            <DashboardSample />
+            <figcaption className="mt-3 small text-ink-dim">Sample screen with made-up sub-accounts.</figcaption>
+          </figure>
         </Container>
       </section>
 

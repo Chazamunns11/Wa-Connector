@@ -1,4 +1,4 @@
-import { formatMoney, monthlyCostPence, perNumberPence } from "@/lib/pricing";
+import { formatMoney, monthlyCostPence } from "@/lib/pricing";
 import { CALC_MAX, CALC_MIN, calculatorValue } from "@/lib/site/calculator";
 
 /** The agency resale calculator's logic. Pure; whole pence throughout. */
@@ -91,11 +91,12 @@ export function resaleView(rawNumbers: string, rawPrice: string, currency: strin
       : f.keepPence === 0
         ? `You keep nothing: your price only covers what you pay us.`
         : `You lose ${pounds(f.keepPence, currency)} a month (${pounds(f.keepYearPence, currency)} a year).`;
-  // One WhatsApp number per client sub-account (the calculator's label says so); £5.99 each from 25.
-  const ours = perNumberPence(f.numbers);
+  // One WhatsApp number per client sub-account (the calculator's label says so):
+  // the average we charge per number at this size (£9.99 for the first 10, £7.99 after).
+  const ours = f.numbers > 0 ? Math.round(monthlyCostPence(f.numbers) / f.numbers) : 0;
   const warning =
     price.pence < ours
-      ? `That is below the ${pounds(ours, currency)} a month you pay us for each number at this size, so each sub-account costs you money.`
+      ? `That is below the ${pounds(ours, currency)} a month you pay us on average for each number at this size, so each sub-account costs you money.`
       : null;
   return {
     ...base,

@@ -151,8 +151,9 @@ example "Setter"), and scan its QR code with the second phone. A sub-account
 can have up to 3. **Make default** picks which number sends when nothing else
 decides. Each number has its own pacing and daily cap.
 
-Billing: £7.99 a month per WhatsApp number on an activated sub-account, and
-£5.99 for every number once an agency has 25 or more (`src/lib/pricing.ts`).
+Billing: £9.99 a month for each of an agency's first 10 WhatsApp numbers on
+activated sub-accounts, then £7.99 for every number after that
+(`src/lib/pricing.ts`; a graduated Stripe price).
 The 7-day free trial covers 3 numbers; a card is taken at sign-up and charged
 automatically on day 7. Stripe's quantity is that count. Every change is
 invoiced at once (`always_invoice`): a number you add is charged straight away

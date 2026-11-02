@@ -104,16 +104,17 @@ same organisation**.
    and sets the quantity to the number of WhatsApp numbers on the account's
    activated sub-accounts (Nov 2026: per-number billing, see `src/lib/pricing.ts`).
    - Recurring, monthly, currency GBP.
-   - Pricing model: **Volume pricing** (`billing_scheme = tiered`,
-     `tiers_mode = volume`).
-   - Tier 1: first unit 1, last unit 24, **£7.99** per unit (799 pence).
-   - Tier 2: first unit 25, last unit and above, **£5.99** per unit (599 pence).
+   - Pricing model: **Graduated pricing** (`billing_scheme = tiered`,
+     `tiers_mode = graduated`).
+   - Tier 1: first unit 1, last unit 10, **£9.99** per unit (999 pence).
+   - Tier 2: first unit 11, last unit and above, **£7.99** per unit (799 pence).
    - No flat fee on either tier.
 
-   That matches `stripeNumberPrice()` in `src/lib/stripe/billing.ts`. Volume
-   means the tier the total reaches prices every number: 3 numbers cost
-   3 x £7.99 = £23.97; 25 numbers cost 25 x £5.99 = £149.75. If the prices in
-   `src/lib/pricing.ts` ever change, the Stripe price must change with them.
+   That matches `stripeNumberPrice()` in `src/lib/stripe/billing.ts`.
+   Graduated means each number is priced by its own position: 3 numbers cost
+   3 x £9.99 = £29.97; 12 numbers cost 10 x £9.99 + 2 x £7.99 = £115.88. Adding
+   a number never lowers the bill. If the prices in `src/lib/pricing.ts` ever
+   change, the Stripe price must change with them.
 
    Already made an older price (the per-sub-account tiers, or a flat £7.99)?
    Create this one, put its id in `STRIPE_PRICE_ID`, and archive the old one.
@@ -302,7 +303,7 @@ Then walk this journey:
    says nothing is charged today. Status trialing; the trial end date and the
    card's last four digits show on the billing page.
 2b. **Day 7 charges the card.** Advance the clock past day 7: Stripe charges
-   the first invoice (£7.99 x the active numbers) and the status becomes
+   the first invoice (£9.99 per active number, £7.99 from the 11th) and the status becomes
    **active**. Never paused.
 3. **Card removed during the trial, sending pauses** (safety net only).
    Detach the card in Stripe, then activate one sub-account and
@@ -332,7 +333,7 @@ Then walk this journey:
 6. **Per-number billing, charged as you go.** On one active (paid, not
    trialing) sub-account, add a second number (dashboard → Show QR → Add a
    number). The quantity goes from 1 to 2 and Stripe creates and charges a
-   **separate invoice at once** for the rest of the month (about £7.99 x days
+   **separate invoice at once** for the rest of the month (about £9.99 x days
    left / days in month). Now attach `4000 0000 0000 0341` (declines) and add a
    third number: it is refused with "Your card was declined…", the quantity
    stays at 2 and no number is added. Remove a number: the quantity drops and

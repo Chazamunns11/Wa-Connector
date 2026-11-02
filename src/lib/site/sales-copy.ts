@@ -1,4 +1,4 @@
-import { trialSentence, VOLUME_FROM_NUMBERS } from "@/lib/pricing";
+import { FIRST_TIER_NUMBERS, trialSentence } from "@/lib/pricing";
 import type { BrandConfig } from "@/lib/brand-config";
 import { OWN_RESULTS_AVERAGE } from "@/lib/site/proof";
 
@@ -89,7 +89,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
         },
         {
           title: "Made for agencies",
-          body: `One dashboard shows every sub-account and its numbers. From ${VOLUME_FROM_NUMBERS} numbers every number drops to the lower price, and you set what your clients pay.`,
+          body: `One dashboard shows every sub-account and its numbers. After your first ${FIRST_TIER_NUMBERS} numbers each one costs less, and you set what your clients pay.`,
         },
         {
           title: "Careful with your number",

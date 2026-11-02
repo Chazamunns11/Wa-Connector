@@ -1,5 +1,5 @@
 import { stripeConfig, stripeRequest, type StripeResult } from "./client";
-import { PRICE_PER_NUMBER_PENCE, VOLUME_FROM_NUMBERS, VOLUME_PRICE_PER_NUMBER_PENCE, TRIAL_DAYS, CURRENCY } from "../pricing";
+import { FIRST_TIER_NUMBERS, LATER_PRICE_PER_NUMBER_PENCE, PRICE_PER_NUMBER_PENCE, TRIAL_DAYS, CURRENCY } from "../pricing";
 
 export interface StripeSubscription {
   id: string;
@@ -269,19 +269,19 @@ export async function createPortalSession(
 
 /**
  * The Stripe Price the app expects behind STRIPE_PRICE_ID (Nov 2026): a
- * monthly VOLUME-tiered price per connected WhatsApp number (the quantity,
- * set by src/lib/billing/quantity.ts): 1-24 numbers at 799p each, 25 or
- * more at 599p each, for ALL of them. Used by the go-live checklist to
+ * monthly GRADUATED price per connected WhatsApp number (the quantity, set
+ * by src/lib/billing/quantity.ts): numbers 1-10 at 999p each, and each
+ * number from the 11th at 799p. Used by the go-live checklist to
  * create the Price; the app itself only needs STRIPE_PRICE_ID.
  */
 export function stripeNumberPrice() {
   return {
     currency: CURRENCY.toLowerCase(),
     billing_scheme: "tiered" as const,
-    tiers_mode: "volume" as const,
+    tiers_mode: "graduated" as const,
     tiers: [
-      { up_to: VOLUME_FROM_NUMBERS - 1, unit_amount: PRICE_PER_NUMBER_PENCE },
-      { up_to: "inf" as const, unit_amount: VOLUME_PRICE_PER_NUMBER_PENCE },
+      { up_to: FIRST_TIER_NUMBERS, unit_amount: PRICE_PER_NUMBER_PENCE },
+      { up_to: "inf" as const, unit_amount: LATER_PRICE_PER_NUMBER_PENCE },
     ],
     recurring: { interval: "month" as const },
   };

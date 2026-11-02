@@ -2,10 +2,10 @@
  * Website pricing. A business decision kept in code, not an env var, in whole
  * pence, GBP.
  *
- * Nov 2026 (Charlie): the unit is a CONNECTED WHATSAPP NUMBER:
- * PRICE_PER_NUMBER_PENCE a month each, and from VOLUME_FROM_NUMBERS numbers
- * EVERY number drops to VOLUME_PRICE_PER_NUMBER_PENCE (volume pricing: the
- * tier the total reaches prices all of them). A sub-account can
+ * Nov 2026 (Charlie): the unit is a CONNECTED WHATSAPP NUMBER. GRADUATED:
+ * the first FIRST_TIER_NUMBERS numbers cost PRICE_PER_NUMBER_PENCE each, and
+ * every number after that costs LATER_PRICE_PER_NUMBER_PENCE. Adding a
+ * number never makes the bill go down (no cliff at the threshold). A sub-account can
  * have up to MAX_NUMBERS_PER_SUB_ACCOUNT numbers. The Stripe subscription
  * quantity is the number of WhatsApp numbers on the account's activated
  * sub-accounts (src/lib/billing/quantity.ts). This replaced the W40 volume
@@ -18,15 +18,11 @@ export interface PricingConfig {
 
 export const CURRENCY = "GBP";
 /** Nov 2026: one flat price per connected WhatsApp number (no tiers). The Stripe Price must match: see `stripeNumberPrice`. */
-export const PRICE_PER_NUMBER_PENCE = 799;
-/** From this many numbers, every number costs VOLUME_PRICE_PER_NUMBER_PENCE. */
-export const VOLUME_FROM_NUMBERS = 25;
-export const VOLUME_PRICE_PER_NUMBER_PENCE = 599;
-
-/** The per-number price at this total: £7.99, or £5.99 for all of them from 25. */
-export function perNumberPence(numbers: number): number {
-  return numbers >= VOLUME_FROM_NUMBERS ? VOLUME_PRICE_PER_NUMBER_PENCE : PRICE_PER_NUMBER_PENCE;
-}
+export const PRICE_PER_NUMBER_PENCE = 999;
+/** How many numbers are charged at PRICE_PER_NUMBER_PENCE before the lower price starts. */
+export const FIRST_TIER_NUMBERS = 10;
+/** The price of the 11th number onwards. */
+export const LATER_PRICE_PER_NUMBER_PENCE = 799;
 /** The most WhatsApp numbers one sub-account can have (ghl_location_numbers.slot is 1-3). */
 export const MAX_NUMBERS_PER_SUB_ACCOUNT = 3;
 
@@ -45,11 +41,12 @@ export function trialSentence(): string {
 }
 export const CALCULATOR_PRESETS = [1, 3, 10, 25] as const;
 
-/** What `numbers` WhatsApp numbers cost a month, in pence (volume: the total's price applies to every number). */
+/** What `numbers` WhatsApp numbers cost a month, in pence: £9.99 each for the first 10, £7.99 each after. */
 export function monthlyCostPence(numbers: number): number {
   if (!Number.isFinite(numbers) || numbers < 0) return 0;
   const n = Math.floor(numbers);
-  return n * perNumberPence(n);
+  const first = Math.min(n, FIRST_TIER_NUMBERS);
+  return first * PRICE_PER_NUMBER_PENCE + (n - first) * LATER_PRICE_PER_NUMBER_PENCE;
 }
 
 export function monthlyCost(numbers: number): number {
@@ -70,14 +67,14 @@ export function pricePerNumber(currency: string): string {
   return formatMoney(PRICE_PER_NUMBER_PENCE / 100, currency);
 }
 
-/** "£5.99", the price of every number from VOLUME_FROM_NUMBERS. */
-export function volumePricePerNumber(currency: string): string {
-  return formatMoney(VOLUME_PRICE_PER_NUMBER_PENCE / 100, currency);
+/** "£7.99", the price of each number after the first FIRST_TIER_NUMBERS. */
+export function laterPricePerNumber(currency: string): string {
+  return formatMoney(LATER_PRICE_PER_NUMBER_PENCE / 100, currency);
 }
 
 /** The one pricing sentence every page uses. */
 export function priceSentence(currency: string): string {
-  return `${pricePerNumber(currency)} a month for each WhatsApp number you connect, up to ${MAX_NUMBERS_PER_SUB_ACCOUNT} per sub-account. From ${VOLUME_FROM_NUMBERS} numbers, every number is ${volumePricePerNumber(currency)}.`;
+  return `${pricePerNumber(currency)} a month for each of your first ${FIRST_TIER_NUMBERS} WhatsApp numbers, then ${laterPricePerNumber(currency)} for every number after that. Up to ${MAX_NUMBERS_PER_SUB_ACCOUNT} numbers per sub-account.`;
 }
 
 /** e.g. "3 numbers = £23.97/month"; "1 number = £7.99/month". */

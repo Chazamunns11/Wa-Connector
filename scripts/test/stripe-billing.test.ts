@@ -220,18 +220,19 @@ test("default payment method and resume calls", async () => {
   assert.ok(r.ok && r.data.status === "active");
 });
 
-test("stripeNumberPrice: monthly volume price per number, 799p for 1-24 and 599p for all from 25 (Nov 2026)", () => {
-  assert.equal(PRICE_PER_NUMBER_PENCE, 799);
+test("stripeNumberPrice: monthly GRADUATED price per number, 999p for numbers 1-10 and 799p from the 11th (Nov 2026)", () => {
+  assert.equal(PRICE_PER_NUMBER_PENCE, 999);
   assert.deepEqual(stripeNumberPrice(), {
     currency: "gbp",
     billing_scheme: "tiered",
-    tiers_mode: "volume",
+    tiers_mode: "graduated",
     tiers: [
-      { up_to: 24, unit_amount: 799 },
-      { up_to: "inf", unit_amount: 599 },
+      { up_to: 10, unit_amount: 999 },
+      { up_to: "inf", unit_amount: 799 },
     ],
     recurring: { interval: "month" },
   });
 });
+
 
 

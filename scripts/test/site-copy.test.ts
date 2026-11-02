@@ -50,7 +50,7 @@ test("daily-cap, stop and white-label answers state the real behaviour", () => {
   assert.match(get("stop"), /from that sub-account/);
   assert.match(get("white-label"), /It depends on the agency/);
   assert.match(get("white-label"), /ask your agency to allow Testbrand/);
-  assert.match(get("trial"), /After that it's £7\.99 a month for each WhatsApp number you connect, up to 3 per sub-account\. From 25 numbers, every number is £5\.99\./);
+  assert.match(get("trial"), /After that it's £9\.99 a month for each of your first 10 WhatsApp numbers, then £7\.99 for every number after that\. Up to 3 numbers per sub-account\./);
   assert.ok(!salesCopy(brand).safety.some((s) => /from your account/.test(s.body)));
 });
 
@@ -207,11 +207,11 @@ test("W40: no 'one price', 'same price' or 'flat price' wording survives", () =>
   assert.deepEqual(hits, []);
 });
 
-test("Nov 2026 pricing: the trial paragraph and our comparison column state £7.99 per number, £5.99 for all from 25", () => {
-  assert.match(pricingCopy().trialTerms[0], /£7\.99 a month for each WhatsApp number you connect, up to 3 per sub-account\. From 25 numbers, every number is £5\.99\./);
-  assert.deepEqual(ourColumn("GBP")[0], "£7.99 a month for each WhatsApp number you connect, up to 3 per sub-account. From 25 numbers, every number is £5.99.");
+test("Nov 2026 pricing: the trial paragraph and our comparison column state £9.99 for the first 10 numbers, £7.99 after", () => {
+  assert.match(pricingCopy().trialTerms[0], /£9\.99 a month for each of your first 10 WhatsApp numbers, then £7\.99 for every number after that\. Up to 3 numbers per sub-account\./);
+  assert.deepEqual(ourColumn("GBP")[0], "£9.99 a month for each of your first 10 WhatsApp numbers, then £7.99 for every number after that. Up to 3 numbers per sub-account.");
   for (const text of [pricingCopy().trialTerms.join(" "), ourColumn("GBP").join(" ")]) {
-    assert.doesNotMatch(text, /£9\.99|tier you reach|numbers included|per activ(e|ated) sub-account/);
+    assert.doesNotMatch(text, /£5\.99|tier you reach|numbers included|per activ(e|ated) sub-account/);
   }
 });
 

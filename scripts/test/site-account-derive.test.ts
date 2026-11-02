@@ -105,19 +105,21 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
 });
 
-test("headline counts active sub-accounts and their numbers: £7.99 each, £5.99 each from 25 (Nov 2026)", () => {
+test("headline counts active sub-accounts and their numbers: £9.99 each for the first 10, £7.99 after (Nov 2026)", () => {
   const rows = [row(), row(), row({ activated: false, state: { kind: "not_active" } })];
-  assert.equal(headline(rows), "2 sub-accounts active · 2 numbers · £15.98/month");
-  assert.equal(headline([row()]), "1 sub-account active · 1 number · £7.99/month");
+  assert.equal(headline(rows), "2 sub-accounts active · 2 numbers · £19.98/month");
+  assert.equal(headline([row()]), "1 sub-account active · 1 number · £9.99/month");
   assert.equal(headline([]), "0 sub-accounts active · 0 numbers · £0.00/month");
-  assert.equal(headline(Array.from({ length: 24 }, () => row())), "24 sub-accounts active · 24 numbers · £191.76/month");
-  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · 25 numbers · £149.75/month");
+  assert.equal(headline(Array.from({ length: 10 }, () => row())), "10 sub-accounts active · 10 numbers · £99.90/month");
+  assert.equal(headline(Array.from({ length: 12 }, () => row())), "12 sub-accounts active · 12 numbers · £115.88/month");
+  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · 25 numbers · £219.75/month");
   // Extra numbers are billed; numbers on an inactive sub-account are not.
   assert.equal(
     headline([row({ numbers: 3 }), row({ numbers: 2 }), row({ activated: false, numbers: 3, state: { kind: "not_active" } })]),
-    "2 sub-accounts active · 5 numbers · £39.95/month"
+    "2 sub-accounts active · 5 numbers · £49.95/month"
   );
 });
+
 
 test("activeCount counts activated rows only", () => {
   assert.equal(activeCount([row(), row({ activated: false }), row()]), 2);
