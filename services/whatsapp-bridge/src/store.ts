@@ -108,6 +108,20 @@ function mapMessage(row: MessageRow): MessageRecord {
   };
 }
 
+/** PostgREST's default max-rows: one response never carries more than this. */
+const PAGE_ROWS = 1000;
+
+/** Every row of a paged select (`page(from, to)` must apply `.range(from, to)` over a stable order). */
+async function selectAllPages<T>(page: (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: unknown }>): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE_ROWS) {
+    const { data, error } = await page(from, from + PAGE_ROWS - 1);
+    if (error) throw error;
+    rows.push(...((data ?? []) as T[]));
+    if ((data?.length ?? 0) < PAGE_ROWS) return rows;
+  }
+}
+
 export class BridgeStore {
   private readonly supabase: SupabaseClient;
   private readonly cipher: CredsCipher;
@@ -489,23 +503,50 @@ export class BridgeStore {
    * this read still works on a database without migration 0008 (the column
    * is then simply absent and every row counts 1, which is right: no group
    * row can exist there).
+   *
+   * Conversation replies (src/sessions.ts `isConversationReply`) cost 0
+   * units, so with `replyWindowMs > 0` a dispatched 1:1 row counts 0 when the
+   * same 1:1 inbound rows `hasInboundFromPhone` reads show that phone
+   * messaging this coach in `[created_at - replyWindowMs, created_at]` — the
+   * same test the accept path ran when it took the send (`created_at` is the
+   * accept time). The ledger has no reply column, so this is re-derived.
+   * Both reads are paged: with replies uncapped, a busy day can pass
+   * PostgREST's 1000-row response limit.
    */
-  async getDailyActivity(coachId: string): Promise<{ attemptCount: number; lastAttemptAt: string | null }> {
+  async getDailyActivity(coachId: string, replyWindowMs = 0): Promise<{ attemptCount: number; lastAttemptAt: string | null }> {
     const midnightUtc = new Date();
     midnightUtc.setUTCHours(0, 0, 0, 0);
-    const { data, error } = await this.supabase
-      .from("whatsapp_messages")
-      .select("*")
-      .eq("coach_id", coachId)
-      .gte("created_at", midnightUtc.toISOString());
-    if (error) throw error;
-    const rows = (data ?? []) as { status: MessageStatus; dispatch_attempted: boolean; sent_at: string | null; created_at: string; group_jid?: string | null }[];
+    const rows = await selectAllPages<{ status: MessageStatus; dispatch_attempted: boolean; sent_at: string | null; created_at: string; to_phone: string | null; group_jid?: string | null }>(
+      (from, to) => this.supabase.from("whatsapp_messages").select("*").eq("coach_id", coachId).gte("created_at", midnightUtc.toISOString()).order("id").range(from, to)
+    );
+    const inboundByPhone = new Map<string, number[]>();
+    if (replyWindowMs > 0) {
+      const inbound = await selectAllPages<{ from_phone: string; received_at: string }>((from, to) =>
+        this.supabase
+          .from("whatsapp_inbound_messages")
+          .select("from_phone, received_at")
+          .eq("coach_id", coachId)
+          .is("group_jid", null)
+          .is("event_kind", null)
+          .eq("direction", "inbound")
+          .gte("received_at", new Date(midnightUtc.getTime() - replyWindowMs).toISOString())
+          .order("id")
+          .range(from, to)
+      );
+      for (const row of inbound) {
+        const list = inboundByPhone.get(row.from_phone) ?? [];
+        list.push(Date.parse(row.received_at));
+        inboundByPhone.set(row.from_phone, list);
+      }
+    }
     let attemptCount = 0;
     let lastAttemptAt: string | null = null;
     for (const row of rows) {
       const dispatched = row.status === "sent" || (row.status === "failed" && row.dispatch_attempted);
       if (!dispatched) continue;
-      attemptCount += row.group_jid ? GROUP_SEND_CAP_UNITS : 1;
+      const acceptedAt = Date.parse(row.created_at);
+      const reply = !row.group_jid && row.to_phone !== null && (inboundByPhone.get(row.to_phone) ?? []).some((t) => t <= acceptedAt && t >= acceptedAt - replyWindowMs);
+      if (!reply) attemptCount += row.group_jid ? GROUP_SEND_CAP_UNITS : 1;
       const at = row.sent_at ?? row.created_at;
       if (!lastAttemptAt || at > lastAttemptAt) lastAttemptAt = at;
     }
@@ -756,9 +797,12 @@ export class BridgeStore {
    * invite link. "Before" means within the inbound table's 90-day
    * retention (`received_at`), filtered here too so a row the purge has not
    * reached yet cannot make an older contact eligible.
+   *
+   * `windowMs` narrows the look-back: src/sessions.ts passes
+   * WA_REPLY_WINDOW_HOURS to tell a conversation reply from a cold send.
    */
-  async hasInboundFromPhone(tenantId: string, phoneE164: string, now: number = Date.now()): Promise<boolean> {
-    const since = new Date(now - INBOUND_ELIGIBILITY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  async hasInboundFromPhone(tenantId: string, phoneE164: string, now: number = Date.now(), windowMs: number = INBOUND_ELIGIBILITY_DAYS * 24 * 60 * 60 * 1000): Promise<boolean> {
+    const since = new Date(now - windowMs).toISOString();
     const { data, error } = await this.supabase
       .from("whatsapp_inbound_messages")
       .select("id")

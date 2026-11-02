@@ -400,6 +400,19 @@ still exists on the linked phone regardless.
   blow through the cap before any of them has actually dispatched. A ban
   lands on the client's real business number — that is why these defaults
   are conservative.
+- Conversation replies (`WA_REPLY_WINDOW_HOURS`, default 24; `0` = off): a
+  1:1 send to a phone with a 1:1 inbound message in
+  `whatsapp_inbound_messages` (not a missed call, reaction, edit or
+  phone-sent mirror) within the window is a reply. It costs 0 cap units, so
+  it is never refused at the cap or by warm-up, and waits only
+  `WA_REPLY_MIN_GAP_MS` (3s) + 0-`WA_REPLY_JITTER_MS` (2s) after the previous
+  send. The worker dispatches replies ahead of queued cold sends (never ahead
+  of an older queued send to the same phone) and a reply queued during a cold
+  gap wakes it. Cold sends still wait the full gap after the last cold send.
+  Sends stay one at a time per number. Groups are never replies. On restart,
+  `getDailyActivity` re-derives which of today's sends were replies from the
+  same inbound rows, so the seed counts cold units only. A failed lookup
+  counts as cold.
 - Warm-up (`WA_WARMUP_ENABLED`, off by default): a newly linked number's
   daily cap ramps up with its age (`WARMUP_SCHEDULE` in `src/pacing.ts`:
   20/day for days 0-2, 50 for 3-6, 100 for 7-13, then `WA_DAILY_CAP`). Age

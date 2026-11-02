@@ -22,6 +22,14 @@
  *     dispatched. Units, not sends: a group send costs 5 (src/groups.ts's
  *     `GROUP_SEND_CAP_UNITS`), both when reserved and when recorded.
  *
+ * CONVERSATION REPLIES (src/sessions.ts `isConversationReply`): a 1:1 send
+ * to a contact who messaged this number within WA_REPLY_WINDOW_HOURS is a
+ * reply, not outreach. It costs 0 cap units (so it is never refused at the
+ * cap, warm-up included) and only waits WA_REPLY_MIN_GAP_MS + 0..
+ * WA_REPLY_JITTER_MS after the previous send of any kind. A cold send still
+ * waits the full gap + jitter after the previous COLD send, and never less
+ * than the reply gap after any send, so replies never shorten cold spacing.
+ *
  * Pure in-memory arithmetic + an injected clock, so the unit tests
  * (test/pacing.test.ts) exercise real decisions without real waiting.
  */
@@ -52,10 +60,16 @@ export interface PacerConfig {
   minGapMs: number;
   jitterMs: number;
   dailyCap: number;
+  /** Gap and jitter for a conversation reply. Omitted -> a reply is paced like any other send. */
+  replyMinGapMs?: number;
+  replyJitterMs?: number;
 }
 
 export class SessionPacer {
+  /** Last send of any kind — the reply gap counts from here. */
   private lastSendAtMs: number | null;
+  /** Last non-reply send — the full cold gap counts from here. */
+  private lastColdSendAtMs: number | null;
   private sentToday: number;
   private dayKey: string;
   /** When the current number was linked, if warm-up applies — see `setLinkedAt`. */
@@ -80,6 +94,8 @@ export class SessionPacer {
     this.sentToday = alreadySentToday;
     this.dayKey = this.utcDayKey();
     this.lastSendAtMs = seedLastSendAtMs;
+    // The ledger doesn't say which sends were replies; treating the last one as cold is the stricter choice.
+    this.lastColdSendAtMs = seedLastSendAtMs;
   }
 
   private utcDayKey(): string {
@@ -143,21 +159,33 @@ export class SessionPacer {
    * allowed: 0 if the gap (with this send's jitter) has already elapsed.
    * Jitter is drawn per call — the worker computes the delay once, sleeps
    * it, then records the send.
+   * @param reply a conversation reply (see file header): only the reply gap
+   *   after the last send of any kind. A cold send waits the full gap +
+   *   jitter after the last cold send, and at least the reply gap after any.
    */
-  msUntilNextSendAllowed(): number {
+  msUntilNextSendAllowed(reply = false): number {
     if (this.lastSendAtMs === null) return 0;
-    const jitter = Math.floor(this.random() * (this.config.jitterMs + 1));
-    const earliest = this.lastSendAtMs + this.config.minGapMs + jitter;
+    const replyGapMs = this.config.replyMinGapMs ?? this.config.minGapMs;
+    const jitter = (maxMs: number) => Math.floor(this.random() * (maxMs + 1));
+    let earliest: number;
+    if (reply) {
+      earliest = this.lastSendAtMs + replyGapMs + jitter(this.config.replyJitterMs ?? this.config.jitterMs);
+    } else {
+      earliest = this.lastSendAtMs + replyGapMs;
+      if (this.lastColdSendAtMs !== null) earliest = Math.max(earliest, this.lastColdSendAtMs + this.config.minGapMs + jitter(this.config.jitterMs));
+    }
     return Math.max(0, earliest - this.now());
   }
 
   /**
    * Record an actual (attempted) send — advances both the gap clock and the daily counter. Counted on ATTEMPT, not success: a failed attempt still hit WhatsApp's servers, which is what the cap protects.
-   * @param units daily-cap units this send costs: 1 for a 1:1 part, `GROUP_SEND_CAP_UNITS` (5, src/groups.ts) for a group send, which reaches every member at once. The gap clock advances once either way.
+   * @param units daily-cap units this send costs: 1 for a 1:1 part, `GROUP_SEND_CAP_UNITS` (5, src/groups.ts) for a group send, which reaches every member at once, 0 for a conversation reply. The gap clock advances once either way.
+   * @param reply a conversation reply — advances only the any-send clock, not the cold one.
    */
-  recordSend(units = 1): void {
+  recordSend(units = 1, reply = false): void {
     this.rollDayIfNeeded();
     this.lastSendAtMs = this.now();
+    if (!reply) this.lastColdSendAtMs = this.lastSendAtMs;
     this.sentToday += units;
   }
 }
