@@ -1,5 +1,5 @@
 import type { BrandConfig } from "@/lib/brand-config";
-import { TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS, pricingConfig, tierSentence } from "@/lib/pricing";
+import { pricingConfig, priceSentence, trialSentence } from "@/lib/pricing";
 
 export interface FaqEntry {
   id: string;
@@ -32,7 +32,7 @@ type FaqId = (typeof FAQ_IDS)[number];
 /** The honest FAQ, in FAQ_IDS order. The brand name and prices are interpolated. */
 export function faqEntries(brand: BrandConfig): FaqEntry[] {
   const { name } = brand;
-  const tiers = tierSentence(pricingConfig().currency);
+  const tiers = priceSentence(pricingConfig().currency);
   const copy: Record<FaqId, Omit<FaqEntry, "id">> = {
     "what-is-it": {
       question: `What is ${name}?`,
@@ -72,7 +72,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     trial: {
       question: "How does the free trial work?",
-      answer: `${TRIAL_DAYS}-day free trial, no card needed, with up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. If the trial ends before you add a card, sending pauses until you do. After that it's ${tiers}`,
+      answer: `${trialSentence()} After that it's ${tiers}`,
     },
     cancel: {
       question: "Can I cancel, and what happens if a payment fails?",
@@ -82,7 +82,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     "agency-or-single": {
       question: "Is it for agencies or a single business?",
       answer:
-        "Both. A single business activates its one sub-account; an agency activates the sub-accounts it wants to use. Either way you pay per activated sub-account, and each sub-account can have up to 3 WhatsApp numbers at no extra cost. If you resell it to your own clients, you set your price and can work out what you would keep.",
+        "Both. A single business activates its one sub-account; an agency activates the sub-accounts it wants to use. Either way you pay for each WhatsApp number you connect, and each sub-account can have up to 3. If you resell it to your own clients, you set your price and can work out what you would keep.",
       link: { text: "Try the resale calculator", href: "/pricing#resale" },
     },
     "white-label": {

@@ -1,5 +1,6 @@
-import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
+import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
 import type { AccountSummary, LocationRow } from "./types";
+import { billableNumbers } from "@/lib/billing/quantity";
 
 const DAY_MS = 86_400_000;
 
@@ -31,7 +32,7 @@ export function planStatus(account: AccountSummary, now: Date, opts: { hasCard?:
   switch (account.billingStatus) {
     case "pending":
       // Checkout abandoned: the dashboard offers a working "start your trial" button.
-      return { label: "Trial not started", tone: "warn", banner: `Finish signing up to start your ${TRIAL_DAYS}-day free trial. No card needed.` };
+      return { label: "Trial not started", tone: "warn", banner: `Finish signing up to start your ${TRIAL_DAYS}-day free trial.` };
     case "trialing": {
       const n = trialDaysLeft(account.trialEndsAt, now);
       if (n === 0) return { label: "Trial ended", tone: "warn", banner: null };
@@ -75,6 +76,9 @@ export function needsAttention(row: LocationRow): string | null {
   }
   if (row.state.kind === "waiting_qr") return "Waiting for QR scan";
   if (row.providerNudge) return "No messages from GoHighLevel yet. Is the Telephony Provider set?";
+  // Setup's last step, shown the moment WhatsApp connects. Ticks itself off
+  // when GoHighLevel's first message arrives (that proves the provider is set).
+  if (row.awaitingFirstMessage) return "Last step: set the Telephony Provider in GoHighLevel, then send a test message";
   if (row.activated && row.dailyCap > 0 && row.sentToday >= row.dailyCap) return "Daily cap reached";
   return null;
 }
@@ -118,11 +122,12 @@ export function activeCount(rows: LocationRow[]): number {
   return rows.filter((r) => r.activated).length;
 }
 
-/** e.g. "2 sub-accounts active · £29.98/month". Volume pricing over activated sub-accounts. */
+/** e.g. "2 sub-accounts active · 3 numbers · £23.97/month". Per-number pricing over activated sub-accounts. */
 export function headline(rows: LocationRow[]): string {
   const n = activeCount(rows);
-  const cost = formatMoney(monthlyCostPence(n) / 100, pricingConfig().currency);
-  return `${n} ${n === 1 ? "sub-account" : "sub-accounts"} active · ${cost}/month`;
+  const numbers = billableNumbers(rows);
+  const cost = formatMoney(monthlyCostPence(numbers) / 100, pricingConfig().currency);
+  return `${n} ${n === 1 ? "sub-account" : "sub-accounts"} active · ${numbers} ${numbers === 1 ? "number" : "numbers"} · ${cost}/month`;
 }
 
 export interface RowActions {
@@ -160,4 +165,4 @@ export function primaryActionFor(row: LocationRow): PrimaryAction | null {
 }
 
 /** Shown when a trialing account tries to activate past the trial cap. */
-export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. Start your paid plan now to add more.`;
+export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_NUMBERS} WhatsApp numbers. Start your paid plan now to add more.`;

@@ -25,7 +25,7 @@ export function ResaleCalculator({ currency }: { currency: string }) {
       <div className="grid gap-6 sm:grid-cols-2 sm:gap-8">
         <div>
           <label htmlFor={`${id}-count`} className="block text-[1.05rem] font-semibold">
-            Client sub-accounts
+            Client sub-accounts (one number each)
           </label>
           <input
             id={`${id}-count`}

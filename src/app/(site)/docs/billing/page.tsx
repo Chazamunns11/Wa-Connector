@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Container } from "@/components/site/Container";
 import { PageTop } from "@/components/site/PageTop";
 import { brandConfig } from "@/lib/brand-config";
-import { pricingConfig, tierSentence } from "@/lib/pricing";
+import { pricingConfig, priceSentence } from "@/lib/pricing";
 import { pricingCopy } from "@/lib/site/pricing-copy";
 import { SITE_ROUTES } from "@/lib/site/routes";
 
@@ -22,7 +22,11 @@ export default function BillingHelpPage() {
   return (
     <>
     <PageTop title="Billing">
-      <p>{tierSentence(pricing.currency)} Billed per activated sub-account.</p>
+      <p>
+        {priceSentence(pricing.currency)} Billed monthly in advance for the numbers on your active sub-accounts. A number you add
+        is charged straight away for the rest of the month; if the card is declined, the number isn&rsquo;t added. A number you
+        remove is credited to your next bill.
+      </p>
     </PageTop>
     <section className="band">
       <Container>
@@ -42,8 +46,8 @@ export default function BillingHelpPage() {
           <h2 className={h2}>Changing your card or cancelling</h2>
           <p className="mt-3 max-w-[62ch] text-ink-dim">{copy.cancel}</p>
           <p className="mt-3 max-w-[62ch] text-ink-dim">
-            The trial needs no card. To add one, during the trial or after it has ended, use Add a card on your
-            dashboard&apos;s Billing page. Changing your card and cancelling are both done in the billing portal, which
+            You add your card when the trial starts, and it is charged automatically on day 7 unless you cancel first.
+            To use a different card, use Add a card on your dashboard&apos;s Billing page. Changing your card and cancelling are both done in the billing portal, which
             is available once your account is live. Until then, the{" "}
             <Link href={SITE_ROUTES.pricing} className="underline underline-offset-2">
               pricing page

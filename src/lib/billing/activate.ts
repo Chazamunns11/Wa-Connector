@@ -1,11 +1,17 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import type { retrieveSubscription, setSubscriptionItemQuantity } from "@/lib/stripe/billing";
 import { ActivationCapError, canActivate, type ActivateRefusal } from "./activation";
-import { syncSubscriptionQuantity } from "./quantity";
+import { countBillableNumbers, syncSubscriptionQuantity } from "./quantity";
 
 export type ActivateRepo = Pick<
   GhlRepository,
-  "getGhlAccountByLocationId" | "getAccountById" | "countActivatedForAccount" | "countActivatedAll" | "setGhlActivated"
+  | "getGhlAccountByLocationId"
+  | "getAccountById"
+  | "countActivatedForAccount"
+  | "countActivatedAll"
+  | "setGhlActivated"
+  | "listGhlAccountsForAccount"
+  | "countNumbersByLocation"
 >;
 
 export interface ActivateDeps {
@@ -38,14 +44,18 @@ export async function activateLocation(
   const account = await repo.getAccountById(accountId);
   if (!account) return { ok: false, reason: "not_found" };
 
-  const [accountActive, platformActive] = await Promise.all([
-    repo.countActivatedForAccount(accountId),
+  // Per-number billing and trial: what is billed now, and what this
+  // sub-account adds (its numbers, at least 1).
+  const [platformActive, billedNow, counts] = await Promise.all([
     repo.countActivatedAll(),
+    countBillableNumbers(repo, accountId),
+    repo.countNumbersByLocation([locationId]),
   ]);
+  const adding = Math.max(1, counts[locationId] ?? 1);
   const verdict = canActivate({
     billingStatus: account.billingStatus,
     alreadyActive: location.activatedAt !== null,
-    accountActive,
+    numbersAfter: billedNow + adding,
     platformActive,
     platformCap: deps.platformCap(),
   });
@@ -59,16 +69,20 @@ export async function activateLocation(
     const subscription = await deps.retrieveSubscription(account.stripeSubscriptionId);
     if (!subscription.ok || !subscription.data.itemId) return { ok: false, reason: "stripe_failed" };
     itemId = subscription.data.itemId;
-    const raised = await deps.setQuantity(itemId, accountActive + 1);
+    // Per-number billing (Nov 2026): Stripe goes up by THIS sub-account's
+    // numbers (at least 1), on top of what is already billed.
+    const target = billedNow + adding;
+    // Charged now; if the card can't pay, Stripe refuses and nothing is activated.
+    const raised = await deps.setQuantity(itemId, target, undefined, { refuseIfUnpaid: true });
     if (!raised.ok) return { ok: false, reason: "stripe_failed" };
-    written = accountActive + 1;
+    written = target;
   }
 
-  // Re-syncs Stripe to the true activated count (never a stale read plus one).
+  // Re-syncs Stripe to the true billable count (never a stale read plus one).
   const resync = async () => {
     if (!itemId) return;
     try {
-      const count = await repo.countActivatedForAccount(accountId);
+      const count = await countBillableNumbers(repo, accountId);
       if (count === written) return;
       const set = await deps.setQuantity(itemId, count);
       if (!set.ok) deps.notify(`Billing quantity re-sync failed for account ${accountId}: ${set.message}`);

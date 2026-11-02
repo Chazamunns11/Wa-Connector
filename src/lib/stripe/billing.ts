@@ -1,5 +1,5 @@
 import { stripeConfig, stripeRequest, type StripeResult } from "./client";
-import { STANDARD_PENCE, MID_PENCE, VOLUME_PENCE, MID_FROM, VOLUME_FROM, TRIAL_DAYS, CURRENCY } from "../pricing";
+import { FIRST_TIER_NUMBERS, LATER_PRICE_PER_NUMBER_PENCE, PRICE_PER_NUMBER_PENCE, TRIAL_DAYS, CURRENCY } from "../pricing";
 
 export interface StripeSubscription {
   id: string;
@@ -117,8 +117,9 @@ export async function createCheckoutSession(
     ...(input.customerId ? { customer: input.customerId } : { customer_email: input.customerEmail }),
     client_reference_id: input.accountId,
     line_items: [{ price: cfg.priceId, quantity: 1 }],
-    // The trial takes no card. If it ends without one Stripe pauses the
-    // subscription (status `paused`), which stops sending until a card is added.
+    // Nov 2026 (Charlie: "it must charge"): the trial TAKES A CARD at checkout
+    // and Stripe charges it automatically on day 7. `pause` stays as a safety
+    // net for a card later removed: then sending stops until one is added.
     subscription_data: trial
       ? {
           trial_period_days: TRIAL_DAYS,
@@ -127,8 +128,8 @@ export async function createCheckoutSession(
         }
       : { metadata: { account_id: input.accountId } },
     metadata: { account_id: input.accountId, owner_email: input.customerEmail },
-    // A restart bills today, so it still needs a card up front.
-    payment_method_collection: trial ? "if_required" : "always",
+    // Always collect a card: a trial is charged on day 7, a restart today.
+    payment_method_collection: "always",
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
   };
@@ -184,14 +185,30 @@ export async function retrieveSubscription(id: string, deps?: BillingDeps): Prom
   return mapData(r, parseSubscription);
 }
 
+/**
+ * Set the number of billed WhatsApp numbers. Nov 2026 (Charlie: "a new
+ * invoice per change, so nobody reaches month end owing loads"):
+ *   - `always_invoice`: Stripe invoices the prorated difference IMMEDIATELY,
+ *     instead of saving it up for the next monthly invoice
+ *     (docs.stripe.com/billing/subscriptions/prorations). A decrease becomes
+ *     a credit on the customer's balance, used against the next invoice.
+ *   - `refuseIfUnpaid` (for an increase the customer asked for: activating a
+ *     sub-account, adding a number): `payment_behavior: error_if_incomplete`,
+ *     so if that invoice cannot be paid Stripe returns an error and does NOT
+ *     change the quantity (docs.stripe.com/api/subscription_items/update).
+ *     The caller then refuses the change. Re-syncs use `allow_incomplete`:
+ *     they correct the count and must never be blocked by a card.
+ */
 export async function setSubscriptionItemQuantity(
   itemId: string,
   quantity: number,
   deps?: BillingDeps,
+  opts: { refuseIfUnpaid?: boolean } = {},
 ): Promise<StripeResult<{ id: string; quantity: number }>> {
   const r = await req(deps)<{ id?: unknown; quantity?: unknown }>("POST", `/subscription_items/${itemId}`, {
     quantity,
-    proration_behavior: "create_prorations",
+    proration_behavior: "always_invoice",
+    payment_behavior: opts.refuseIfUnpaid ? "error_if_incomplete" : "allow_incomplete",
   });
   return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id, quantity: num(d.quantity) ?? quantity } : null));
 }
@@ -251,20 +268,21 @@ export async function createPortalSession(
 }
 
 /**
- * The Stripe Price definition that implements W40 volume pricing, built from
- * the pricing constants (pence). The unit is an activated sub-account. Volume
- * mode: the tier the total quantity lands in prices every unit. Used by the go-live checklist to create the
- * Price; the app itself only needs STRIPE_PRICE_ID.
+ * The Stripe Price the app expects behind STRIPE_PRICE_ID (Nov 2026): a
+ * monthly GRADUATED price per connected WhatsApp number (the quantity, set
+ * by src/lib/billing/quantity.ts): numbers 1-10 at 999p each, and each
+ * number from the 11th at 799p. Used by the go-live checklist to
+ * create the Price; the app itself only needs STRIPE_PRICE_ID.
  */
-export function stripeVolumeTiers() {
+export function stripeNumberPrice() {
   return {
     currency: CURRENCY.toLowerCase(),
     billing_scheme: "tiered" as const,
-    tiers_mode: "volume" as const,
+    tiers_mode: "graduated" as const,
     tiers: [
-      { up_to: MID_FROM - 1, unit_amount: STANDARD_PENCE },
-      { up_to: VOLUME_FROM - 1, unit_amount: MID_PENCE },
-      { up_to: "inf" as const, unit_amount: VOLUME_PENCE },
+      { up_to: FIRST_TIER_NUMBERS, unit_amount: PRICE_PER_NUMBER_PENCE },
+      { up_to: "inf" as const, unit_amount: LATER_PRICE_PER_NUMBER_PENCE },
     ],
+    recurring: { interval: "month" as const },
   };
 }

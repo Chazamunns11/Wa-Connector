@@ -5,9 +5,9 @@ import { join } from "node:path";
 
 const src = readFileSync(join(process.cwd(), "src/app/(site)/signup/complete/page.tsx"), "utf8");
 
-test("signup complete only claims the trial started when there is a session_id, and never a saved card", () => {
+test("signup complete only claims the trial started when there is a session_id, and says the card is charged when it ends", () => {
   assert.doesNotMatch(src, /Your card (was|is) saved/);
-  const claim = src.indexOf("-day free trial has started. No card needed until it ends.");
+  const claim = src.indexOf("-day free trial has started. Your card is charged automatically when it ends, unless you cancel first.");
   assert.ok(claim > 0);
   // the claim must sit inside a sessionId-guarded branch
   const before = src.slice(Math.max(0, claim - 200), claim);

@@ -8,36 +8,39 @@ import {
   formatMoney,
   monthlyCost,
   monthlyCostPence,
-  perSubAccountPence,
+  MAX_NUMBERS_PER_SUB_ACCOUNT,
+  PRICE_PER_NUMBER_PENCE,
+  FIRST_TIER_NUMBERS,
+  LATER_PRICE_PER_NUMBER_PENCE,
+  pricePerNumber,
   priceLine,
+  priceSentence,
   pricingConfig,
-  tierSentence,
-  tierRows,
 } from "@/lib/pricing";
 
 const brand = { currency: "GBP" };
 
-test("per-sub-account price: 999p for 1-10, 799p for 11-24, 599p for 25+ (W40 revised 17 Oct)", () => {
-  assert.equal(perSubAccountPence(1), 999);
-  assert.equal(perSubAccountPence(10), 999);
-  assert.equal(perSubAccountPence(11), 799);
-  assert.equal(perSubAccountPence(24), 799);
-  assert.equal(perSubAccountPence(25), 599);
-  assert.equal(perSubAccountPence(100), 599);
+test("per-number price (Charlie, Nov 2026): 999p each for the first 10 numbers, 799p each after; up to 3 per sub-account", () => {
+  assert.equal(PRICE_PER_NUMBER_PENCE, 999);
+  assert.equal(FIRST_TIER_NUMBERS, 10);
+  assert.equal(LATER_PRICE_PER_NUMBER_PENCE, 799);
+  assert.equal(MAX_NUMBERS_PER_SUB_ACCOUNT, 3);
+  assert.equal(pricePerNumber("GBP"), "£9.99");
 });
 
-test("monthlyCostPence: exact examples from the owner", () => {
+test("monthlyCostPence: graduated, so adding a number never lowers the bill", () => {
   const cases: [number, number][] = [
     [1, 999],
     [3, 2997],
     [5, 4995],
-    [9, 8991],
     [10, 9990],
-    [11, 8789],
-    [24, 19176],
-    [25, 14975],
+    [11, 10789],
+    [12, 11588],
+    [24, 21176],
+    [25, 21975],
   ];
   for (const [n, pence] of cases) assert.equal(monthlyCostPence(n), pence, `${n} numbers`);
+  for (let n = 1; n <= 60; n++) assert.ok(monthlyCostPence(n) > monthlyCostPence(n - 1), `${n} costs more than ${n - 1}`);
   assert.equal(monthlyCostPence(0), 0);
   assert.equal(monthlyCostPence(-2), 0);
   assert.equal(monthlyCostPence(2.7), 1998);
@@ -47,10 +50,9 @@ test("monthlyCostPence: exact examples from the owner", () => {
 
 test("monthlyCost returns pounds from whole pence, with no float drift", () => {
   assert.equal(monthlyCost(3), 29.97);
-  assert.equal(monthlyCost(9), 89.91);
   assert.equal(monthlyCost(10), 99.9);
-  assert.equal(monthlyCost(11), 87.89);
-  assert.equal(monthlyCost(25), 149.75);
+  assert.equal(monthlyCost(11), 107.89);
+  assert.equal(monthlyCost(25), 219.75);
 });
 
 test("formatMoney always shows pence: '£9.99', '£79.90', '£0.00'; EUR contains '€'", () => {
@@ -61,29 +63,21 @@ test("formatMoney always shows pence: '£9.99', '£79.90', '£0.00'; EUR contain
   assert.ok(formatMoney(145, "EUR").includes("€"));
 });
 
-test("priceLine singular/plural: '1 sub-account = £9.99/month', '25 sub-accounts = £149.75/month'", () => {
-  assert.equal(priceLine(1, brand), "1 sub-account = £9.99/month");
-  assert.equal(priceLine(5, brand), "5 sub-accounts = £49.95/month");
-  assert.equal(priceLine(25, brand), "25 sub-accounts = £149.75/month");
+test("priceLine singular/plural: '1 number = £9.99/month', '25 numbers = £219.75/month'", () => {
+  assert.equal(priceLine(1, brand), "1 number = £9.99/month");
+  assert.equal(priceLine(5, brand), "5 numbers = £49.95/month");
+  assert.equal(priceLine(25, brand), "25 numbers = £219.75/month");
 });
 
-test("tierSentence states all three prices plainly and that the tier applies to every sub-account", () => {
+test("priceSentence states £9.99 for the first 10 numbers, £7.99 after, and the 3-per-sub-account limit", () => {
   assert.equal(
-    tierSentence("GBP"),
-    "£9.99 a month per sub-account, with up to 3 WhatsApp numbers included. 11 to 24 sub-accounts: £7.99 each. 25 or more sub-accounts: £5.99 each. The tier you reach applies to every sub-account.",
+    priceSentence("GBP"),
+    "£9.99 a month for each of your first 10 WhatsApp numbers, then £7.99 for every number after that. Up to 3 numbers per sub-account.",
   );
 });
 
-test("tierRows lists the three tiers for the transparent table", () => {
-  assert.deepEqual(tierRows("GBP"), [
-    { range: "1 to 10 sub-accounts", each: "£9.99" },
-    { range: "11 to 24 sub-accounts", each: "£7.99" },
-    { range: "25 or more sub-accounts", each: "£5.99" },
-  ]);
-});
-
-test("CALCULATOR_PRESETS is [1,3,10,11,25]", () => {
-  assert.deepEqual([...CALCULATOR_PRESETS], [1, 3, 10, 11, 25]);
+test("CALCULATOR_PRESETS is [1,3,10,25]", () => {
+  assert.deepEqual([...CALCULATOR_PRESETS], [1, 3, 10, 25]);
 });
 
 test("pricingConfig is GBP and reads no environment variable", () => {
@@ -103,12 +97,13 @@ test("BRAND_PRICE_PER_NUMBER is retired everywhere outside history docs", () => 
   }
 });
 
-test("pricingCopy trial terms mention 7 days, card and 3 sub-accounts", () => {
+test("pricingCopy trial terms mention 7 days, card and 3 WhatsApp numbers", () => {
   const c = pricingCopy();
   const terms = c.trialTerms.join(" ");
   assert.match(terms, /7-day/);
   assert.match(terms, /card/i);
-  assert.match(terms, /3 sub-accounts/);
+  assert.match(terms, /3 WhatsApp numbers/);
+  assert.doesNotMatch(terms, /3 sub-accounts/);
   assert.match(c.cancel, /any time/i);
   assert.match(c.cancel, /end of/i);
   assert.match(c.cancel, /billing portal/i);
@@ -145,16 +140,16 @@ import { calculatorDisplay, CALC_MIN, CALC_MAX } from "@/lib/site/calculator";
 test("calculatorDisplay: valid, out of range, fractional and empty input", () => {
   assert.equal(CALC_MIN, 1);
   assert.equal(CALC_MAX, 500);
-  assert.deepEqual(calculatorDisplay("5", brand), { line: "5 sub-accounts = £49.95/month", note: null, empty: false });
+  assert.deepEqual(calculatorDisplay("5", brand), { line: "5 numbers = £49.95/month", note: null, empty: false });
   const hi = calculatorDisplay("600", brand);
-  assert.equal(hi.line, "500 sub-accounts = £2,995.00/month");
+  assert.equal(hi.line, "500 numbers = £4,015.00/month");
   assert.match(hi.note ?? "", /whole number from 1 to 500/);
   const lo = calculatorDisplay("0", brand);
-  assert.equal(lo.line, "1 sub-account = £9.99/month");
+  assert.equal(lo.line, "1 number = £9.99/month");
   assert.ok(lo.note);
-  assert.equal(calculatorDisplay("2.7", brand).line, "2 sub-accounts = £19.98/month");
+  assert.equal(calculatorDisplay("2.7", brand).line, "2 numbers = £19.98/month");
   assert.ok(calculatorDisplay("2.7", brand).note);
-  assert.equal(calculatorDisplay("-3", brand).line, "1 sub-account = £9.99/month");
+  assert.equal(calculatorDisplay("-3", brand).line, "1 number = £9.99/month");
   const empty = calculatorDisplay("", brand);
   assert.equal(empty.empty, true);
   assert.equal(empty.line, "");
@@ -188,29 +183,39 @@ test("pricing page has no Card kit; fallback has no table; calculator is labelle
   assert.ok(calc.includes("htmlFor"));
 });
 
-test("pricing copy follows the deck: one trial paragraph with 'per activated sub-account'", () => {
+test("pricing copy: one trial paragraph that bills per WhatsApp number", () => {
   const c = pricingCopy();
   assert.equal(c.trialTerms.length, 1);
-  assert.match(c.trialTerms[0], /per activated sub-account/);
-  assert.match(c.trialTerms[0], /7-day free trial, no card needed/);
-  assert.match(c.trialTerms[0], /sending pauses until you add one/);
+  assert.match(c.trialTerms[0], /for each of your first 10 WhatsApp numbers, then £7\.99 for every number after that/);
+  assert.doesNotMatch(c.trialTerms[0], /per activated sub-account|tier you reach/);
+  assert.match(c.trialTerms[0], /7-day free trial for up to 3 WhatsApp numbers/);
+  assert.match(c.trialTerms[0], /charged automatically unless you cancel first/);
+  assert.doesNotMatch(c.trialTerms[0], /no card needed/);
   assert.doesNotMatch(c.trialTerms[0], /take a card/);
   assert.equal(c.failedPayment.length, 2);
 });
 
-test("pricing page: one big price, no 'same price' line, tier sentence and tier list, calculator takes no price prop", () => {
+test("pricing page: one big per-number price, the price sentence and the price list; calculator takes no price prop", () => {
   const page = readFileSync(join(process.cwd(), "src/app/(site)/pricing/page.tsx"), "utf8");
-  assert.ok(!/same whether|one price per|One price/i.test(page));
-  assert.match(page, /tierSentence\(/);
+  assert.match(page, /pricePerNumber\(/);
+  assert.match(page, /priceSentence\(/);
   assert.match(page, /<TierList/);
-  assert.ok(!/pricePerNumber/.test(page));
+  assert.match(page, /per WhatsApp number, per month/);
   const calc = readFileSync(join(process.cwd(), "src/components/site/PricingCalculator.tsx"), "utf8");
-  assert.ok(!/pricePerNumber/.test(calc));
+  assert.ok(!/pricePerNumber|PRICE_PER_NUMBER/.test(calc), "the calculator gets its price from monthlyCost, never a prop");
 });
 
-test("no source file mentions a single price: pricePerNumber and BRAND_PRICE_PER_NUMBER are gone from src", () => {
+test("the price lives in code: BRAND_PRICE_PER_NUMBER / BRAND_PRICE are not read anywhere in src or scripts", () => {
   for (const f of [...walk("src"), ...walk("scripts")].filter((f) => /\.(tsx?|cjs)$/.test(f) && !f.endsWith("site-pricing.test.ts"))) {
     const text = readFileSync(f, "utf8");
-    assert.ok(!/pricePerNumber|BRAND_PRICE_PER_NUMBER|BRAND_PRICE/.test(text), f);
+    assert.ok(!/BRAND_PRICE_PER_NUMBER|BRAND_PRICE\b/.test(text), f);
   }
 });
+
+test("no page still advertises the old tiers or per-sub-account pricing", () => {
+  for (const f of [...walk("src/app"), ...walk("src/components"), ...walk("src/lib/site")].filter((f) => /\.tsx?$/.test(f))) {
+    const text = readFileSync(f, "utf8");
+    assert.ok(!/£5\.99|tier you reach|numbers included|per activ(e|ated) sub-account/.test(text), f);
+  }
+});
+

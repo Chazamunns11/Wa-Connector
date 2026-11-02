@@ -58,7 +58,7 @@ test("planStatus pending: an abandoned Checkout shows the trial has not started"
   assert.deepEqual(planStatus(acct("pending"), NOW), {
     label: "Trial not started",
     tone: "warn",
-    banner: "Finish signing up to start your 7-day free trial. No card needed.",
+    banner: "Finish signing up to start your 7-day free trial.",
   });
 });
 
@@ -105,15 +105,21 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
 });
 
-test("headline reads '2 sub-accounts active · £19.98/month' and switches tier at 11 and 25", () => {
+test("headline counts active sub-accounts and their numbers: £9.99 each for the first 10, £7.99 after (Nov 2026)", () => {
   const rows = [row(), row(), row({ activated: false, state: { kind: "not_active" } })];
-  assert.equal(headline(rows), "2 sub-accounts active · £19.98/month");
-  assert.equal(headline([row()]), "1 sub-account active · £9.99/month");
-  assert.equal(headline([]), "0 sub-accounts active · £0.00/month");
-  assert.equal(headline(Array.from({ length: 10 }, () => row())), "10 sub-accounts active · £99.90/month");
-  assert.equal(headline(Array.from({ length: 11 }, () => row())), "11 sub-accounts active · £87.89/month");
-  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · £149.75/month");
+  assert.equal(headline(rows), "2 sub-accounts active · 2 numbers · £19.98/month");
+  assert.equal(headline([row()]), "1 sub-account active · 1 number · £9.99/month");
+  assert.equal(headline([]), "0 sub-accounts active · 0 numbers · £0.00/month");
+  assert.equal(headline(Array.from({ length: 10 }, () => row())), "10 sub-accounts active · 10 numbers · £99.90/month");
+  assert.equal(headline(Array.from({ length: 12 }, () => row())), "12 sub-accounts active · 12 numbers · £115.88/month");
+  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · 25 numbers · £219.75/month");
+  // Extra numbers are billed; numbers on an inactive sub-account are not.
+  assert.equal(
+    headline([row({ numbers: 3 }), row({ numbers: 2 }), row({ activated: false, numbers: 3, state: { kind: "not_active" } })]),
+    "2 sub-accounts active · 5 numbers · £49.95/month"
+  );
 });
+
 
 test("activeCount counts activated rows only", () => {
   assert.equal(activeCount([row(), row({ activated: false }), row()]), 2);
@@ -162,4 +168,22 @@ test("fleetSummary counts states, held messages, active sends and rows needing a
   ];
   assert.deepEqual(fleetSummary(rows), { connected: 2, offline: 2, waiting: 9, awaitingScan: 1, sentToday: 76, attention: 4 });
   assert.deepEqual(fleetSummary([]), { connected: 0, offline: 0, waiting: 0, awaitingScan: 0, sentToday: 0, attention: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// Setup guidance: each row shows its one next step until it is live.
+// ---------------------------------------------------------------------------
+
+test("a connected sub-account that GoHighLevel has never messaged shows the last setup step at once", () => {
+  const r = row({ awaitingFirstMessage: true });
+  assert.equal(needsAttention(r), "Last step: set the Telephony Provider in GoHighLevel, then send a test message");
+});
+
+test("the last-step hint disappears once GoHighLevel's first message arrives", () => {
+  assert.equal(needsAttention(row({ awaitingFirstMessage: false })), null);
+});
+
+test("after 24 hours with no message the stronger provider nudge wins over the setup hint", () => {
+  const r = row({ awaitingFirstMessage: true, providerNudge: true });
+  assert.equal(needsAttention(r), "No messages from GoHighLevel yet. Is the Telephony Provider set?");
 });

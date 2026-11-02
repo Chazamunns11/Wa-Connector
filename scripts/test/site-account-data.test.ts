@@ -22,8 +22,9 @@ function loc(id: string, label: string, activated: boolean): GhlAccountSummary {
   } as GhlAccountSummary;
 }
 
-function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[] } = {}) {
+function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]; numbers?: Record<string, number> } = {}) {
   const calls: { name: string; args: unknown[] }[] = [];
+  const numbers = opts.numbers ?? {};
   const locations = opts.locations ?? [loc("a", "Alpha", true), loc("b", "Bravo", false), loc("c", "Charlie", true)];
   const repo = {
     async getAccountById(id: string) { calls.push({ name: "getAccountById", args: [id] }); return opts.account === undefined ? ACCOUNT : opts.account; },
@@ -31,6 +32,10 @@ function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]
     async getWhatsappSessionSummariesForTenants(ids: string[]): Promise<WhatsappSessionSummary[]> {
       calls.push({ name: "summaries", args: [ids] });
       return [{ coachId: "ten-a", status: "connected", phoneNumber: "+447700900101", lastConnectedAt: "2026-10-10T00:00:00Z", lastDisconnectReason: null, sentToday: 7, heldMessages: 0 }];
+    },
+    // Per-number billing: one number per sub-account unless a test says otherwise.
+    async countNumbersByLocation(ids: string[]): Promise<Record<string, number>> {
+      return Object.fromEntries(ids.map((id) => [id, numbers[id] ?? 1]));
     },
     async countOptOutsByTenant(ids: string[]): Promise<Map<string, number>> {
       calls.push({ name: "optOuts", args: [ids] });
@@ -106,10 +111,16 @@ test("getBilling given the rows does not list locations again", async () => {
   assert.equal(f.calls.slice(before).filter((c) => c.name === "listGhlAccountsForAccount").length, 0);
 });
 
-test("getBilling at 25 active sub-accounts prices every sub-account at the volume rate", async () => {
+test("getBilling at 25 numbers: 10 x £9.99 + 15 x £7.99", async () => {
   const many = Array.from({ length: 25 }, (_, i) => loc(`l${i}`, `L${i}`, true));
   const b = await make(fakes({ locations: many })).getBilling();
-  assert.equal(b.nextInvoiceAmount, 149.75);
+  assert.equal(b.nextInvoiceAmount, 219.75);
+});
+
+test("getBilling bills every number on active sub-accounts, none on inactive ones (5 numbers x £9.99)", async () => {
+  const locs = [loc("a", "A", true), loc("b", "B", true), loc("c", "C", false)];
+  const b = await make(fakes({ locations: locs, numbers: { a: 3, b: 2, c: 3 } })).getBilling();
+  assert.equal(b.nextInvoiceAmount, 49.95);
 });
 
 test("getBilling for an account with no subscription (comped or pending) never calls Stripe", async () => {

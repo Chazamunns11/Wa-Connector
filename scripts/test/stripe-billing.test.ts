@@ -13,9 +13,9 @@ import {
   setSubscriptionDefaultPaymentMethod,
   resumeSubscription,
   parseSubscription,
-  stripeVolumeTiers,
+  stripeNumberPrice,
 } from "@/lib/stripe/billing";
-import { STANDARD_PENCE, MID_PENCE, VOLUME_PENCE, MID_FROM, VOLUME_FROM } from "@/lib/pricing";
+import { PRICE_PER_NUMBER_PENCE } from "@/lib/pricing";
 
 type Call = { method: string; path: string; params: Record<string, unknown> | undefined };
 function fake(data: unknown = {}) {
@@ -45,7 +45,7 @@ function withEnv(env: Record<string, string | undefined>, fn: () => Promise<void
 const input = { accountId: "acc-1", customerEmail: "a£7\.99.co", successUrl: "S", cancelUrl: "C" };
 const base = { STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_9", STRIPE_WEBHOOK_SECRET: "whsec" };
 
-test("createCheckoutSession: 7-day trial with no card, pausing when it ends without one; no tax by default", async () => {
+test("createCheckoutSession: 7-day trial that TAKES a card (charged on day 7), pausing only if no card is left; no tax by default", async () => {
   await withEnv({ ...base, STRIPE_AUTOMATIC_TAX: undefined }, async () => {
     const { calls, deps } = fake({ id: "cs_1", url: "U" });
     await createCheckoutSession(input, deps);
@@ -62,7 +62,7 @@ test("createCheckoutSession: 7-day trial with no card, pausing when it ends with
         metadata: { account_id: "acc-1" },
       },
       metadata: { account_id: "acc-1", owner_email: "a£7\.99.co" },
-      payment_method_collection: "if_required",
+      payment_method_collection: "always",
       success_url: "S",
       cancel_url: "C",
     });
@@ -154,8 +154,16 @@ test("retrieve and mutate calls use the specified paths and params", async () =>
 
     f = fake({ id: "si_1", quantity: 0 });
     await setSubscriptionItemQuantity("si_1", 0, f.deps);
+    // Every change is invoiced at once (no build-up to month end); a re-sync is never blocked by the card.
     assert.deepEqual(f.calls[0], {
-      method: "POST", path: "/subscription_items/si_1", params: { quantity: 0, proration_behavior: "create_prorations" },
+      method: "POST", path: "/subscription_items/si_1", params: { quantity: 0, proration_behavior: "always_invoice", payment_behavior: "allow_incomplete" },
+    });
+
+    // An increase the customer asked for is charged now, or refused by Stripe if it can't be paid.
+    f = fake({ id: "si_1", quantity: 2 });
+    await setSubscriptionItemQuantity("si_1", 2, f.deps, { refuseIfUnpaid: true });
+    assert.deepEqual(f.calls[0], {
+      method: "POST", path: "/subscription_items/si_1", params: { quantity: 2, proration_behavior: "always_invoice", payment_behavior: "error_if_incomplete" },
     });
 
     f = fake(sub);
@@ -212,21 +220,19 @@ test("default payment method and resume calls", async () => {
   assert.ok(r.ok && r.data.status === "active");
 });
 
-test("stripeVolumeTiers: Stripe volume-price definition matches W40 pence", () => {
-  assert.deepEqual(stripeVolumeTiers(), {
+test("stripeNumberPrice: monthly GRADUATED price per number, 999p for numbers 1-10 and 799p from the 11th (Nov 2026)", () => {
+  assert.equal(PRICE_PER_NUMBER_PENCE, 999);
+  assert.deepEqual(stripeNumberPrice(), {
     currency: "gbp",
     billing_scheme: "tiered",
-    tiers_mode: "volume",
+    tiers_mode: "graduated",
     tiers: [
-      { up_to: MID_FROM - 1, unit_amount: STANDARD_PENCE },
-      { up_to: VOLUME_FROM - 1, unit_amount: MID_PENCE },
-      { up_to: "inf", unit_amount: VOLUME_PENCE },
+      { up_to: 10, unit_amount: 999 },
+      { up_to: "inf", unit_amount: 799 },
     ],
+    recurring: { interval: "month" },
   });
-  assert.equal(STANDARD_PENCE, 999);
-  assert.equal(MID_PENCE, 799);
-  assert.equal(VOLUME_PENCE, 599);
-  assert.equal(MID_FROM, 11);
-  assert.equal(VOLUME_FROM, 25);
-  assert.deepEqual(stripeVolumeTiers().tiers.map((t) => t.up_to), [10, 24, "inf"]);
 });
+
+
+

@@ -132,10 +132,10 @@ test("billingHref carries a fixed notice", () => {
 });
 
 test("trial cap message is the fixed sentence", () => {
-  assert.equal(TRIAL_CAP_MESSAGE, "Your trial includes 3 sub-accounts. Start your paid plan now to add more.");
+  assert.equal(TRIAL_CAP_MESSAGE, "Your trial includes 3 WhatsApp numbers. Start your paid plan now to add more.");
 });
 
-test("billing page is real: no sample markers, wired to the actions, tier sentence", () => {
+test("billing page is real: no sample markers, wired to the actions, price sentence", () => {
   const src = read("src/app/(app)/dashboard/billing/page.tsx");
   assert.doesNotMatch(src, /\(sample\)|PreviewBadge|disabled aria-describedby="portal-hint"/);
   assert.match(src, /openBillingPortalAction/);
@@ -143,7 +143,7 @@ test("billing page is real: no sample markers, wired to the actions, tier senten
   assert.match(src, /startCheckoutAction/);
   assert.match(src, /addCardAction/);
   assert.match(src, /Add a card/);
-  assert.match(src, /tierSentence\(/);
+  assert.match(src, /priceSentence\(/);
   assert.match(src, /Cancels at the end of this period/);
   assert.match(src, /Ends the free trial today and starts monthly billing for your active numbers\./);
 });

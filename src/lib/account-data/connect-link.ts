@@ -1,3 +1,4 @@
+import type { LocationSlot } from "@/lib/location-numbers";
 import { repo } from "@/lib/data";
 import { brandConfig } from "@/lib/brand-config";
 import { isConnectLinkConfigured, mintConnectLinkToken } from "@/lib/ghl-connect-link";
@@ -7,9 +8,9 @@ import { isConnectLinkConfigured, mintConnectLinkToken } from "@/lib/ghl-connect
  * connect links are not configured or the location is not the account's. The
  * token is minted on demand for the page render and never put in a URL.
  */
-export async function connectLinkForOwnedLocation(accountId: string, locationId: string): Promise<string | null> {
+export async function connectLinkForOwnedLocation(accountId: string, locationId: string, slot: LocationSlot = 1): Promise<string | null> {
   if (!isConnectLinkConfigured()) return null;
   const location = await repo.getGhlAccountByLocationId(locationId);
   if (!location || location.accountId !== accountId || location.connectLinkVersion === null) return null;
-  return `${brandConfig().appUrl}/connect/${mintConnectLinkToken(locationId, location.connectLinkVersion, "send")}`;
+  return `${brandConfig().appUrl}/connect/${mintConnectLinkToken(locationId, location.connectLinkVersion, "send", slot)}`;
 }

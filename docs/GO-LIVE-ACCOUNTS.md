@@ -99,22 +99,25 @@ same organisation**.
 
 1. Open a Stripe account for PingWren. Leave **Test mode** on (switch at top
    right). Do everything in this part in test mode.
-2. **Product catalogue → Add product.** Name: `PingWren WhatsApp sub-account`.
+2. **Product catalogue → Add product.** Name: `PingWren WhatsApp number`.
 3. Add **one** price on that product. Not two. The code reads a single price id
-   and sets the quantity to the number of activated sub-accounts (up to 3 WhatsApp
-   numbers per sub-account are included, so extra numbers add no quantity).
+   and sets the quantity to the number of WhatsApp numbers on the account's
+   activated sub-accounts (Nov 2026: per-number billing, see `src/lib/pricing.ts`).
    - Recurring, monthly, currency GBP.
-   - Pricing model: **Volume pricing** (`tiers_mode = volume`,
-     `billing_scheme = tiered`).
-   - Tier 1: first unit 1, last unit 10, **£5.99** per unit (599 pence).
-   - Tier 2: first unit 11, last unit 24, **£7.99** per unit (799 pence).
-   - Tier 3: first unit 25, last unit and above, **£5.99** per unit (599 pence).
-   - No flat fee on any tier.
+   - Pricing model: **Graduated pricing** (`billing_scheme = tiered`,
+     `tiers_mode = graduated`).
+   - Tier 1: first unit 1, last unit 10, **£9.99** per unit (999 pence).
+   - Tier 2: first unit 11, last unit and above, **£7.99** per unit (799 pence).
+   - No flat fee on either tier.
 
-   That matches `stripeVolumeTiers()` in `src/lib/stripe/billing.ts`. Volume
-   means the whole order gets the tier price. Twenty-five sub-accounts cost
-   25 x £5.99, not ten at £9.99, fourteen at £7.99 and one at £5.99. If the prices in `src/lib/pricing.ts`
-   ever change, the Stripe price must change with them.
+   That matches `stripeNumberPrice()` in `src/lib/stripe/billing.ts`.
+   Graduated means each number is priced by its own position: 3 numbers cost
+   3 x £9.99 = £29.97; 12 numbers cost 10 x £9.99 + 2 x £7.99 = £115.88. Adding
+   a number never lowers the bill. If the prices in `src/lib/pricing.ts` ever
+   change, the Stripe price must change with them.
+
+   Already made an older price (the per-sub-account tiers, or a flat £7.99)?
+   Create this one, put its id in `STRIPE_PRICE_ID`, and archive the old one.
 4. Copy the price id (starts `price_`). It becomes `STRIPE_PRICE_ID`.
 5. **Developers → API keys.** Copy the secret key (starts `sk_test_`). It
    becomes `STRIPE_SECRET_KEY`. Do not use the publishable key. The app never
@@ -123,7 +126,9 @@ same organisation**.
    - Update payment method
    - View invoice history
 
-   The trial takes no card. "Add a card" on the billing page does not use the
+   The trial TAKES a card at checkout and Stripe charges it on day 7 (Nov
+   2026). "Add a card" stays for changing the card, and for the rare trial
+   whose card was removed. It does not use the
    portal: it opens a Stripe Checkout in setup mode, and the webhook then makes
    the card the default and resumes the subscription if the trial had already
    ended. (Adding a card in the portal does not resume a paused subscription.)
@@ -294,9 +299,14 @@ Then walk this journey:
    dashboard will not let you attach an existing customer, create the
    customer and subscription from the dashboard on a clock, and use the
    Stripe CLI or dashboard to replay the events at the webhook.
-2. **Signup and trial.** Checkout asks for no card. Status trialing. Trial
-   end date visible on the billing page, and "No card on file".
-3. **Trial ends with no card, sending pauses.** Activate one sub-account and
+2. **Signup and trial.** Checkout asks for a card (`4242 4242 4242 4242`) and
+   says nothing is charged today. Status trialing; the trial end date and the
+   card's last four digits show on the billing page.
+2b. **Day 7 charges the card.** Advance the clock past day 7: Stripe charges
+   the first invoice (£9.99 per active number, £7.99 from the 11th) and the status becomes
+   **active**. Never paused.
+3. **Card removed during the trial, sending pauses** (safety net only).
+   Detach the card in Stripe, then activate one sub-account and
    check it sends. Advance the clock to 2 days before the trial ends: the
    dashboard shows "Your trial ends in 2 days. Add a card to keep sending."
    with an **Add a card** button. Advance past day 7 without adding a card.
@@ -311,7 +321,7 @@ Then walk this journey:
    `4242 4242 4242 4242` on the Stripe page, and land back on Billing ("Card
    saved..."). In Stripe the card is the customer's and the subscription's
    default, the subscription is **Active**, its billing period starts today,
-   and the first invoice (1 x £9.99, plus tax if on) is paid. The webhook
+   and the first invoice (1 x £7.99, plus tax if on) is paid. The webhook
    gets `checkout.session.completed` (setup mode), then
    `customer.subscription.resumed`; `billing_status` becomes `active`. Send
    the workflow SMS again: it reaches WhatsApp. If the subscription stays
@@ -320,9 +330,15 @@ Then walk this journey:
 5. **Trial ends with a card.** On a second test-clock customer, add a card
    during the trial and advance past day 7. The first invoice is paid and
    status goes straight from trialing to **active**, never paused.
-6. **Volume tiers.** Activate eleven sub-accounts (use the comped FitClosers
-   account's locations, or a test account). Charge for the month should be
-   11 x £7.99. At 25 it should be 25 x £5.99.
+6. **Per-number billing, charged as you go.** On one active (paid, not
+   trialing) sub-account, add a second number (dashboard → Show QR → Add a
+   number). The quantity goes from 1 to 2 and Stripe creates and charges a
+   **separate invoice at once** for the rest of the month (about £9.99 x days
+   left / days in month). Now attach `4000 0000 0000 0341` (declines) and add a
+   third number: it is refused with "Your card was declined…", the quantity
+   stays at 2 and no number is added. Remove a number: the quantity drops and
+   a credit appears on the customer's balance. Deactivate the sub-account:
+   quantity 0, whatever numbers it still has.
 7. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
    attaches, then declines). Advance one billing cycle. Status becomes
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the
@@ -378,7 +394,7 @@ afterwards. It is run by hand and is not part of `npm test`.
 Only after Parts 1 to 8 pass in test mode.
 
 1. In Stripe, switch to **live mode** and repeat Part 2 steps 2 to 9: product,
-   the same volume price, portal settings, retry settings, webhook endpoint.
+   the same £7.99 per-unit price, portal settings, retry settings, webhook endpoint.
    Live mode has its own price id, key and signing secret.
 2. In Vercel, replace `STRIPE_SECRET_KEY` (`sk_live_...`), `STRIPE_PRICE_ID`
    and `STRIPE_WEBHOOK_SECRET` with the live values. Redeploy.
