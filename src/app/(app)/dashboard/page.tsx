@@ -126,13 +126,24 @@ export default async function DashboardPage({
             <h2 id="subaccounts" className="h-section font-display">
               Sub-accounts
             </h2>
-            <AttentionFilter filter={filter} total={rows.length} attention={attentionCount} />
+            <div className="flex flex-wrap items-center gap-3">
+              <AttentionFilter filter={filter} total={rows.length} attention={attentionCount} />
+              {/* The install starts here for agency owners (the OAuth start route already accepts an account session). */}
+              <a href="/api/crm/oauth/start" className={siteButton("ink")}>
+                Add sub-accounts
+              </a>
+            </div>
           </div>
           <div className="mt-6">
             {rows.length === 0 ? (
               <EmptyState
                 title="No sub-accounts yet"
                 description="Connect GoHighLevel to see your sub-accounts here."
+                action={
+                  <a href="/api/crm/oauth/start" className={siteButton("ink")}>
+                    Connect GoHighLevel
+                  </a>
+                }
               />
             ) : visible.length === 0 ? (
               <EmptyState
