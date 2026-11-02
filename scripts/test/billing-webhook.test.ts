@@ -27,6 +27,7 @@ function harness(
       return opts.fresh ?? true;
     },
     getAccountById: async () => (opts.owner === undefined ? account() : opts.owner),
+    getAccountByStripeCustomerId: async (id: string) => (id === "cus_9" ? account() : null),
     getGhlAccountByLocationId: async (id: string) => ({ locationId: id, accountId: "acc-1" }) as GhlAccount,
     getNumberBilling: nums.getNumberBilling,
     updateNumberBilling: nums.updateNumberBilling,
@@ -189,6 +190,12 @@ test("invoice.payment_failed notifies with the customer id, no billing write", a
   assert.deepEqual(await run(h, ev("invoice.payment_failed", { customer: "cus_9" })), { kind: "handled", type: "invoice.payment_failed" });
   assert.match(h.notes[0], /cus_9/);
   assert.equal(h.nums.writes.length, 0);
+});
+
+test("invoice.payment_failed for a customer this app doesn't know (shared Stripe account) is ignored, no alert", async () => {
+  const h = harness();
+  assert.deepEqual(await run(h, ev("invoice.payment_failed", { customer: "cus_coach" })), { kind: "ignored", type: "invoice.payment_failed" });
+  assert.equal(h.notes.length, 0);
 });
 
 test("other event types (trial_will_end included) are ignored", async () => {

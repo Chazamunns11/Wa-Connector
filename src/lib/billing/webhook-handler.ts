@@ -11,7 +11,7 @@ export interface StripeEvent {
 
 export type WebhookRepo = Pick<
   GhlRepository,
-  "recordStripeEvent" | "deleteStripeEvent" | "getAccountById" | "getGhlAccountByLocationId" | "getNumberBilling" | "updateNumberBilling"
+  "recordStripeEvent" | "deleteStripeEvent" | "getAccountById" | "getAccountByStripeCustomerId" | "getGhlAccountByLocationId" | "getNumberBilling" | "updateNumberBilling"
 >;
 
 export interface WebhookDeps {
@@ -131,8 +131,11 @@ async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeE
     }
     case "invoice.payment_failed": {
       // The banner state comes from the number's subscription turning past_due (above);
-      // this just tells the operator which customer to chase.
-      deps.notify(`Stripe payment failed for customer ${customerId(event.data.object.customer) ?? "unknown"}`);
+      // this just tells the operator which customer to chase. The Stripe account is shared with
+      // the CRM business, so only this app's own customers raise an alert.
+      const cus = customerId(event.data.object.customer);
+      if (!cus || !(await repo.getAccountByStripeCustomerId(cus))) return { kind: "ignored", type: event.type };
+      deps.notify(`Stripe payment failed for customer ${cus}`);
       return { kind: "handled", type: event.type };
     }
     default:

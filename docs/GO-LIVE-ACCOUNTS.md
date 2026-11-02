@@ -97,8 +97,14 @@ same organisation**.
 
 ## Part 2 — Stripe, test mode first
 
-1. Open a Stripe account for PingWren. Leave **Test mode** on (switch at top
-   right). Do everything in this part in test mode.
+1. Live billing uses the existing CJMunns Consulting Stripe account
+   (`acct_1NNaNrDnnucN6pwS`), shared with the CRM business. The product
+   `prod_VYM9Jw1Slk16BQ` ("PingWren WhatsApp number") has statement descriptor
+   `PINGWREN WHATSAPP`, so card statements say PingWren; Checkout, receipts and
+   invoices still show the account's public name. Number subscriptions carry
+   `pingwren_mrr=0` so the CRM's mrr-sync skips them, and the webhook only
+   alerts on failed payments for this app's own customers. Use a sandbox for
+   test mode.
 2. **Product catalogue → Add product.** Name: `PingWren WhatsApp number`.
    Do **not** add any prices to it by hand. Billing is per WhatsApp number:
    the app creates one subscription per number and prices it inline
