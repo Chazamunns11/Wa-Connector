@@ -426,7 +426,8 @@ afterwards. It is run by hand and is not part of `npm test`.
 Only after Parts 1 to 8 pass in test mode.
 
 1. In Stripe, switch to **live mode** and repeat Part 2 steps 2 to 9: product,
-   the same £7.99 per-unit price, portal settings, retry settings, webhook endpoint.
+   the same graduated price (1-10 at £9.99, 11+ at £7.99), portal settings,
+   retry settings, webhook endpoint (all 8 events), branding.
    Live mode has its own price id, key and signing secret.
 2. In Vercel, replace `STRIPE_SECRET_KEY` (`sk_live_...`), `STRIPE_PRICE_ID`
    and `STRIPE_WEBHOOK_SECRET` with the live values. Redeploy.
