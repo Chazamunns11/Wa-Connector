@@ -166,3 +166,21 @@ test("fleetSummary counts states, held messages, active sends and rows needing a
   assert.deepEqual(fleetSummary(rows), { connected: 2, offline: 2, waiting: 9, awaitingScan: 1, sentToday: 76, attention: 4 });
   assert.deepEqual(fleetSummary([]), { connected: 0, offline: 0, waiting: 0, awaitingScan: 0, sentToday: 0, attention: 0 });
 });
+
+// ---------------------------------------------------------------------------
+// Setup guidance: each row shows its one next step until it is live.
+// ---------------------------------------------------------------------------
+
+test("a connected sub-account that GoHighLevel has never messaged shows the last setup step at once", () => {
+  const r = row({ awaitingFirstMessage: true });
+  assert.equal(needsAttention(r), "Last step: set the Telephony Provider in GoHighLevel, then send a test message");
+});
+
+test("the last-step hint disappears once GoHighLevel's first message arrives", () => {
+  assert.equal(needsAttention(row({ awaitingFirstMessage: false })), null);
+});
+
+test("after 24 hours with no message the stronger provider nudge wins over the setup hint", () => {
+  const r = row({ awaitingFirstMessage: true, providerNudge: true });
+  assert.equal(needsAttention(r), "No messages from GoHighLevel yet. Is the Telephony Provider set?");
+});

@@ -46,6 +46,7 @@ export function toLocationRow(
     optOuts,
     providerNudge,
     numbers: Math.max(1, numbers),
+    awaitingFirstMessage: activated && state.kind === "connected" && !stats.everReceived,
   };
 }
 

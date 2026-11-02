@@ -78,6 +78,11 @@ export default function GetStartedPage() {
             </Step>
           </ol>
 
+          <p className="mt-8 max-w-[60ch] text-ink-dim">
+            Not sure what&rsquo;s left? Each sub-account on your dashboard shows its next step until it&rsquo;s live, and ticks
+            off the last one by itself when the first message comes through from GoHighLevel.
+          </p>
+
           <h2 className={`${H2} mt-14`}>Add another number</h2>
           <p className="mt-3 max-w-[60ch] text-ink-dim">
             Up to 3 per sub-account, for example one for the coach and one for a setter. Click <strong>Show QR</strong> on the
