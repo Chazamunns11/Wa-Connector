@@ -24,6 +24,7 @@ export function toLocationRow(
   now: Date,
   dailyCap: number,
   optOuts: number,
+  numbers = 1,
 ): LocationRow {
   const activated = loc.activatedAt !== null;
   const state = toWhatsappState(activated, summary, stats.pendingSend);
@@ -44,6 +45,7 @@ export function toLocationRow(
     failedLast7Days: stats.failedLast7Days,
     optOuts,
     providerNudge,
+    numbers: Math.max(1, numbers),
   };
 }
 

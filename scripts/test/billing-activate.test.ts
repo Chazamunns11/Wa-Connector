@@ -6,6 +6,11 @@ import { activateLocation, deactivateLocation, type ActivateDeps, type ActivateR
 import { parseSubscription } from "@/lib/stripe/billing";
 import type { Account, BillingStatus, GhlAccount } from "@/lib/types";
 
+/** Per-number billing fakes: `n` activated sub-accounts with one number each. */
+const activatedLocations = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({ locationId: `active-${i}`, tenantId: `t-${i}`, activatedAt: "2026-10-01T00:00:00.000Z" })) as never;
+const oneNumberEach = async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 1]));
+
 function account(over: Partial<Account> = {}): Account {
   return {
     id: "acc-1",
@@ -47,6 +52,8 @@ function harness(
     getAccountById: async () => acct,
     countActivatedForAccount: async () => opts.active ?? 0,
     countActivatedAll: async () => opts.all ?? opts.active ?? 0,
+    listGhlAccountsForAccount: async () => activatedLocations(opts.active ?? 0),
+    countNumbersByLocation: oneNumberEach,
     setGhlActivated: async (loc, at) => {
       log.push(`db:${loc}:${at}`);
       if (opts.dbFails && at !== null) throw new Error("db down");
@@ -160,6 +167,8 @@ test("second concurrent activation at the cap is refused and quantity ends at 3"
     getAccountById: async () => acct,
     countActivatedForAccount: async () => active,
     countActivatedAll: async () => active,
+    listGhlAccountsForAccount: async () => activatedLocations(active),
+    countNumbersByLocation: oneNumberEach,
     setGhlActivated: async (_loc, at) => {
       await new Promise((r) => setImmediate(r));
       if (at !== null) {
@@ -206,7 +215,19 @@ test("a failed database write does not re-POST a quantity Stripe already holds",
 test("re-sync is skipped when the true count equals what was just written", async () => {
   const h = harness({ active: 0, matched: 0 });
   let reads = 0;
-  h.repo.countActivatedForAccount = async () => (reads++ === 0 ? 0 : 1);
+  // The billable count is read twice: before raising Stripe (0 active) and on re-sync (1 active).
+  h.repo.listGhlAccountsForAccount = async () => activatedLocations(reads++ === 0 ? 0 : 1);
   await activateLocation(h.repo, h.deps, "acc-1", "loc-1");
   assert.deepEqual(h.log.filter((l) => l.startsWith("qty:")), ["qty:si_1:1"]);
+});
+
+// ---------------------------------------------------------------------------
+// Per-number billing (Nov 2026, £7.99 per WhatsApp number)
+// ---------------------------------------------------------------------------
+
+test("per-number billing: activating a sub-account with 2 numbers raises Stripe by 2, on top of what is billed", async () => {
+  const h = harness({ active: 3 });
+  h.repo.countNumbersByLocation = async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === "loc-1" ? 2 : 1]));
+  await activateLocation(h.repo, h.deps, "acc-1", "loc-1");
+  assert.equal(h.log.filter((l) => l.startsWith("qty:"))[0], "qty:si_1:5");
 });

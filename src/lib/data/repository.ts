@@ -121,6 +121,9 @@ export interface GhlRepository {
   /** The tenant a contact most recently messaged on, or null (fall back to the default number). */
   getStickyTenant(locationId: string, ghlContactId: string): Promise<string | null>;
 
+  /** Per-number billing (Nov 2026): how many WhatsApp numbers each of these sub-accounts has (ghl_location_numbers rows). Locations with none are absent. */
+  countNumbersByLocation(locationIds: string[]): Promise<Record<string, number>>;
+
   /** Setter seats (0018): the number (tenant) a HighLevel user's replies go out from in this location, or null (sticky/default routing). */
   getUserTenant(locationId: string, ghlUserId: string): Promise<string | null>;
 

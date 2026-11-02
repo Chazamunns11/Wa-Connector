@@ -32,6 +32,7 @@ import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
 import { readSmallJsonBody } from "@/lib/bridge-panel-guard";
 import { authorizeGhlEmbedLocationRequest, guardFailureResponseBody } from "@/app/api/crm/embed/guard";
 import { decideAddNumber, decideRemoveNumber, decideUpdateNumber, type NumbersRouteResult } from "./logic";
+import { syncQuantityForLocation } from "@/lib/billing/sync-for-location";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,8 @@ async function handle(request: Request, method: string, decide: Decide): Promise
     }
     const body = await readSmallJsonBody(request);
     const result = await decide(auth.location.locationId, body, auth.location.ghlUserId ?? null);
+    // Per-number billing: a number added or removed changes the Stripe quantity.
+    if (result.status === 200 && (method === "POST" || method === "DELETE")) await syncQuantityForLocation(auth.location.locationId);
     return NextResponse.json(result.body, { status: result.status });
   } catch (err) {
     // Never echoes `err` into the response.

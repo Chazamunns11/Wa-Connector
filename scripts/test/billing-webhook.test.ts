@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { handleBillingEvent, type WebhookDeps, type WebhookRepo } from "@/lib/billing/webhook-handler";
-import { syncSubscriptionQuantity, type QuantityDeps } from "@/lib/billing/quantity";
+import { billableNumbers, countBillableNumbers, syncSubscriptionQuantity, type QuantityDeps } from "@/lib/billing/quantity";
 import { applyCheckoutSession } from "@/lib/billing/onboard";
 import type { Account } from "@/lib/types";
 import { parseSubscription, type StripeCheckoutSession, type StripeSubscription } from "@/lib/stripe/billing";
@@ -273,7 +273,12 @@ function qdeps(over: Partial<QuantityDeps> = {}) {
   };
   return { deps, sets, notes };
 }
-const qrepo = (n: number) => ({ countActivatedForAccount: async () => n });
+/** `n` activated sub-accounts with one number each (per-number billing). */
+const qrepo = (n: number) => ({
+  listGhlAccountsForAccount: async () =>
+    Array.from({ length: n }, (_, i) => ({ locationId: `loc-${i}`, tenantId: `t-${i}`, activatedAt: "2026-10-01T00:00:00.000Z" })) as never,
+  countNumbersByLocation: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 1])),
+});
 
 test("quantity sync: comped and missing subscription are no_subscription", async () => {
   const { deps } = qdeps();
@@ -383,4 +388,42 @@ test("trial_will_end is ignored: there is no email to send yet", async () => {
   const h = harness();
   const out = await run(h, { id: "evt_w", type: "customer.subscription.trial_will_end", data: { object: sub({ status: "trialing" }) } });
   assert.deepEqual(out, { kind: "ignored", type: "customer.subscription.trial_will_end" });
+});
+
+// ---------------------------------------------------------------------------
+// Per-number billing (Nov 2026, £7.99 per WhatsApp number)
+// ---------------------------------------------------------------------------
+
+test("billableNumbers: every number on an activated sub-account counts; inactive sub-accounts count nothing", () => {
+  assert.equal(
+    billableNumbers([
+      { activated: true, numbers: 3 },
+      { activated: true, numbers: 1 },
+      { activated: false, numbers: 3 },
+    ]),
+    4
+  );
+});
+
+test("billableNumbers: an activated sub-account always counts at least 1 (its default number)", () => {
+  assert.equal(billableNumbers([{ activated: true, numbers: 0 }]), 1);
+  assert.equal(billableNumbers([]), 0);
+});
+
+test("countBillableNumbers: reads only activated sub-accounts, then counts their numbers", async () => {
+  const asked: string[][] = [];
+  const repo = {
+    listGhlAccountsForAccount: async () =>
+      [
+        { locationId: "on-1", activatedAt: "2026-10-01T00:00:00.000Z" },
+        { locationId: "off", activatedAt: null },
+        { locationId: "on-2", activatedAt: "2026-10-02T00:00:00.000Z" },
+      ] as never,
+    countNumbersByLocation: async (ids: string[]) => {
+      asked.push(ids);
+      return { "on-1": 3, "on-2": 2, off: 3 };
+    },
+  };
+  assert.equal(await countBillableNumbers(repo, "acc-1"), 5);
+  assert.deepEqual(asked, [["on-1", "on-2"]]);
 });

@@ -8,7 +8,7 @@ import { getAccountDataSource } from "@/lib/account-data";
 import { headline, needsCard, planStatus } from "@/lib/account-data/derive";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
-import { formatMoney, pricingConfig, tierSentence } from "@/lib/pricing";
+import { formatMoney, pricingConfig, priceSentence } from "@/lib/pricing";
 import { dashboardHref, parseBillingNotice } from "@/lib/site/dashboard-url";
 
 import { addCardAction, endTrialNowAction, openBillingPortalAction, startCheckoutAction } from "./actions";
@@ -82,7 +82,7 @@ export default async function BillingPage({
               <dt className="text-ink-faint">Plan</dt>
               <dd>
                 <p className="font-semibold tabular-nums">{headline(rows)}</p>
-                <p className="mt-1 text-sm text-ink-dim">{tierSentence(pricingConfig().currency)}</p>
+                <p className="mt-1 text-sm text-ink-dim">{priceSentence(pricingConfig().currency)}</p>
                 {billing.cancelAtPeriodEnd ? <p className="mt-1 text-sm font-medium text-ink">Cancels at the end of this period{endsOn ? ` on ${endsOn}` : ""}.</p> : null}
               </dd>
               <dt className="text-ink-faint">Card</dt>

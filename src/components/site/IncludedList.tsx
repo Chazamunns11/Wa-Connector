@@ -1,4 +1,4 @@
-import { NUMBERS_INCLUDED, TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
+import { TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
 import type { BrandConfig } from "@/lib/brand-config";
 import { FEATURES, featureEntries } from "@/lib/site/features";
 
@@ -20,7 +20,7 @@ export function IncludedList({ brand }: { brand: BrandConfig }) {
       title: "Every feature on every plan",
       body: `${list[0].toUpperCase()}${list.slice(1)}.${soon ? " WhatsApp groups are coming soon, at no extra charge." : " WhatsApp groups too, at no extra charge."}`,
     },
-    { title: "No setup fee and no charge per message", body: `${brand.name} bills per activated sub-account, with up to ${NUMBERS_INCLUDED} WhatsApp numbers included, and nothing else.` },
+    { title: "No setup fee and no charge per message", body: `${brand.name} bills for each WhatsApp number you connect, and nothing else.` },
     {
       title: `A ${TRIAL_DAYS}-day free trial`,
       body: `No card needed. It covers up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. If the trial ends before you add a card, sending pauses until you do.`,

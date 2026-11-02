@@ -35,6 +35,7 @@ function harness(
     getAccountById: async () => acct,
     countActivatedForAccount: async () => opts.active ?? 0,
     countActivatedAll: async () => opts.all ?? opts.active ?? 0,
+    countNumbersByLocation: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 1])),
     setGhlActivated: async (_l, at) => {
       calls.push(`db:${at === null ? "clear" : "set"}`);
       if (opts.capThrow && at !== null) throw new ActivationCapError("trial_cap");

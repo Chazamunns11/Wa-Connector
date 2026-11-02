@@ -105,14 +105,17 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
 });
 
-test("headline reads '2 sub-accounts active · £19.98/month' and switches tier at 11 and 25", () => {
+test("headline counts active sub-accounts and their numbers at £7.99 per number (Nov 2026)", () => {
   const rows = [row(), row(), row({ activated: false, state: { kind: "not_active" } })];
-  assert.equal(headline(rows), "2 sub-accounts active · £19.98/month");
-  assert.equal(headline([row()]), "1 sub-account active · £9.99/month");
-  assert.equal(headline([]), "0 sub-accounts active · £0.00/month");
-  assert.equal(headline(Array.from({ length: 10 }, () => row())), "10 sub-accounts active · £99.90/month");
-  assert.equal(headline(Array.from({ length: 11 }, () => row())), "11 sub-accounts active · £87.89/month");
-  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · £149.75/month");
+  assert.equal(headline(rows), "2 sub-accounts active · 2 numbers · £15.98/month");
+  assert.equal(headline([row()]), "1 sub-account active · 1 number · £7.99/month");
+  assert.equal(headline([]), "0 sub-accounts active · 0 numbers · £0.00/month");
+  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · 25 numbers · £199.75/month");
+  // Extra numbers are billed; numbers on an inactive sub-account are not.
+  assert.equal(
+    headline([row({ numbers: 3 }), row({ numbers: 2 }), row({ activated: false, numbers: 3, state: { kind: "not_active" } })]),
+    "2 sub-accounts active · 5 numbers · £39.95/month"
+  );
 });
 
 test("activeCount counts activated rows only", () => {

@@ -14,6 +14,7 @@ import { redactBridgeSessionResult, type PanelBridgeSessionResult } from "@/lib/
 import { repo } from "@/lib/data";
 import { NOT_FOUND, ownsLocation, runOwnedNumberAction } from "@/lib/site/owned-whatsapp";
 import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
+import { syncQuantityForLocation } from "@/lib/billing/sync-for-location";
 import { parseSlotParam } from "@/lib/location-numbers";
 import { connectWhatsappSession, getWhatsappBridgeSession, logoutWhatsappSession, type BridgeOkResult } from "@/lib/whatsapp-bridge";
 import {
@@ -42,7 +43,9 @@ export async function listNumbersAction(locationId: string): Promise<NumbersResu
 export async function addNumberAction(locationId: string, label: string): Promise<NumbersResult> {
   const session = await requireAccountSession();
   if (!(await ownsLocation(repo, session.accountId, locationId))) return NOT_YOURS;
-  return toResult(await decideAddNumber(repo, locationId, label.trim() ? { label } : {}));
+  const result = toResult(await decideAddNumber(repo, locationId, label.trim() ? { label } : {}));
+  if (result.ok) await syncQuantityForLocation(locationId); // per-number billing
+  return result;
 }
 
 export async function updateNumberAction(
@@ -60,7 +63,9 @@ export async function updateNumberAction(
 export async function removeNumberAction(locationId: string, slot: number): Promise<NumbersResult> {
   const session = await requireAccountSession();
   if (!(await ownsLocation(repo, session.accountId, locationId))) return NOT_YOURS;
-  return toResult(await decideRemoveNumber(repo, { logout: logoutWhatsappSession }, locationId, { slot }));
+  const result = toResult(await decideRemoveNumber(repo, { logout: logoutWhatsappSession }, locationId, { slot }));
+  if (result.ok) await syncQuantityForLocation(locationId); // per-number billing
+  return result;
 }
 
 export async function connectNumberAction(locationId: string, slot: number): Promise<PanelBridgeSessionResult> {

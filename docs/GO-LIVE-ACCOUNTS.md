@@ -99,22 +99,21 @@ same organisation**.
 
 1. Open a Stripe account for PingWren. Leave **Test mode** on (switch at top
    right). Do everything in this part in test mode.
-2. **Product catalogue → Add product.** Name: `PingWren WhatsApp sub-account`.
+2. **Product catalogue → Add product.** Name: `PingWren WhatsApp number`.
 3. Add **one** price on that product. Not two. The code reads a single price id
-   and sets the quantity to the number of activated sub-accounts (up to 3 WhatsApp
-   numbers per sub-account are included, so extra numbers add no quantity).
+   and sets the quantity to the number of WhatsApp numbers on the account's
+   activated sub-accounts (Nov 2026: per-number billing, see `src/lib/pricing.ts`).
    - Recurring, monthly, currency GBP.
-   - Pricing model: **Volume pricing** (`tiers_mode = volume`,
-     `billing_scheme = tiered`).
-   - Tier 1: first unit 1, last unit 10, **£5.99** per unit (599 pence).
-   - Tier 2: first unit 11, last unit 24, **£7.99** per unit (799 pence).
-   - Tier 3: first unit 25, last unit and above, **£5.99** per unit (599 pence).
-   - No flat fee on any tier.
+   - Pricing model: **Standard pricing** (per unit, `billing_scheme = per_unit`).
+   - Price: **£7.99** per unit (799 pence). No tiers, no flat fee.
 
-   That matches `stripeVolumeTiers()` in `src/lib/stripe/billing.ts`. Volume
-   means the whole order gets the tier price. Twenty-five sub-accounts cost
-   25 x £5.99, not ten at £9.99, fourteen at £7.99 and one at £5.99. If the prices in `src/lib/pricing.ts`
-   ever change, the Stripe price must change with them.
+   That matches `stripeNumberPrice()` in `src/lib/stripe/billing.ts`. Three
+   numbers cost 3 x £7.99 = £23.97 a month. If the price in `src/lib/pricing.ts`
+   ever changes, the Stripe price must change with it.
+
+   Already made the old tiered "sub-account" price? Create this new one, put
+   its id in `STRIPE_PRICE_ID`, and archive the old price. No subscription on
+   this app was ever created against it.
 4. Copy the price id (starts `price_`). It becomes `STRIPE_PRICE_ID`.
 5. **Developers → API keys.** Copy the secret key (starts `sk_test_`). It
    becomes `STRIPE_SECRET_KEY`. Do not use the publishable key. The app never
@@ -311,7 +310,7 @@ Then walk this journey:
    `4242 4242 4242 4242` on the Stripe page, and land back on Billing ("Card
    saved..."). In Stripe the card is the customer's and the subscription's
    default, the subscription is **Active**, its billing period starts today,
-   and the first invoice (1 x £9.99, plus tax if on) is paid. The webhook
+   and the first invoice (1 x £7.99, plus tax if on) is paid. The webhook
    gets `checkout.session.completed` (setup mode), then
    `customer.subscription.resumed`; `billing_status` becomes `active`. Send
    the workflow SMS again: it reaches WhatsApp. If the subscription stays
@@ -320,9 +319,10 @@ Then walk this journey:
 5. **Trial ends with a card.** On a second test-clock customer, add a card
    during the trial and advance past day 7. The first invoice is paid and
    status goes straight from trialing to **active**, never paused.
-6. **Volume tiers.** Activate eleven sub-accounts (use the comped FitClosers
-   account's locations, or a test account). Charge for the month should be
-   11 x £7.99. At 25 it should be 25 x £5.99.
+6. **Per-number billing.** On one active sub-account, add a second number
+   (dashboard → Show QR → Add a number). The Stripe subscription quantity goes
+   from 1 to 2 straight away (2 x £7.99). Remove it again: back to 1.
+   Deactivate the sub-account: 0, whatever numbers it still has.
 7. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
    attaches, then declines). Advance one billing cycle. Status becomes
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the
@@ -378,7 +378,7 @@ afterwards. It is run by hand and is not part of `npm test`.
 Only after Parts 1 to 8 pass in test mode.
 
 1. In Stripe, switch to **live mode** and repeat Part 2 steps 2 to 9: product,
-   the same volume price, portal settings, retry settings, webhook endpoint.
+   the same £7.99 per-unit price, portal settings, retry settings, webhook endpoint.
    Live mode has its own price id, key and signing secret.
 2. In Vercel, replace `STRIPE_SECRET_KEY` (`sk_live_...`), `STRIPE_PRICE_ID`
    and `STRIPE_WEBHOOK_SECRET` with the live values. Redeploy.

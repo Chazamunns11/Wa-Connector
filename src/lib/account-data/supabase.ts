@@ -1,7 +1,7 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import { monthlyCostPence, pricingConfig } from "@/lib/pricing";
+import { billableNumbers } from "@/lib/billing/quantity";
 import type { retrieveSubscription } from "@/lib/stripe/billing";
-import { activeCount } from "./derive";
 import { DEFAULT_DAILY_CAP, toLocationRow } from "./map";
 import type { AccountDataSource, AccountSummary, BillingSummary, LocationRow } from "./types";
 
@@ -9,7 +9,7 @@ const DAY_MS = 86_400_000;
 
 type AccountRepo = Pick<
   GhlRepository,
-  "getAccountById" | "listGhlAccountsForAccount" | "getWhatsappSessionSummariesForTenants" | "getLocationStats" | "countOptOutsByTenant"
+  "getAccountById" | "listGhlAccountsForAccount" | "getWhatsappSessionSummariesForTenants" | "getLocationStats" | "countOptOutsByTenant" | "countNumbersByLocation"
 >;
 
 /** The real account data, read through the service-role repository for one account id (already authorised by the session). */
@@ -52,15 +52,16 @@ export class SupabaseAccountDataSource implements AccountDataSource {
     const locs = await this.repo.listGhlAccountsForAccount(this.accountId);
     if (locs.length === 0) return [];
     const since = new Date(this.now.getTime() - 7 * DAY_MS).toISOString();
-    const [summaries, stats, optOuts] = await Promise.all([
+    const [summaries, stats, optOuts, numberCounts] = await Promise.all([
       this.repo.getWhatsappSessionSummariesForTenants(locs.map((l) => l.tenantId)),
       this.repo.getLocationStats(locs.map((l) => l.locationId), since),
       this.repo.countOptOutsByTenant(locs.map((l) => l.tenantId)),
+      this.repo.countNumbersByLocation(locs.map((l) => l.locationId)),
     ]);
     const byTenant = new Map(summaries.map((s) => [s.coachId, s]));
     const none = { pendingSend: 0, failedLast7Days: { count: 0, reasons: [] as string[] }, everReceived: false };
     return locs.map((l) =>
-      toLocationRow(l, byTenant.get(l.tenantId) ?? null, stats[l.locationId] ?? none, this.now, DEFAULT_DAILY_CAP, optOuts.get(l.tenantId) ?? 0),
+      toLocationRow(l, byTenant.get(l.tenantId) ?? null, stats[l.locationId] ?? none, this.now, DEFAULT_DAILY_CAP, optOuts.get(l.tenantId) ?? 0, numberCounts[l.locationId] ?? 1),
     );
   }
 
@@ -82,7 +83,7 @@ export class SupabaseAccountDataSource implements AccountDataSource {
       ...base,
       cardLast4: sub.data.cardLast4,
       nextInvoiceAt: sub.data.currentPeriodEnd ? new Date(sub.data.currentPeriodEnd * 1000).toISOString() : null,
-      nextInvoiceAmount: monthlyCostPence(activeCount(rows)) / 100,
+      nextInvoiceAmount: monthlyCostPence(billableNumbers(rows)) / 100,
       cancelAtPeriodEnd: sub.data.cancelAtPeriodEnd,
     };
   }

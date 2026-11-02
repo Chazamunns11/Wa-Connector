@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Container } from "@/components/site/Container";
 import { PageTop } from "@/components/site/PageTop";
 import { brandConfig } from "@/lib/brand-config";
-import { pricingConfig, tierSentence } from "@/lib/pricing";
+import { pricingConfig, priceSentence } from "@/lib/pricing";
 import { pricingCopy } from "@/lib/site/pricing-copy";
 import { SITE_ROUTES } from "@/lib/site/routes";
 
@@ -22,7 +22,7 @@ export default function BillingHelpPage() {
   return (
     <>
     <PageTop title="Billing">
-      <p>{tierSentence(pricing.currency)} Billed per activated sub-account.</p>
+      <p>{priceSentence(pricing.currency)} Billed monthly for the numbers on your active sub-accounts.</p>
     </PageTop>
     <section className="band">
       <Container>
