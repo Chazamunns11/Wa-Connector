@@ -1,7 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { REMINDER_EVERY_MS, REMINDER_KEY_PREFIX, sendUnpaidReminders, unpaidReminderEmail, type ReminderRepo } from "@/lib/billing/reminders";
+import {
+  REMINDER_EVERY_MS,
+  REMINDER_KEY_PREFIX,
+  sendingRestartedEmail,
+  sendUnpaidReminders,
+  unpaidReminderEmail,
+  type ReminderRepo,
+} from "@/lib/billing/reminders";
 import type { Account } from "@/lib/types";
 
 const account = (over: Partial<Account> = {}): Account =>
@@ -26,6 +33,7 @@ function fakeRepo(accounts: Account[]) {
   let clock = new Date("2026-11-02T10:00:00.000Z");
   const repo: ReminderRepo = {
     listAccountsByBillingStatus: async (status) => accounts.filter((a) => a.billingStatus === status),
+    getAccountById: async (id) => accounts.find((a) => a.id === id) ?? null,
     listOpsAlerts: async () => [...rows.values()].map((r) => ({ ...r })),
     markOpsAlertDown: async (key) => {
       if (!rows.has(key)) rows.set(key, { key, downSince: clock.toISOString(), alertedAt: null });
@@ -43,10 +51,10 @@ function fakeRepo(accounts: Account[]) {
       return { wasAlerted: r.alertedAt !== null };
     },
   };
-  const sent: { to: string[]; subject: string; text: string }[] = [];
+  const sent: { to: string[]; subject: string; text: string; action?: { label: string; url: string } }[] = [];
   let emailWorks = true;
   const deps = {
-    sendEmail: async (e: { to: string[]; subject: string; text: string }) => {
+    sendEmail: async (e: { to: string[]; subject: string; text: string; action?: { label: string; url: string } }) => {
       if (!emailWorks) return false;
       sent.push(e);
       return true;
@@ -73,7 +81,7 @@ const HOUR = 60 * 60 * 1000;
 
 test("an unpaid account gets one email straight away, none on the next hourly passes, then one a day", async () => {
   const h = fakeRepo([account()]);
-  assert.deepEqual(await sendUnpaidReminders(h.repo, h.deps), { accounts: 1, sent: 1, failed: 0 });
+  assert.deepEqual(await sendUnpaidReminders(h.repo, h.deps), { accounts: 1, sent: 1, failed: 0, restarted: 0 });
   assert.equal(h.sent[0].to[0], "owner@agency.test");
   assert.match(h.sent[0].subject, /Nothing is sending/);
 
@@ -104,12 +112,29 @@ test("overlapping passes send once", async () => {
   assert.equal(h.sent.length, 1);
 });
 
-test("once the account pays, the reminders stop and its row is removed", async () => {
+test("once the account pays, the reminders stop, the owner gets one 'sending again' email, and the row is removed", async () => {
   const acct = account();
   const h = fakeRepo([acct]);
   await sendUnpaidReminders(h.repo, h.deps);
   acct.billingStatus = "active";
+  h.advance(HOUR);
+  const r = await sendUnpaidReminders(h.repo, h.deps);
+  assert.equal(r.restarted, 1);
+  assert.equal(h.sent.length, 2);
+  assert.match(h.sent[1].subject, /Payment received/);
+  assert.equal(h.sent[1].to[0], "owner@agency.test");
+  assert.equal(h.rows.size, 0);
   h.advance(25 * HOUR);
+  await sendUnpaidReminders(h.repo, h.deps);
+  assert.equal(h.sent.length, 2, "nothing more once paid");
+});
+
+test("a cancelled account gets no 'sending again' email", async () => {
+  const acct = account();
+  const h = fakeRepo([acct]);
+  await sendUnpaidReminders(h.repo, h.deps);
+  acct.billingStatus = "cancelled";
+  h.advance(HOUR);
   await sendUnpaidReminders(h.repo, h.deps);
   assert.equal(h.sent.length, 1);
   assert.equal(h.rows.size, 0);
@@ -118,7 +143,7 @@ test("once the account pays, the reminders stop and its row is removed", async (
 test("a failed send is retried on the next pass, not a day later", async () => {
   const h = fakeRepo([account()]);
   h.setEmailWorks(false);
-  assert.deepEqual(await sendUnpaidReminders(h.repo, h.deps), { accounts: 1, sent: 0, failed: 1 });
+  assert.deepEqual(await sendUnpaidReminders(h.repo, h.deps), { accounts: 1, sent: 0, failed: 1, restarted: 0 });
   h.setEmailWorks(true);
   h.advance(HOUR);
   await sendUnpaidReminders(h.repo, h.deps);
@@ -156,7 +181,19 @@ test("the email says plainly that nothing sends, that messages won't go out late
   assert.match(unpaid.text, /https:\/\/app\.test\/dashboard\/billing/);
   assert.match(unpaid.text, /once a day/);
 
+  assert.deepEqual(unpaid.action, { label: "Update card and pay", url: "https://app.test/dashboard/billing" });
+  // The URL is its own paragraph, so the branded email turns it into the button.
+  assert.ok(unpaid.text.split("\n\n").includes("https://app.test/dashboard/billing"));
+
   const trial = unpaidReminderEmail({ trialEndsAt: "2026-10-20T00:00:00.000Z" }, "PingWren", "https://app.test");
   assert.match(trial.subject, /add a card/);
   assert.match(trial.text, /free trial has ended/);
+});
+
+test("the 'sending again' email says it is active, and that failed messages were not sent", () => {
+  const e = sendingRestartedEmail("PingWren", "https://app.test");
+  assert.match(e.subject, /sending again/);
+  assert.match(e.text, /active again/);
+  assert.match(e.text, /weren't sent/);
+  assert.equal(e.action.url, "https://app.test/dashboard");
 });

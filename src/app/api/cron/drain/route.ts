@@ -181,12 +181,12 @@ export async function GET(request: NextRequest) {
   }
 
   // Daily "nothing is sending until you pay" email to unpaid account owners (src/lib/billing/reminders.ts).
-  let unpaidReminders = { accounts: 0, sent: 0, failed: 0 };
+  let unpaidReminders = { accounts: 0, sent: 0, failed: 0, restarted: 0 };
   try {
     const brand = brandConfig();
     unpaidReminders = await sendUnpaidReminders(repo, { sendEmail, brandName: brand.name, appUrl: brand.appUrl, now: () => new Date(now) });
-    if (unpaidReminders.sent > 0 || unpaidReminders.failed > 0) {
-      console.log(`[cron/drain] unpaid reminders: sent ${unpaidReminders.sent}, failed ${unpaidReminders.failed}.`);
+    if (unpaidReminders.sent > 0 || unpaidReminders.failed > 0 || unpaidReminders.restarted > 0) {
+      console.log(`[cron/drain] unpaid reminders: sent ${unpaidReminders.sent}, failed ${unpaidReminders.failed}, sending-again ${unpaidReminders.restarted}.`);
     }
   } catch (err) {
     console.error("[cron/drain] unpaid reminders failed (non-fatal):", err instanceof Error ? err.name : "error");

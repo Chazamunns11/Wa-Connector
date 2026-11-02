@@ -1,5 +1,5 @@
 import type { GhlRepository } from "@/lib/data/repository";
-import type { Account } from "@/lib/types";
+import type { Account, BillingStatus } from "@/lib/types";
 
 /**
  * Daily "nothing is sending until you pay" email (Nov 2026, Charlie: "must be
@@ -16,73 +16,76 @@ import type { Account } from "@/lib/types";
  * `alerted_at` is the only one that sends. After REMINDER_EVERY_MS the row is
  * deleted and re-claimed, and only the pass whose delete returned it sends, so
  * overlapping cron runs never send twice. When the account is no longer
- * paused its row is deleted and the emails stop. Logs carry counts only.
+ * paused its row is deleted, the emails stop, and if it is paying again the
+ * owner gets one "sending again" email. Logs carry counts only.
  */
 export const REMINDER_KEY_PREFIX = "billing-unpaid:";
 
 /** Just under a day, so an hourly cron sends at about the same time each day instead of drifting an hour later. */
 export const REMINDER_EVERY_MS = 23.5 * 60 * 60 * 1000;
 
+/** Statuses that send again (src/lib/billing/gate.ts): these get the "sending again" email. Cancelled does not. */
+const LIVE: ReadonlySet<BillingStatus> = new Set(["trialing", "active", "past_due", "comped"]);
+
 export type ReminderRepo = Pick<
   GhlRepository,
-  "listAccountsByBillingStatus" | "listOpsAlerts" | "markOpsAlertDown" | "claimOpsAlert" | "clearOpsAlert"
+  "listAccountsByBillingStatus" | "listOpsAlerts" | "markOpsAlertDown" | "claimOpsAlert" | "clearOpsAlert" | "getAccountById"
 >;
 
 export interface ReminderDeps {
-  sendEmail: (input: { to: string[]; subject: string; text: string }) => Promise<boolean>;
+  sendEmail: (input: { to: string[]; subject: string; text: string; action?: { label: string; url: string } }) => Promise<boolean>;
   brandName: string;
   appUrl: string;
   now: () => Date;
 }
 
-export function unpaidReminderEmail(
-  account: Pick<Account, "trialEndsAt">,
-  brandName: string,
-  appUrl: string,
-): { subject: string; text: string } {
+type Email = { subject: string; text: string; action: { label: string; url: string } };
+
+export function unpaidReminderEmail(account: Pick<Account, "trialEndsAt">, brandName: string, appUrl: string): Email {
   const billingUrl = `${appUrl}/dashboard/billing`;
-  if (account.trialEndsAt) {
-    return {
-      subject: `Nothing is sending from your ${brandName} numbers: add a card`,
-      text: [
-        "Hi,",
-        "",
-        `Your ${brandName} free trial has ended and there's no card on the account, so nothing is sending from any of your WhatsApp numbers.`,
-        "",
-        "Messages your GoHighLevel workflows and team send now show as failed and won't go out later. Your numbers are still connected, so there's nothing to rescan.",
-        "",
-        "Add a card here and sending restarts straight away:",
-        billingUrl,
-        "",
-        "We'll email you once a day until this is sorted. If you'd rather stop, you can cancel from the same page.",
-        "",
-        brandName,
-      ].join("\n"),
-    };
-  }
+  const trialEnded = !!account.trialEndsAt;
   return {
-    subject: `Nothing is sending from your ${brandName} numbers: payment due`,
+    subject: trialEnded
+      ? `Nothing is sending from your ${brandName} numbers: add a card`
+      : `Nothing is sending from your ${brandName} numbers: payment due`,
     text: [
       "Hi,",
-      "",
-      `Your last ${brandName} payment didn't go through, so nothing is sending from any of your WhatsApp numbers.`,
-      "",
+      trialEnded
+        ? `Your ${brandName} free trial has ended and there's no card on the account, so nothing is sending from any of your WhatsApp numbers.`
+        : `Your last ${brandName} payment didn't go through, so nothing is sending from any of your WhatsApp numbers.`,
       "Messages your GoHighLevel workflows and team send now show as failed and won't go out later. Your numbers are still connected, so there's nothing to rescan.",
-      "",
-      "Update your card and pay what's due here. Sending restarts as soon as the payment goes through:",
+      trialEnded
+        ? "Add a card and sending restarts straight away:"
+        : "Update your card and we'll take the payment that's due. Sending restarts as soon as it goes through:",
       billingUrl,
-      "",
       "We'll email you once a day until this is sorted. If you'd rather stop, you can cancel from the same page.",
-      "",
-      brandName,
-    ].join("\n"),
+      `The ${brandName} team`,
+    ].join("\n\n"),
+    action: { label: trialEnded ? "Add a card" : "Update card and pay", url: billingUrl },
+  };
+}
+
+/** Sent once, on the first pass after an account that was reminded is paying again. */
+export function sendingRestartedEmail(brandName: string, appUrl: string): Email {
+  const dashboardUrl = `${appUrl}/dashboard`;
+  return {
+    subject: `Payment received: your ${brandName} numbers are sending again`,
+    text: [
+      "Hi,",
+      `Thanks, your payment went through and your ${brandName} account is active again.`,
+      "Your WhatsApp numbers are sending from GoHighLevel as normal. Nothing needed rescanning.",
+      "Messages that failed while the account was unpaid weren't sent. If any of them still matter, send them again from GoHighLevel.",
+      dashboardUrl,
+      `The ${brandName} team`,
+    ].join("\n\n"),
+    action: { label: "Open your dashboard", url: dashboardUrl },
   };
 }
 
 export async function sendUnpaidReminders(
   repo: ReminderRepo,
   deps: ReminderDeps,
-): Promise<{ accounts: number; sent: number; failed: number }> {
+): Promise<{ accounts: number; sent: number; failed: number; restarted: number }> {
   const now = deps.now().getTime();
   const paused = await repo.listAccountsByBillingStatus("paused");
   const open = new Map(
@@ -91,6 +94,7 @@ export async function sendUnpaidReminders(
   const due = new Set<string>();
   let sent = 0;
   let failed = 0;
+  let restarted = 0;
 
   for (const account of paused) {
     const key = `${REMINDER_KEY_PREFIX}${account.id}`;
@@ -122,10 +126,16 @@ export async function sendUnpaidReminders(
     }
   }
 
-  // Paid, cancelled or deleted: stop reminding.
+  // Paid, cancelled or deleted: stop reminding. Only the pass whose delete
+  // returned the row tells a paying account that sending has restarted.
   for (const key of open.keys()) {
-    if (!due.has(key)) await repo.clearOpsAlert(key);
+    if (due.has(key)) continue;
+    const cleared = await repo.clearOpsAlert(key);
+    if (!cleared?.wasAlerted) continue;
+    const account = await repo.getAccountById(key.slice(REMINDER_KEY_PREFIX.length));
+    if (!account?.ownerEmail || !LIVE.has(account.billingStatus)) continue;
+    if (await deps.sendEmail({ to: [account.ownerEmail], ...sendingRestartedEmail(deps.brandName, deps.appUrl) })) restarted += 1;
   }
 
-  return { accounts: paused.length, sent, failed };
+  return { accounts: paused.length, sent, failed, restarted };
 }

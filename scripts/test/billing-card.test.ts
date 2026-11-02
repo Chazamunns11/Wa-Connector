@@ -38,16 +38,26 @@ function harness(liveStatus: string, acct: Account | null = account(), fail?: st
     log.push(what);
     return what.startsWith(fail ?? "\0") ? { ok: false as const, status: 500, code: null, message: "x" } : { ok: true as const, data };
   };
-  const live = { id: "sub", status: liveStatus, latestInvoice } as never;
+  const live = { id: "sub", status: liveStatus, latestInvoice } as { id: string; status: string; latestInvoice: string | null };
   const deps: CardSetupDeps = {
     setCustomerDefault: (async (c: string, pm: string) => ok(`customer:${c}:${pm}`, { id: c })) as never,
     retrieveSubscription: (async (id: string) => ok(`live:${id}`, live)) as never,
     resume: (async (id: string) => ok(`resume:${id}`, live)) as never,
     setSubscriptionDefault: (async (id: string, pm: string) => ok(`subdefault:${id}:${pm}`, live)) as never,
     endTrial: (async (id: string) => ok(`endtrial:${id}`, live)) as never,
-    payInvoice: (async (id: string) => ok(`pay:${id}`, { id, status: "paid" })) as never,
+    settleInvoice: (async (id: string, o: { paymentMethod?: string }) => {
+      const r = ok(`pay:${id}:${o.paymentMethod}`, { id, status: "paid" });
+      // Stripe marks the subscription active once its latest invoice is paid.
+      if (r.ok) live.status = "active";
+      return r;
+    }) as never,
   };
-  const repo = { getAccountById: async () => acct };
+  const repo = {
+    getAccountById: async () => acct,
+    updateAccountBilling: async (_id: string, patch: { billingStatus?: string }) => {
+      log.push(`status:${patch.billingStatus}`);
+    },
+  };
   return { log, deps, repo };
 }
 
@@ -108,7 +118,8 @@ test("unpaid or past due: the new card becomes the default, then the outstanding
   for (const status of ["unpaid", "past_due"]) {
     const h = harness(status, account({ billingStatus: status === "unpaid" ? "paused" : "past_due", trialEndsAt: null }));
     assert.deepEqual(await applyCardSetup(h.repo, h.deps, session()), { kind: "paid" }, status);
-    assert.deepEqual(h.log, ["customer:cus:pm_1", "live:sub", "subdefault:sub:pm_1", "pay:in_1"], status);
+    // Pays with the new card, then re-reads Stripe and writes the status at once.
+    assert.deepEqual(h.log, ["customer:cus:pm_1", "live:sub", "subdefault:sub:pm_1", "live:sub", "pay:in_1:pm_1", "live:sub", "status:active"], status);
   }
 });
 

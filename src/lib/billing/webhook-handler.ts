@@ -6,7 +6,7 @@ import { mapStripeSubscriptionStatus } from "@/lib/billing/status";
 export interface StripeEvent {
   id: string;
   type: string;
-  data: { object: Record<string, unknown> };
+  data: { object: Record<string, unknown>; previous_attributes?: Record<string, unknown> };
 }
 
 export type WebhookRepo = Pick<
@@ -21,6 +21,12 @@ export interface WebhookDeps {
   retrieveCheckoutSession: typeof retrieveCheckoutSession;
   retrieveSubscription: typeof retrieveSubscription;
   syncQuantity: (account: Account) => Promise<unknown>;
+  /**
+   * The default card changed outside "Update card and pay" (e.g. in Stripe's
+   * billing portal) on an account that owes money: make it the subscription's
+   * card and pay what's due (src/lib/billing/reactivate.ts).
+   */
+  cardChanged: (account: Account, paymentMethodId: string) => Promise<unknown>;
   notify: (text: string) => void;
 }
 
@@ -117,6 +123,22 @@ async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeE
       });
       // Heals a quantity left stale by a failed sync (e.g. after a deactivation).
       if (status !== "cancelled") await deps.syncQuantity({ ...account, billingStatus: status, stripeSubscriptionId: sub.id });
+      return { kind: "handled", type: event.type };
+    }
+    case "customer.updated": {
+      // Only a change of the default card counts; any other customer edit is ignored.
+      if (!event.data.previous_attributes || !("invoice_settings" in event.data.previous_attributes)) {
+        return { kind: "ignored", type: event.type };
+      }
+      const settings = event.data.object.invoice_settings as { default_payment_method?: unknown } | null | undefined;
+      const pm = customerId(settings?.default_payment_method);
+      const cus = customerId(event.data.object.id);
+      if (!pm || !cus) return { kind: "ignored", type: event.type };
+      const account = await repo.getAccountByStripeCustomerId(cus);
+      if (!account) return { kind: "ignored", type: event.type };
+      const owes = account.billingStatus === "past_due" || (account.billingStatus === "paused" && !account.trialEndsAt);
+      if (!owes) return { kind: "handled", type: event.type };
+      await deps.cardChanged(account, pm);
       return { kind: "handled", type: event.type };
     }
     case "invoice.payment_failed": {

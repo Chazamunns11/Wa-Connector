@@ -259,15 +259,40 @@ export async function resumeSubscription(subscriptionId: string, deps?: BillingD
 }
 
 /**
- * Charges an open invoice now with the customer's saved card. An `unpaid`
+ * Pays a subscription's latest invoice now with the saved card. An `unpaid`
  * subscription only becomes `active` again once its most recent invoice is
  * paid; saving a new card does not retry it
- * (docs.stripe.com/billing/subscriptions/overview, "past_due").
- * A decline comes back as `ok: false`.
+ * (docs.stripe.com/billing/subscriptions/overview, "past_due"). While unpaid,
+ * Stripe leaves each new renewal invoice as a DRAFT, and a draft must be
+ * finalised before it can be paid, so a draft is finalised first. An invoice
+ * that is already paid is left alone (a webhook replay never charges twice).
+ * `paymentMethod` names the new card; it also keys the pay call, so the two
+ * webhooks one card change can fire (the add-card Checkout and
+ * `customer.updated`) make one charge attempt, while a different card later
+ * gets a fresh attempt. A decline comes back as `ok: false`.
  */
-export async function payInvoice(invoiceId: string, deps?: BillingDeps): Promise<StripeResult<{ id: string; status: string | null }>> {
-  const r = await req(deps)<{ id?: unknown; status?: unknown }>("POST", `/invoices/${invoiceId}/pay`, {});
-  return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id, status: str(d.status) } : null));
+export async function settleInvoice(
+  invoiceId: string,
+  opts: { paymentMethod?: string } = {},
+  deps?: BillingDeps,
+): Promise<StripeResult<{ id: string; status: string | null }>> {
+  type Inv = { id?: unknown; status?: unknown };
+  const parse = (d: Inv) => (typeof d.id === "string" ? { id: d.id, status: str(d.status) } : null);
+  const current = mapData(await req(deps)<Inv>("GET", `/invoices/${invoiceId}`, {}), parse);
+  if (!current.ok) return current;
+  if (current.data.status === "paid" || current.data.status === "void" || current.data.status === "uncollectible") return current;
+  if (current.data.status === "draft") {
+    const f = mapData(await req(deps)<Inv>("POST", `/invoices/${invoiceId}/finalize`, { auto_advance: false }), parse);
+    if (!f.ok) return f;
+    if (f.data.status === "paid") return f;
+  }
+  const pay = await req(deps)<Inv>(
+    "POST",
+    `/invoices/${invoiceId}/pay`,
+    opts.paymentMethod ? { payment_method: opts.paymentMethod } : {},
+    opts.paymentMethod ? { idempotencyKey: `settle-${invoiceId}-${opts.paymentMethod}` } : {},
+  );
+  return mapData(pay, parse);
 }
 
 export async function createPortalSession(

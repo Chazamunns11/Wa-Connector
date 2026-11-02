@@ -1,7 +1,7 @@
 import type { GhlRepository } from "@/lib/data/repository";
+import { payWhatsDue, type ReactivateDeps } from "@/lib/billing/reactivate";
 import type {
   endTrialNow,
-  payInvoice,
   resumeSubscription,
   retrieveSubscription,
   setCustomerDefaultPaymentMethod,
@@ -15,7 +15,7 @@ export interface CardSetupDeps {
   setSubscriptionDefault: typeof setSubscriptionDefaultPaymentMethod;
   resume: typeof resumeSubscription;
   endTrial: typeof endTrialNow;
-  payInvoice: typeof payInvoice;
+  settleInvoice: ReactivateDeps["settleInvoice"];
 }
 
 export type CardSetupOutcome =
@@ -42,11 +42,12 @@ const fail = (what: string, message: string): never => {
  * here: Stripe's `customer.subscription.resumed` / `updated` event does that.
  * Safe to replay: each step is idempotent on Stripe's side, and a subscription
  * that is no longer paused is not resumed again. An unpaid or past-due
- * subscription gets its outstanding invoice paid with the new card last
- * (`payInvoice`); a paid invoice is not charged twice on a replay.
+ * subscription gets its latest invoice paid with the new card last
+ * (`payWhatsDue`), and the account is switched back on at once; a paid
+ * invoice is not charged twice on a replay.
  */
 export async function applyCardSetup(
-  repo: Pick<GhlRepository, "getAccountById">,
+  repo: Pick<GhlRepository, "getAccountById" | "updateAccountBilling">,
   deps: CardSetupDeps,
   session: StripeCheckoutSession,
 ): Promise<CardSetupOutcome> {
@@ -80,9 +81,9 @@ export async function applyCardSetup(
   // the subscription, the outstanding invoice must be paid. A decline is not an
   // error (Stripe must not replay the webhook for it): sending stays paused and
   // the daily reminder carries on.
-  if ((live.data.status === "unpaid" || live.data.status === "past_due") && live.data.latestInvoice) {
-    const p = await deps.payInvoice(live.data.latestInvoice);
-    return p.ok ? { kind: "paid" } : { kind: "payment_failed" };
+  if (live.data.status === "unpaid" || live.data.status === "past_due") {
+    const due = await payWhatsDue(repo, deps, account, pm);
+    if (due !== "nothing_due") return { kind: due };
   }
 
   if (outcome.kind === "saved" && live.data.status === "trialing" && session.metadata.then === "end_trial") {

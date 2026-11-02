@@ -66,6 +66,9 @@ function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Ac
     syncQuantity: async () => {
       log.push("sync");
     },
+    cardChanged: async (a, pm) => {
+      log.push(`cardChanged:${a.id}:${pm}`);
+    },
     notify: (t) => {
       notes.push(t);
     },
@@ -426,4 +429,34 @@ test("countBillableNumbers: reads only activated sub-accounts, then counts their
   };
   assert.equal(await countBillableNumbers(repo, "acc-1"), 5);
   assert.deepEqual(asked, [["on-1", "on-2"]]);
+});
+
+const customerUpdated = (previous: Record<string, unknown> | undefined) => ({
+  id: "evt_cu",
+  type: "customer.updated",
+  data: {
+    object: { id: "cus", invoice_settings: { default_payment_method: "pm_new" } },
+    ...(previous ? { previous_attributes: previous } : {}),
+  },
+});
+
+test("customer.updated: a new default card on an unpaid or past-due account pays what's due", async () => {
+  for (const acct of [account({ billingStatus: "paused", trialEndsAt: null }), account({ billingStatus: "past_due" })]) {
+    const h = harness({ byCustomer: acct });
+    const out = await handleBillingEvent(h.repo, h.deps, customerUpdated({ invoice_settings: { default_payment_method: "pm_old" } }));
+    assert.deepEqual(out, { kind: "handled", type: "customer.updated" });
+    assert.ok(h.log.includes("cardChanged:acc-1:pm_new"), acct.billingStatus);
+  }
+});
+
+test("customer.updated: ignored unless the default card changed, and nothing to pay on a healthy account", async () => {
+  const unpaid = account({ billingStatus: "paused", trialEndsAt: null });
+  const h1 = harness({ byCustomer: unpaid });
+  await handleBillingEvent(h1.repo, h1.deps, customerUpdated({ email: "old@x.co" }));
+  await handleBillingEvent(h1.repo, h1.deps, { ...customerUpdated(undefined), id: "evt_2" });
+  assert.ok(!h1.log.some((l) => l.startsWith("cardChanged")));
+
+  const h2 = harness({ byCustomer: account({ billingStatus: "active" }) });
+  await handleBillingEvent(h2.repo, h2.deps, customerUpdated({ invoice_settings: {} }));
+  assert.ok(!h2.log.some((l) => l.startsWith("cardChanged")));
 });
