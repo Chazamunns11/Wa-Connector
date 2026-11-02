@@ -319,10 +319,15 @@ Then walk this journey:
 5. **Trial ends with a card.** On a second test-clock customer, add a card
    during the trial and advance past day 7. The first invoice is paid and
    status goes straight from trialing to **active**, never paused.
-6. **Per-number billing.** On one active sub-account, add a second number
-   (dashboard → Show QR → Add a number). The Stripe subscription quantity goes
-   from 1 to 2 straight away (2 x £7.99). Remove it again: back to 1.
-   Deactivate the sub-account: 0, whatever numbers it still has.
+6. **Per-number billing, charged as you go.** On one active (paid, not
+   trialing) sub-account, add a second number (dashboard → Show QR → Add a
+   number). The quantity goes from 1 to 2 and Stripe creates and charges a
+   **separate invoice at once** for the rest of the month (about £7.99 x days
+   left / days in month). Now attach `4000 0000 0000 0341` (declines) and add a
+   third number: it is refused with "Your card was declined…", the quantity
+   stays at 2 and no number is added. Remove a number: the quantity drops and
+   a credit appears on the customer's balance. Deactivate the sub-account:
+   quantity 0, whatever numbers it still has.
 7. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
    attaches, then declines). Advance one billing cycle. Status becomes
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the

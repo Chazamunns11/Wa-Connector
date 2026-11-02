@@ -184,14 +184,30 @@ export async function retrieveSubscription(id: string, deps?: BillingDeps): Prom
   return mapData(r, parseSubscription);
 }
 
+/**
+ * Set the number of billed WhatsApp numbers. Nov 2026 (Charlie: "a new
+ * invoice per change, so nobody reaches month end owing loads"):
+ *   - `always_invoice`: Stripe invoices the prorated difference IMMEDIATELY,
+ *     instead of saving it up for the next monthly invoice
+ *     (docs.stripe.com/billing/subscriptions/prorations). A decrease becomes
+ *     a credit on the customer's balance, used against the next invoice.
+ *   - `refuseIfUnpaid` (for an increase the customer asked for: activating a
+ *     sub-account, adding a number): `payment_behavior: error_if_incomplete`,
+ *     so if that invoice cannot be paid Stripe returns an error and does NOT
+ *     change the quantity (docs.stripe.com/api/subscription_items/update).
+ *     The caller then refuses the change. Re-syncs use `allow_incomplete`:
+ *     they correct the count and must never be blocked by a card.
+ */
 export async function setSubscriptionItemQuantity(
   itemId: string,
   quantity: number,
   deps?: BillingDeps,
+  opts: { refuseIfUnpaid?: boolean } = {},
 ): Promise<StripeResult<{ id: string; quantity: number }>> {
   const r = await req(deps)<{ id?: unknown; quantity?: unknown }>("POST", `/subscription_items/${itemId}`, {
     quantity,
-    proration_behavior: "create_prorations",
+    proration_behavior: "always_invoice",
+    payment_behavior: opts.refuseIfUnpaid ? "error_if_incomplete" : "allow_incomplete",
   });
   return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id, quantity: num(d.quantity) ?? quantity } : null));
 }

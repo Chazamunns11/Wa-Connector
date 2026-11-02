@@ -1,5 +1,6 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import type { Account } from "@/lib/types";
+import { MAX_NUMBERS_PER_SUB_ACCOUNT } from "@/lib/pricing";
 import type { retrieveSubscription, setSubscriptionItemQuantity } from "@/lib/stripe/billing";
 
 export type QuantityRepo = Pick<GhlRepository, "listGhlAccountsForAccount" | "countNumbersByLocation">;
@@ -56,4 +57,36 @@ export async function syncSubscriptionQuantity(
   const set = await deps.setQuantity(itemId, quantity);
   if (!set.ok) return fail(set.message);
   return { ok: true, quantity };
+}
+
+export type ChargeRepo = QuantityRepo & Pick<GhlRepository, "getGhlAccountByLocationId" | "getAccountById">;
+
+export type ChargeOutcome = { ok: true; charged: boolean } | { ok: false; reason: "declined" | "stripe_failed" };
+
+/**
+ * Before a number is added: raise Stripe by one and take the payment NOW
+ * (`refuseIfUnpaid`). If the card can't pay, Stripe changes nothing and the
+ * caller must not add the number, so nobody gets a number they haven't paid
+ * for. Nothing to charge (comped account, no subscription, sub-account not
+ * active, already at the limit) is `{ ok: true, charged: false }` and the
+ * normal add-number rules then decide. The caller re-syncs afterwards, which
+ * credits the charge back if the add itself then fails.
+ */
+export async function chargeForNewNumber(
+  repo: ChargeRepo,
+  deps: Pick<QuantityDeps, "retrieveSubscription" | "setQuantity">,
+  locationId: string,
+): Promise<ChargeOutcome> {
+  const location = await repo.getGhlAccountByLocationId(locationId);
+  if (!location?.accountId || !location.activatedAt) return { ok: true, charged: false };
+  const counts = await repo.countNumbersByLocation([locationId]);
+  if ((counts[locationId] ?? 1) >= MAX_NUMBERS_PER_SUB_ACCOUNT) return { ok: true, charged: false };
+  const account = await repo.getAccountById(location.accountId);
+  if (!account || account.billingStatus === "comped" || !account.stripeSubscriptionId) return { ok: true, charged: false };
+  const subscription = await deps.retrieveSubscription(account.stripeSubscriptionId);
+  if (!subscription.ok || !subscription.data.itemId) return { ok: false, reason: "stripe_failed" };
+  const target = (await countBillableNumbers(repo, account.id)) + 1;
+  const set = await deps.setQuantity(subscription.data.itemId, target, undefined, { refuseIfUnpaid: true });
+  if (!set.ok) return { ok: false, reason: set.status === 402 ? "declined" : "stripe_failed" };
+  return { ok: true, charged: true };
 }

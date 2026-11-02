@@ -14,7 +14,7 @@ import { redactBridgeSessionResult, type PanelBridgeSessionResult } from "@/lib/
 import { repo } from "@/lib/data";
 import { NOT_FOUND, ownsLocation, runOwnedNumberAction } from "@/lib/site/owned-whatsapp";
 import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
-import { syncQuantityForLocation } from "@/lib/billing/sync-for-location";
+import { chargeBeforeAddingNumber, syncQuantityForLocation } from "@/lib/billing/sync-for-location";
 import { parseSlotParam } from "@/lib/location-numbers";
 import { connectWhatsappSession, getWhatsappBridgeSession, logoutWhatsappSession, type BridgeOkResult } from "@/lib/whatsapp-bridge";
 import {
@@ -43,8 +43,12 @@ export async function listNumbersAction(locationId: string): Promise<NumbersResu
 export async function addNumberAction(locationId: string, label: string): Promise<NumbersResult> {
   const session = await requireAccountSession();
   if (!(await ownsLocation(repo, session.accountId, locationId))) return NOT_YOURS;
+  // Per-number billing: pay for the number first; a declined card adds nothing.
+  const charge = await chargeBeforeAddingNumber(locationId);
+  if (!charge.ok) return { ok: false, message: charge.message };
   const result = toResult(await decideAddNumber(repo, locationId, label.trim() ? { label } : {}));
-  if (result.ok) await syncQuantityForLocation(locationId); // per-number billing
+  // Always re-sync: a no-op when the add worked, a credit back if it didn't.
+  await syncQuantityForLocation(locationId);
   return result;
 }
 
