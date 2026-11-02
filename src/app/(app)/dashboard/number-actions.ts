@@ -13,6 +13,8 @@ import { requireAccountSession } from "@/lib/account-session";
 import { redactBridgeSessionResult, type PanelBridgeSessionResult } from "@/lib/bridge-panel-guard";
 import { repo } from "@/lib/data";
 import { NOT_FOUND, ownsLocation, runOwnedNumberAction } from "@/lib/site/owned-whatsapp";
+import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
+import { parseSlotParam } from "@/lib/location-numbers";
 import { connectWhatsappSession, getWhatsappBridgeSession, logoutWhatsappSession, type BridgeOkResult } from "@/lib/whatsapp-bridge";
 import {
   decideAddNumber,
@@ -71,6 +73,15 @@ export async function pollNumberAction(locationId: string, slot: number): Promis
   const session = await requireAccountSession();
   const result = await runOwnedNumberAction(repo, session.accountId, locationId, slot, getWhatsappBridgeSession);
   return result === NOT_FOUND ? NOT_FOUND : redactBridgeSessionResult(result);
+}
+
+/** A 7-day link to send to whoever holds that number's phone; null if links aren't configured or it isn't this account's sub-account. */
+export async function numberLinkAction(locationId: string, slot: number): Promise<string | null> {
+  const session = await requireAccountSession();
+  const parsed = parseSlotParam(slot, { required: true });
+  if (!parsed.ok) return null;
+  if (!(await ownsLocation(repo, session.accountId, locationId))) return null;
+  return connectLinkForOwnedLocation(session.accountId, locationId, parsed.slot);
 }
 
 export async function logoutNumberAction(locationId: string, slot: number): Promise<BridgeOkResult> {

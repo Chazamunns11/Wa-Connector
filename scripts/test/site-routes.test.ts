@@ -17,6 +17,7 @@ const PAGE_FILES: Record<string, string> = {
   [SITE_ROUTES.home]: "src/app/(site)/page.tsx",
   [SITE_ROUTES.pricing]: "src/app/(site)/pricing/page.tsx",
   [SITE_ROUTES.docs]: "src/app/(site)/docs/page.tsx",
+  [SITE_ROUTES.start]: "src/app/(site)/docs/start/page.tsx",
   [SITE_ROUTES.setup]: "src/app/(site)/docs/setup/page.tsx",
   [SITE_ROUTES.connect]: "src/app/(site)/docs/connect/page.tsx",
   [SITE_ROUTES.faq]: "src/app/(site)/docs/faq/page.tsx",
