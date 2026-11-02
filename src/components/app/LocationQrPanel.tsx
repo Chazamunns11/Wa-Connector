@@ -10,7 +10,7 @@ import {
   pollLocationWhatsappAction,
 } from "@/app/(app)/dashboard/whatsapp-actions";
 
-function copyFor(name: string): WhatsappPanelCopy {
+export function copyFor(name: string): WhatsappPanelCopy {
   return {
     cardTitle: `Link WhatsApp for ${name}`,
     cardSubtitle: `Messages sent from ${name} in GoHighLevel will go out from the number you link here.`,
