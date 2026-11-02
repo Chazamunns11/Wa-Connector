@@ -44,7 +44,7 @@ function withEnv<T>(env: Record<string, string | undefined>, fn: () => Promise<T
 }
 
 test("stripeRequest: POST sends version, auth, form body, idempotency key", async () => {
-  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_1" }, async () => {
+  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRODUCT_ID: "prod_1" }, async () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const fetchImpl = (async (url: string, init: RequestInit) => {
       calls.push({ url, init });
@@ -65,7 +65,7 @@ test("stripeRequest: POST sends version, auth, form body, idempotency key", asyn
 });
 
 test("stripeRequest: GET appends query, no body, no idempotency header", async () => {
-  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_1" }, async () => {
+  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRODUCT_ID: "prod_1" }, async () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const fetchImpl = (async (url: string, init: RequestInit) => {
       calls.push({ url, init });
@@ -78,8 +78,22 @@ test("stripeRequest: GET appends query, no body, no idempotency header", async (
   });
 });
 
+test("stripeRequest: DELETE sends its parameters in the query, with no body", async () => {
+  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRODUCT_ID: "prod_1" }, async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    await stripeRequest("DELETE", "/subscriptions/sub_1", { prorate: true }, { fetchImpl });
+    assert.equal(calls[0].url, "https://api.stripe.com/v1/subscriptions/sub_1?prorate=true");
+    assert.equal(calls[0].init.method, "DELETE");
+    assert.equal(calls[0].init.body, undefined);
+  });
+});
+
 test("stripeRequest: error mapping and network failure", async () => {
-  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_1" }, async () => {
+  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRODUCT_ID: "prod_1" }, async () => {
     const declined = (async () =>
       new Response(JSON.stringify({ error: { code: "card_declined", message: "m" } }), { status: 402 })) as unknown as typeof fetch;
     assert.deepEqual(await stripeRequest("POST", "/x", {}, { fetchImpl: declined }), {
@@ -101,7 +115,7 @@ test("stripeRequest: error mapping and network failure", async () => {
 });
 
 test("stripeRequest: a 2xx with a non-JSON body is a failure, not ok", async () => {
-  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_1" }, async () => {
+  await withEnv({ STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRODUCT_ID: "prod_1" }, async () => {
     const html = (async () => new Response("<html>gateway</html>", { status: 200 })) as unknown as typeof fetch;
     assert.deepEqual(await stripeRequest("GET", "/x", {}, { fetchImpl: html }), {
       ok: false,
@@ -112,8 +126,8 @@ test("stripeRequest: a 2xx with a non-JSON body is a failure, not ok", async () 
   });
 });
 
-test("isStripeConfigured: needs both secret key and price id", () => {
-  withEnv({ STRIPE_SECRET_KEY: undefined, STRIPE_PRICE_ID: undefined }, () => assert.equal(isStripeConfigured(), false));
-  withEnv({ STRIPE_SECRET_KEY: "sk", STRIPE_PRICE_ID: undefined }, () => assert.equal(isStripeConfigured(), false));
-  withEnv({ STRIPE_SECRET_KEY: "sk", STRIPE_PRICE_ID: "p" }, () => assert.equal(isStripeConfigured(), true));
+test("isStripeConfigured: needs both secret key and product id", () => {
+  withEnv({ STRIPE_SECRET_KEY: undefined, STRIPE_PRODUCT_ID: undefined }, () => assert.equal(isStripeConfigured(), false));
+  withEnv({ STRIPE_SECRET_KEY: "sk", STRIPE_PRODUCT_ID: undefined }, () => assert.equal(isStripeConfigured(), false));
+  withEnv({ STRIPE_SECRET_KEY: "sk", STRIPE_PRODUCT_ID: "p" }, () => assert.equal(isStripeConfigured(), true));
 });

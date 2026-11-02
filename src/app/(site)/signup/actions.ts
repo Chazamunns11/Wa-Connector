@@ -4,11 +4,12 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createServerClient } from "@supabase/ssr";
 import { brandConfig } from "@/lib/brand-config";
-import { applyCheckoutSession, prepareSignup, signSignupToken, SIGNUP_COOKIE, SIGNUP_COOKIE_MAX_AGE_S } from "@/lib/billing/onboard";
+import { prepareSignup, signSignupToken, SIGNUP_COOKIE, SIGNUP_COOKIE_MAX_AGE_S } from "@/lib/billing/onboard";
 import { repo } from "@/lib/data";
 import { signupRedirectQuery, validateSignup } from "@/lib/site/signup";
 import { isStripeConfigured } from "@/lib/stripe/client";
-import { retrieveCheckoutSession } from "@/lib/stripe/billing";
+import { resumeSubscription, retrieveCheckoutSession, retrieveSubscription, setCustomerDefaultPaymentMethod } from "@/lib/stripe/billing";
+import { applyCardSetup } from "@/lib/billing/card";
 
 /** The claim token travels only in the form and the URL; it is never logged. */
 function readClaim(formData: FormData): string | undefined {
@@ -87,8 +88,8 @@ export async function startSignupAction(formData: FormData): Promise<void> {
 }
 
 /**
- * After Checkout: retrieve the session, apply it to the account (the webhook
- * may already have). The owner confirmed their email to start signup so they
+ * After the save-a-card Checkout: retrieve the session, apply it to the
+ * account (the webhook may already have; applying is idempotent). The owner confirmed their email to start signup so they
  * are normally signed in already and go straight to the dashboard; otherwise
  * (another browser, expired session) email the sign-in link. Runs as an action because
  * signInWithOtp sets the PKCE cookie, which a Server Component cannot do.
@@ -103,9 +104,14 @@ export async function sendCompleteLinkAction(formData: FormData): Promise<void> 
   let email: string | null = null;
   const session = await retrieveCheckoutSession(sessionId);
   if (session.ok) {
-    const applied = await applyCheckoutSession(repo, session.data);
-    if (applied.applied && applied.accountId) {
-      email = (await repo.getAccountById(applied.accountId))?.ownerEmail ?? null;
+    const applied = await applyCardSetup(
+      repo,
+      { retrieveSubscription, setCustomerDefault: setCustomerDefaultPaymentMethod, resume: resumeSubscription },
+      session.data,
+    );
+    const accountId = session.data.metadata.account_id;
+    if (applied.kind === "saved" && accountId) {
+      email = (await repo.getAccountById(accountId))?.ownerEmail ?? null;
     }
   }
   if (!email) redirect("/login?error=checkout");

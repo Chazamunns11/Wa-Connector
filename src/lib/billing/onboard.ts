@@ -1,18 +1,18 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import type { Account } from "@/lib/types";
-import type { createCheckoutSession, StripeCheckoutSession } from "@/lib/stripe/billing";
+import type { createCardSetupSession, createCustomer } from "@/lib/stripe/billing";
 import type { AccountKind } from "@/lib/account-data/types";
 import type { SignupInput } from "@/lib/site/signup";
 import { signKindedState, verifyKindedState } from "@/lib/signed-state";
-import { mapStripeSubscriptionStatus } from "./status";
 
 export type OnboardRepo = Pick<
   GhlRepository,
-  "getProfileByEmail" | "createAccount" | "createProfile" | "claimGhlAccount" | "getAccountById" | "updateAccountBilling"
+  "getProfileByEmail" | "createAccount" | "createProfile" | "claimGhlAccount" | "updateAccountBilling"
 >;
 
 export interface OnboardDeps {
-  checkout: typeof createCheckoutSession;
+  createCustomer: typeof createCustomer;
+  setup: typeof createCardSetupSession;
   appUrl: string;
   /** Verifies a signed claim token (first-wins, location-bound, 30-minute expiry). */
   verifyClaim: (token: string) => { locationId: string } | null;
@@ -99,21 +99,26 @@ export function decideCallback(
 }
 
 /**
- * Creates (or re-uses) the Checkout for an existing account. The success URL
- * keeps Stripe's literal `{CHECKOUT_SESSION_ID}` placeholder.
+ * Opens the "save a card" Checkout (setup mode) for an existing account,
+ * creating its Stripe customer first if it has none. Nothing is charged here:
+ * each number starts its own trial when it is added. The success URL keeps
+ * Stripe's literal `{CHECKOUT_SESSION_ID}` placeholder.
  */
 export async function createCheckoutForAccount(
-  _repo: unknown,
-  deps: Pick<OnboardDeps, "checkout" | "appUrl">,
+  repo: Pick<GhlRepository, "updateAccountBilling">,
+  deps: Pick<OnboardDeps, "createCustomer" | "setup" | "appUrl">,
   account: Account,
 ): Promise<SignupOutcome> {
-  // Anyone who has had a Stripe subscription before restarts without a trial.
-  const restart = account.billingStatus === "cancelled" || !!account.stripeSubscriptionId || !!account.stripeCustomerId;
-  const r = await deps.checkout({
-    trial: !restart,
-    ...(account.stripeCustomerId ? { customerId: account.stripeCustomerId } : {}),
+  let customerId = account.stripeCustomerId;
+  if (!customerId) {
+    const c = await deps.createCustomer({ accountId: account.id, email: account.ownerEmail });
+    if (!c.ok) return { kind: "failed" };
+    customerId = c.data.id;
+    await repo.updateAccountBilling(account.id, { stripeCustomerId: customerId });
+  }
+  const r = await deps.setup({
     accountId: account.id,
-    customerEmail: account.ownerEmail,
+    customerId,
     successUrl: `${deps.appUrl}/signup/complete?session_id={CHECKOUT_SESSION_ID}`,
     cancelUrl: `${deps.appUrl}/login?error=checkout`,
   });
@@ -122,9 +127,9 @@ export async function createCheckoutForAccount(
 
 /**
  * Step 2, from /auth/callback once the emailed link has proven the address:
- * account (pending), profile, optional claim, then Checkout. The account is
- * bound to the verified email, never to anything typed. If Checkout fails the
- * account stays 'pending': signing in later offers "Add a card".
+ * account (pending), profile, optional claim, then the save-a-card Checkout.
+ * The account is bound to the verified email, never to anything typed. If
+ * Checkout fails the account stays 'pending': signing in later offers it again.
  */
 export async function completeSignup(
   repo: OnboardRepo,
@@ -144,28 +149,4 @@ export async function completeSignup(
     }
   }
   return createCheckoutForAccount(repo, deps, account);
-}
-
-/**
- * Writes the facts of a completed Checkout onto its account. Idempotent: the
- * webhook and /signup/complete both call it, in either order.
- */
-export async function applyCheckoutSession(
-  repo: Pick<GhlRepository, "getAccountById" | "updateAccountBilling">,
-  session: StripeCheckoutSession,
-): Promise<{ applied: boolean; accountId: string | null }> {
-  const accountId = session.metadata.account_id ?? null;
-  const sub = session.subscription;
-  if (session.status !== "complete" || !accountId || !sub) return { applied: false, accountId };
-  const account = await repo.getAccountById(accountId);
-  if (!account) return { applied: false, accountId };
-  await repo.updateAccountBilling(accountId, {
-    stripeCustomerId: session.customer ?? sub.customer,
-    stripeSubscriptionId: sub.id,
-    billingStatus: mapStripeSubscriptionStatus(sub.status) ?? account.billingStatus,
-    trialEndsAt: sub.trialEnd ? new Date(sub.trialEnd * 1000).toISOString() : null,
-    // A restarted subscription on a cancelled account must not be cleaned up again.
-    ...(account.billingStatus === "cancelled" ? { cancelledAt: null, cleanedUpAt: null } : {}),
-  });
-  return { applied: true, accountId };
 }

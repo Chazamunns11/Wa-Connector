@@ -39,7 +39,8 @@ import {
   type EmbedNumbersRepo,
 } from "@/app/api/crm/embed/numbers/logic";
 import { MAX_PANEL_BODY_BYTES, readSmallJsonBody, toPanelBridgeResponse } from "@/lib/bridge-panel-guard";
-import type { Account, GhlAccount, LocationNumber, WhatsappSessionSummary } from "@/lib/types";
+import type { Account, GhlAccount, LocationNumber, NumberBilling, WhatsappSessionSummary } from "@/lib/types";
+import { account, fakeStripe, number } from "./billing-fakes";
 import type { BridgeOkResult } from "@/lib/whatsapp-bridge";
 
 const LOCATION_ID = "loc-numbers-1";
@@ -282,6 +283,8 @@ interface FakeNumbersRepo extends EmbedNumbersRepo {
   /** Accounts and billing (merge): the location's activation and its owner's billing status. */
   activatedAt: string | null;
   billingStatus: Account["billingStatus"];
+  /** Per-number billing (0020): each number's billing columns by tenant id. */
+  billing: Map<string, NumberBilling>;
   /** Setter seats (0018): ghlUserId -> tenantId. */
   userNumbers: Map<string, string>;
 }
@@ -292,12 +295,24 @@ function fakeNumbersRepo(initial: LocationNumber[]): FakeNumbersRepo {
     calls: [],
     activatedAt: "2026-10-01T00:00:00.000Z",
     billingStatus: "active",
+    billing: new Map(),
+    async getNumberBilling(tenantId: string) {
+      if (!repo.numbers.some((n) => n.tenantId === tenantId)) return null;
+      return repo.billing.get(tenantId) ?? number(tenantId, { locationId: LOCATION_ID });
+    },
+    async listNumberBillingForAccount() {
+      return repo.numbers.map((n) => repo.billing.get(n.tenantId) ?? number(n.tenantId, { locationId: LOCATION_ID }));
+    },
+    async updateNumberBilling(tenantId: string, patch: Partial<NumberBilling>) {
+      repo.calls.push(`billing:${patch.billingStatus ?? "price"}`);
+      repo.billing.set(tenantId, { ...(repo.billing.get(tenantId) ?? number(tenantId, { locationId: LOCATION_ID })), ...patch });
+    },
     async getGhlAccountByLocationId(locationId: string) {
       if (locationId !== LOCATION_ID) return null;
       return { locationId, tenantId: "t", status: "active", accountId: "acc-1", activatedAt: repo.activatedAt } as GhlAccount;
     },
     async getAccountById(id: string) {
-      return { id, billingStatus: repo.billingStatus } as Account;
+      return account({ id, billingStatus: repo.billingStatus });
     },
     async listLocationNumbers(locationId: string) {
       repo.calls.push(`list:${locationId}`);
@@ -389,7 +404,7 @@ test("listEmbedNumbers: each number has an opaque key that changes when the numb
 
 test("decideAddNumber: adds at the next slot with a trimmed label, returns the redacted list", async () => {
   const repo = fakeNumbersRepo(ONLY_SLOT_1);
-  const result = await decideAddNumber(repo, LOCATION_ID, { label: "  Sales line " });
+  const result = await decideAddNumber(repo, fakeStripe().deps, LOCATION_ID, { label: "  Sales line " });
   assert.equal(result.status, 200);
   assert.ok(result.body.ok);
   if (result.body.ok) {
@@ -405,13 +420,13 @@ test("decideAddNumber: limit -> 409 with the fixed 'already has 3' message", asy
     ...SLOTS_1_2,
     { tenantId: TENANT_3, slot: 3, isDefault: false, label: null },
   ]);
-  const result = await decideAddNumber(repo, LOCATION_ID, {});
+  const result = await decideAddNumber(repo, fakeStripe().deps, LOCATION_ID, {});
   assert.deepEqual(result, { status: 409, body: { ok: false, code: "limit", message: LIMIT_MESSAGE } });
 });
 
 test("decideAddNumber: a label over 40 characters -> 400 invalid_label, nothing added", async () => {
   const repo = fakeNumbersRepo(ONLY_SLOT_1);
-  const result = await decideAddNumber(repo, LOCATION_ID, { label: "x".repeat(41) });
+  const result = await decideAddNumber(repo, fakeStripe().deps, LOCATION_ID, { label: "x".repeat(41) });
   assert.deepEqual(result, { status: 400, body: { ok: false, code: "invalid_label", message: "Labels can be up to 40 characters." } });
   assert.ok(!repo.calls.some((c) => c.startsWith("add:")));
 });
@@ -419,7 +434,7 @@ test("decideAddNumber: a label over 40 characters -> 400 invalid_label, nothing 
 test("decideRemoveNumber: removing the last number is refused, and the bridge is never logged out", async () => {
   const repo = fakeNumbersRepo(ONLY_SLOT_1);
   const logouts: string[] = [];
-  const result = await decideRemoveNumber(repo, { logout: async (t) => (logouts.push(t), { ok: true }) }, LOCATION_ID, { slot: 1 });
+  const result = await decideRemoveNumber(repo, { logout: async (t) => (logouts.push(t), { ok: true }), billing: fakeStripe().deps }, LOCATION_ID, { slot: 1 });
   assert.equal(result.status, 409);
   assert.equal(!result.body.ok && result.body.code, "last_number");
   assert.deepEqual(logouts, []);
@@ -435,7 +450,7 @@ test("decideRemoveNumber: logs that number's bridge session out FIRST, then remo
     repo.calls.push(`logout:${tenantId}`);
     return { ok: true };
   };
-  const result = await decideRemoveNumber(repo, { logout }, LOCATION_ID, { slot: 2 });
+  const result = await decideRemoveNumber(repo, { logout, billing: fakeStripe().deps }, LOCATION_ID, { slot: 2 });
   assert.equal(result.status, 200);
   const logoutAt = repo.calls.indexOf(`logout:${TENANT_2}`);
   const removeAt = repo.calls.indexOf("remove:2");
@@ -450,7 +465,7 @@ test("decideRemoveNumber: an unreachable bridge does not block removal; any othe
   const unreachableRepo = fakeNumbersRepo(SLOTS_1_2);
   const unreachable = await decideRemoveNumber(
     unreachableRepo,
-    { logout: async () => ({ ok: false, code: "unreachable", message: "WhatsApp bridge unreachable or timed out." }) },
+    { logout: async () => ({ ok: false, code: "unreachable", message: "WhatsApp bridge unreachable or timed out." }), billing: fakeStripe().deps },
     LOCATION_ID,
     { slot: 2 }
   );
@@ -460,7 +475,7 @@ test("decideRemoveNumber: an unreachable bridge does not block removal; any othe
   const brokenRepo = fakeNumbersRepo(SLOTS_1_2);
   const broken = await decideRemoveNumber(
     brokenRepo,
-    { logout: async () => ({ ok: false, code: "internal", message: `bridge failed for ${TENANT_2}` }) },
+    { logout: async () => ({ ok: false, code: "internal", message: `bridge failed for ${TENANT_2}` }), billing: fakeStripe().deps },
     LOCATION_ID,
     { slot: 2 }
   );
@@ -475,11 +490,11 @@ test("decideRemoveNumber: an unreachable bridge does not block removal; any othe
 test("decideRemoveNumber: slot is REQUIRED (never defaults to 1), and an unknown slot is 404", async () => {
   const repo = fakeNumbersRepo(SLOTS_1_2);
   const logout = async () => ({ ok: true as const });
-  assert.deepEqual(await decideRemoveNumber(repo, { logout }, LOCATION_ID, {}), {
+  assert.deepEqual(await decideRemoveNumber(repo, { logout, billing: fakeStripe().deps }, LOCATION_ID, {}), {
     status: 400,
     body: { ok: false, code: "invalid_slot", message: INVALID_SLOT_MESSAGE },
   });
-  assert.deepEqual(await decideRemoveNumber(repo, { logout }, LOCATION_ID, { slot: 3 }), {
+  assert.deepEqual(await decideRemoveNumber(repo, { logout, billing: fakeStripe().deps }, LOCATION_ID, { slot: 3 }), {
     status: 404,
     body: { ok: false, code: "unknown_number", message: UNKNOWN_NUMBER_MESSAGE },
   });
@@ -525,7 +540,7 @@ test("decideUpdateNumber: unknown slot is 404, a bad slot 400, and a body with n
 test("decideAddNumber: a location that is not activated -> 409 not_activated, nothing added", async () => {
   const repo = fakeNumbersRepo(ONLY_SLOT_1);
   repo.activatedAt = null;
-  const result = await decideAddNumber(repo, LOCATION_ID, { label: "Sales" });
+  const result = await decideAddNumber(repo, fakeStripe().deps, LOCATION_ID, { label: "Sales" });
   assert.equal(result.status, 409);
   assert.equal((result.body as { code: string }).code, "not_activated");
   assert.equal(repo.numbers.length, 1);
@@ -535,10 +550,62 @@ test("decideAddNumber: a location that is not activated -> 409 not_activated, no
 test("decideAddNumber: a cancelled owner account -> 409 billing_paused, nothing added", async () => {
   const repo = fakeNumbersRepo(ONLY_SLOT_1);
   repo.billingStatus = "cancelled";
-  const result = await decideAddNumber(repo, LOCATION_ID, {});
+  const result = await decideAddNumber(repo, fakeStripe().deps, LOCATION_ID, {});
   assert.equal(result.status, 409);
   assert.equal((result.body as { code: string }).code, "billing_paused");
   assert.equal(repo.numbers.length, 1);
+});
+
+// Per-number billing (0020): an added number is its own subscription, with
+// its own trial; a removed one has its subscription cancelled before the row goes.
+test("decideAddNumber: the new number gets its own trialing subscription; a Stripe failure takes it off again", async () => {
+  const repo = fakeNumbersRepo(ONLY_SLOT_1);
+  const stripe = fakeStripe();
+  const ok = await decideAddNumber(repo, stripe.deps, LOCATION_ID, {});
+  assert.equal(ok.status, 200);
+  assert.deepEqual(stripe.log, [`create:${NEW_TENANT}:999:trial`]);
+  assert.equal(repo.billing.get(NEW_TENANT)!.billingStatus, "trialing");
+  assertNoTenantId(ok, "add billed");
+
+  const failing = fakeNumbersRepo(ONLY_SLOT_1);
+  const down = await decideAddNumber(failing, fakeStripe({ failOn: ["create"] }).deps, LOCATION_ID, {});
+  assert.equal(down.status, 502);
+  assert.equal((down.body as { code: string }).code, "billing_failed");
+  assert.equal(failing.numbers.length, 1, "the unbilled number is removed again");
+  assertNoTenantId(down, "add billing failure");
+});
+
+test("decideAddNumber: no card on file -> 409 billing_paused before anything is added; comped adds with no Stripe call", async () => {
+  const pending = fakeNumbersRepo(ONLY_SLOT_1);
+  pending.billingStatus = "pending";
+  const stripe = fakeStripe();
+  const refused = await decideAddNumber(pending, stripe.deps, LOCATION_ID, {});
+  assert.equal((refused.body as { code: string }).code, "billing_paused");
+  assert.equal(pending.calls.some((c) => c.startsWith("add:")), false);
+
+  const comped = fakeNumbersRepo(ONLY_SLOT_1);
+  comped.billingStatus = "comped";
+  assert.equal((await decideAddNumber(comped, stripe.deps, LOCATION_ID, {})).status, 200);
+  assert.deepEqual(stripe.log, []);
+});
+
+test("decideRemoveNumber: logout, then the number's subscription is cancelled, then the row goes; a cancel failure keeps the number", async () => {
+  const repo = fakeNumbersRepo(SLOTS_1_2);
+  repo.billing.set(TENANT_2, number(TENANT_2, { locationId: LOCATION_ID, stripeSubscriptionId: "sub_2", billingStatus: "active" }));
+  const stripe = fakeStripe();
+  const logout = async (t: string): Promise<BridgeOkResult> => (repo.calls.push(`logout:${t}`), { ok: true });
+  const ok = await decideRemoveNumber(repo, { logout, billing: stripe.deps }, LOCATION_ID, { slot: 2 });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(stripe.log.slice(0, 1), ["cancel:sub_2"]);
+  const at = (c: string) => repo.calls.indexOf(c);
+  assert.ok(at(`logout:${TENANT_2}`) < at("billing:cancelled") && at("billing:cancelled") < at("remove:2"), repo.calls.join(", "));
+
+  const stuck = fakeNumbersRepo(SLOTS_1_2);
+  stuck.billing.set(TENANT_2, number(TENANT_2, { locationId: LOCATION_ID, stripeSubscriptionId: "sub_2", billingStatus: "active" }));
+  const failed = await decideRemoveNumber(stuck, { logout, billing: fakeStripe({ failOn: ["cancel"] }).deps }, LOCATION_ID, { slot: 2 });
+  assert.equal(failed.status, 502);
+  assert.equal((failed.body as { code: string }).code, "billing_failed");
+  assert.ok(!stuck.calls.includes("remove:2"));
 });
 
 // ---------------------------------------------------------------------------

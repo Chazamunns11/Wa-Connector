@@ -20,7 +20,7 @@ export function embedPausedMessage(trialEnded: boolean): string {
   return trialEnded ? EMBED_TRIAL_ENDED_MESSAGE : EMBED_PAUSED_MESSAGE;
 }
 
-/** Billing statuses that may send; mirrors `sendingGate` in `src/lib/billing/gate.ts`. */
+/** Account statuses that let the embed open. Per-number billing is checked when sending (`sendingGate`, src/lib/billing/gate.ts) and when adding a number. */
 const LIVE: ReadonlySet<BillingStatus> = new Set(["trialing", "active", "past_due", "comped"]);
 
 /**

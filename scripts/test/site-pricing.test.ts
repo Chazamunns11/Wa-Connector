@@ -8,7 +8,7 @@ import {
   formatMoney,
   monthlyCost,
   monthlyCostPence,
-  perSubAccountPence,
+  perNumberPence,
   priceLine,
   pricingConfig,
   tierSentence,
@@ -17,13 +17,13 @@ import {
 
 const brand = { currency: "GBP" };
 
-test("per-sub-account price: 999p for 1-10, 799p for 11-24, 599p for 25+ (W40 revised 17 Oct)", () => {
-  assert.equal(perSubAccountPence(1), 999);
-  assert.equal(perSubAccountPence(10), 999);
-  assert.equal(perSubAccountPence(11), 799);
-  assert.equal(perSubAccountPence(24), 799);
-  assert.equal(perSubAccountPence(25), 599);
-  assert.equal(perSubAccountPence(100), 599);
+test("per-number price: 999p for 1-10, 799p for 11-24, 599p for 25+ numbers (W40 revised 2 Nov)", () => {
+  assert.equal(perNumberPence(1), 999);
+  assert.equal(perNumberPence(10), 999);
+  assert.equal(perNumberPence(11), 799);
+  assert.equal(perNumberPence(24), 799);
+  assert.equal(perNumberPence(25), 599);
+  assert.equal(perNumberPence(100), 599);
 });
 
 test("monthlyCostPence: exact examples from the owner", () => {
@@ -61,24 +61,24 @@ test("formatMoney always shows pence: '£9.99', '£79.90', '£0.00'; EUR contain
   assert.ok(formatMoney(145, "EUR").includes("€"));
 });
 
-test("priceLine singular/plural: '1 sub-account = £9.99/month', '25 sub-accounts = £149.75/month'", () => {
-  assert.equal(priceLine(1, brand), "1 sub-account = £9.99/month");
-  assert.equal(priceLine(5, brand), "5 sub-accounts = £49.95/month");
-  assert.equal(priceLine(25, brand), "25 sub-accounts = £149.75/month");
+test("priceLine singular/plural: '1 number = £9.99/month', '25 numbers = £149.75/month'", () => {
+  assert.equal(priceLine(1, brand), "1 number = £9.99/month");
+  assert.equal(priceLine(5, brand), "5 numbers = £49.95/month");
+  assert.equal(priceLine(25, brand), "25 numbers = £149.75/month");
 });
 
-test("tierSentence states all three prices plainly and that the tier applies to every sub-account", () => {
+test("tierSentence states all three prices plainly, the per-number trial, and that the tier applies to every number", () => {
   assert.equal(
     tierSentence("GBP"),
-    "£9.99 a month per sub-account, with up to 3 WhatsApp numbers included. 11 to 24 sub-accounts: £7.99 each. 25 or more sub-accounts: £5.99 each. The tier you reach applies to every sub-account.",
+    "£9.99 a month per WhatsApp number, each with its own 7-day free trial. 11 to 24 numbers: £7.99 each. 25 or more numbers: £5.99 each. The tier you reach applies to every number.",
   );
 });
 
 test("tierRows lists the three tiers for the transparent table", () => {
   assert.deepEqual(tierRows("GBP"), [
-    { range: "1 to 10 sub-accounts", each: "£9.99" },
-    { range: "11 to 24 sub-accounts", each: "£7.99" },
-    { range: "25 or more sub-accounts", each: "£5.99" },
+    { range: "1 to 10 numbers", each: "£9.99" },
+    { range: "11 to 24 numbers", each: "£7.99" },
+    { range: "25 or more numbers", each: "£5.99" },
   ]);
 });
 
@@ -103,20 +103,20 @@ test("BRAND_PRICE_PER_NUMBER is retired everywhere outside history docs", () => 
   }
 });
 
-test("pricingCopy trial terms mention 7 days, card and 3 sub-accounts", () => {
+test("pricingCopy trial terms mention 7 days, card and a trial per number", () => {
   const c = pricingCopy();
   const terms = c.trialTerms.join(" ");
   assert.match(terms, /7-day/);
   assert.match(terms, /card/i);
-  assert.match(terms, /3 sub-accounts/);
+  assert.match(terms, /each number/i);
   assert.match(c.cancel, /any time/i);
-  assert.match(c.cancel, /end of/i);
-  assert.match(c.cancel, /billing portal/i);
+  assert.match(c.cancel, /straight away/i);
+  assert.match(c.cancel, /credited/i);
   const failed = c.failedPayment.join(" ");
   assert.match(failed, /retr/i);
-  assert.match(failed, /continues/i);
+  assert.match(failed, /keeps sending/i);
   assert.match(failed, /banner/i);
-  assert.match(failed, /pauses/i);
+  assert.match(failed, /stops sending/i);
 });
 
 test("calculator fallback table lists 1, 3, 5, 10 and 25 numbers", () => {
@@ -145,16 +145,16 @@ import { calculatorDisplay, CALC_MIN, CALC_MAX } from "@/lib/site/calculator";
 test("calculatorDisplay: valid, out of range, fractional and empty input", () => {
   assert.equal(CALC_MIN, 1);
   assert.equal(CALC_MAX, 500);
-  assert.deepEqual(calculatorDisplay("5", brand), { line: "5 sub-accounts = £49.95/month", note: null, empty: false });
+  assert.deepEqual(calculatorDisplay("5", brand), { line: "5 numbers = £49.95/month", note: null, empty: false });
   const hi = calculatorDisplay("600", brand);
-  assert.equal(hi.line, "500 sub-accounts = £2,995.00/month");
+  assert.equal(hi.line, "500 numbers = £2,995.00/month");
   assert.match(hi.note ?? "", /whole number from 1 to 500/);
   const lo = calculatorDisplay("0", brand);
-  assert.equal(lo.line, "1 sub-account = £9.99/month");
+  assert.equal(lo.line, "1 number = £9.99/month");
   assert.ok(lo.note);
-  assert.equal(calculatorDisplay("2.7", brand).line, "2 sub-accounts = £19.98/month");
+  assert.equal(calculatorDisplay("2.7", brand).line, "2 numbers = £19.98/month");
   assert.ok(calculatorDisplay("2.7", brand).note);
-  assert.equal(calculatorDisplay("-3", brand).line, "1 sub-account = £9.99/month");
+  assert.equal(calculatorDisplay("-3", brand).line, "1 number = £9.99/month");
   const empty = calculatorDisplay("", brand);
   assert.equal(empty.empty, true);
   assert.equal(empty.line, "");
@@ -188,13 +188,13 @@ test("pricing page has no Card kit; fallback has no table; calculator is labelle
   assert.ok(calc.includes("htmlFor"));
 });
 
-test("pricing copy follows the deck: one trial paragraph with 'per activated sub-account'", () => {
+test("pricing copy follows the deck: one trial paragraph, card first, a trial and a monthly payment per number", () => {
   const c = pricingCopy();
   assert.equal(c.trialTerms.length, 1);
-  assert.match(c.trialTerms[0], /per activated sub-account/);
-  assert.match(c.trialTerms[0], /7-day free trial, no card needed/);
-  assert.match(c.trialTerms[0], /sending pauses until you add one/);
-  assert.doesNotMatch(c.trialTerms[0], /take a card/);
+  assert.match(c.trialTerms[0], /Save a card once/);
+  assert.match(c.trialTerms[0], /each number you add gets its own 7-day free trial/);
+  assert.match(c.trialTerms[0], /on the day its trial ended/);
+  assert.doesNotMatch(c.trialTerms[0], /sub-account/);
   assert.equal(c.failedPayment.length, 2);
 });
 

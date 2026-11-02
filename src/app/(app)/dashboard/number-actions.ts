@@ -12,6 +12,7 @@
 import { requireAccountSession } from "@/lib/account-session";
 import { redactBridgeSessionResult, type PanelBridgeSessionResult } from "@/lib/bridge-panel-guard";
 import { repo } from "@/lib/data";
+import { numberBillingDeps } from "@/lib/billing/live-deps";
 import { NOT_FOUND, ownsLocation, runOwnedNumberAction } from "@/lib/site/owned-whatsapp";
 import { connectWhatsappSession, getWhatsappBridgeSession, logoutWhatsappSession, type BridgeOkResult } from "@/lib/whatsapp-bridge";
 import {
@@ -40,7 +41,7 @@ export async function listNumbersAction(locationId: string): Promise<NumbersResu
 export async function addNumberAction(locationId: string, label: string): Promise<NumbersResult> {
   const session = await requireAccountSession();
   if (!(await ownsLocation(repo, session.accountId, locationId))) return NOT_YOURS;
-  return toResult(await decideAddNumber(repo, locationId, label.trim() ? { label } : {}));
+  return toResult(await decideAddNumber(repo, numberBillingDeps(), locationId, label.trim() ? { label } : {}));
 }
 
 export async function updateNumberAction(
@@ -58,7 +59,7 @@ export async function updateNumberAction(
 export async function removeNumberAction(locationId: string, slot: number): Promise<NumbersResult> {
   const session = await requireAccountSession();
   if (!(await ownsLocation(repo, session.accountId, locationId))) return NOT_YOURS;
-  return toResult(await decideRemoveNumber(repo, { logout: logoutWhatsappSession }, locationId, { slot }));
+  return toResult(await decideRemoveNumber(repo, { logout: logoutWhatsappSession, billing: numberBillingDeps() }, locationId, { slot }));
 }
 
 export async function connectNumberAction(locationId: string, slot: number): Promise<PanelBridgeSessionResult> {

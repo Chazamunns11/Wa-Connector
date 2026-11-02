@@ -29,6 +29,7 @@
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
+import { numberBillingDeps } from "@/lib/billing/live-deps";
 import { readSmallJsonBody } from "@/lib/bridge-panel-guard";
 import { authorizeGhlEmbedLocationRequest, guardFailureResponseBody } from "@/app/api/crm/embed/guard";
 import { decideAddNumber, decideRemoveNumber, decideUpdateNumber, type NumbersRouteResult } from "./logic";
@@ -54,12 +55,12 @@ async function handle(request: Request, method: string, decide: Decide): Promise
 }
 
 export async function POST(request: Request) {
-  return handle(request, "POST", (locationId, body) => decideAddNumber(repo, locationId, body));
+  return handle(request, "POST", (locationId, body) => decideAddNumber(repo, numberBillingDeps(), locationId, body));
 }
 
 export async function DELETE(request: Request) {
   return handle(request, "DELETE", (locationId, body) =>
-    decideRemoveNumber(repo, { logout: logoutWhatsappSession }, locationId, body)
+    decideRemoveNumber(repo, { logout: logoutWhatsappSession, billing: numberBillingDeps() }, locationId, body)
   );
 }
 

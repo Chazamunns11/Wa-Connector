@@ -132,6 +132,8 @@ export type GhlProviderRepo = Pick<
   GhlRepository,
   | "getGhlAccountByLocationId"
   | "getAccountById"
+  // Per-number billing (0020) — the sending gate checks the sending number's own subscription.
+  | "getNumberBilling"
   | "getWhatsappSessionSummary"
   | "isOptedOut"
   | "recordGhlOutboundMessage"
@@ -1315,6 +1317,18 @@ async function correctEchoedOriginal(repo: GhlProviderRepo, deps: GhlProviderDep
 }
 
 /**
+ * The accounts sending gate for one outbound from `tenantId` (the sending
+ * number): the owner account's status and, unless it is comped, that
+ * number's own subscription status (per-number billing, 0020). The number is
+ * only read for an activated location owned by a billed account.
+ */
+async function accountsGate(repo: Pick<GhlProviderRepo, "getAccountById" | "getNumberBilling">, account: GhlAccount, tenantId: string): Promise<string | null> {
+  const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
+  const number = owner && account.activatedAt && owner.billingStatus !== "comped" ? await repo.getNumberBilling(tenantId) : null;
+  return sendingGate(account, owner?.billingStatus ?? null, brandConfig().name, number?.billingStatus ?? null);
+}
+
+/**
  * The two refusals that precede everything else for a phone row: the accounts
  * gate, then the STOP check. Shared by `handleProviderOutboundMessage` (which
  * runs it before the media split) and `sendAppOriginatedText`. Returns the
@@ -1327,12 +1341,12 @@ async function refuseIfGatedOrOptedOut(
   row: GhlOutboundMessage,
   toPhone: string | null
 ): Promise<HandleProviderOutboundOutcome | null> {
-  // Accounts gate: only an activated number on a paid or trialing account
+  // Accounts gate: only an activated sub-account whose sending number has a
+  // live (trialing, active or past-due) subscription, or a comped account,
   // sends. Refused honestly — recorded, then reported back to GoHighLevel as
   // failed with the fixed customer string — and BEFORE the media split, so
   // the media path is gated too.
-  const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
-  const gateReason = sendingGate(account, owner?.billingStatus ?? null, brandConfig().name);
+  const gateReason = await accountsGate(repo, account, row.tenantId);
   if (gateReason) {
     await repo.updateGhlOutboundSendState(row.id, { sendState: "refused", refusalReason: gateReason });
     await reportGhlOutcome(repo, deps, account, row, "failed", gateReason);
@@ -2363,9 +2377,8 @@ export async function outboundRefusalReason(
   account: GhlAccount | null,
   row: Pick<GhlOutboundMessage, "tenantId" | "toPhone">
 ): Promise<string | null> {
-  if (!account) return sendingGate({ accountId: null, activatedAt: null }, null, brandConfig().name);
-  const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
-  const gate = sendingGate(account, owner?.billingStatus ?? null, brandConfig().name);
+  if (!account) return sendingGate({ accountId: null, activatedAt: null }, null, brandConfig().name, null);
+  const gate = await accountsGate(repo, account, row.tenantId);
   if (gate) return gate;
   if (row.toPhone) return optedOutReason(repo, account.locationId, row.tenantId, row.toPhone);
   return null;

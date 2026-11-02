@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  activeCount,
   capLevel,
   fleetSummary,
   headline,
@@ -10,17 +9,14 @@ import {
   planStatus,
   primaryActionFor,
   rowActionsFor,
-  trialDaysLeft,
-  TRIAL_ENDED_NO_CARD,
+  NO_CARD_BANNER,
 } from "@/lib/account-data/derive";
 import type { AccountSummary, BillingStatus, LocationRow } from "@/lib/account-data/types";
 
-const NOW = new Date("2026-10-16T12:00:00Z");
-const day = 86_400_000;
-
-function acct(billingStatus: BillingStatus, trialEndsAt: string | null = null): AccountSummary {
-  return { id: "a", name: "Sample Co", kind: "business", email: "o@example.com", billingStatus, trialEndsAt, stripeCustomerId: null, stripeSubscriptionId: null };
+function acct(billingStatus: BillingStatus): AccountSummary {
+  return { id: "a", name: "Sample Co", kind: "business", email: "o@example.com", billingStatus, stripeCustomerId: null };
 }
+const billing = (stoppedNumbers = 0, pastDueNumbers = 0) => ({ stoppedNumbers, pastDueNumbers });
 function row(over: Partial<LocationRow> = {}): LocationRow {
   return {
     id: "l", name: "Sample Studio", activated: true, state: { kind: "connected", number: "+447700900000" },
@@ -29,68 +25,34 @@ function row(over: Partial<LocationRow> = {}): LocationRow {
   };
 }
 
-test("trialDaysLeft: 4 days ahead → 4; past → 0; null → 0", () => {
-  assert.equal(trialDaysLeft(new Date(NOW.getTime() + 4 * day).toISOString(), NOW), 4);
-  assert.equal(trialDaysLeft(new Date(NOW.getTime() + 3.2 * day).toISOString(), NOW), 4);
-  assert.equal(trialDaysLeft(new Date(NOW.getTime() - day).toISOString(), NOW), 0);
-  assert.equal(trialDaysLeft(null, NOW), 0);
-  assert.equal(trialDaysLeft("not a date", NOW), 0);
+test("planStatus: no card yet (pending, or an old-model status) asks for one; a card on file is Active", () => {
+  for (const s of ["pending", "trialing", "past_due", "paused"] as const) {
+    assert.deepEqual(planStatus(acct(s)), { label: "No card yet", tone: "warn", banner: NO_CARD_BANNER }, s);
+  }
+  assert.equal(NO_CARD_BANNER, "Save a card to start. Nothing is charged then: each WhatsApp number you add gets its own 7-day free trial.");
+  assert.deepEqual(planStatus(acct("active")), { label: "Active", tone: "win", banner: null });
+  assert.deepEqual(planStatus(acct("active"), billing()), { label: "Active", tone: "win", banner: null });
+  assert.deepEqual(planStatus(acct("comped"), billing(3, 3)), { label: "Active", tone: "win", banner: null });
+  assert.deepEqual(planStatus(acct("cancelled")), { label: "Cancelled", tone: "muted", banner: null });
 });
 
-test("planStatus per billing status", () => {
-  const end = new Date(NOW.getTime() + 4 * day).toISOString();
-  assert.deepEqual(planStatus(acct("trialing", end), NOW), { label: "Trial: 4 days left", tone: "warn", banner: null });
-  assert.equal(planStatus(acct("trialing", new Date(NOW.getTime() + day).toISOString()), NOW).label, "Trial: 1 day left");
-  assert.equal(planStatus(acct("trialing", new Date(NOW.getTime() - day).toISOString()), NOW).label, "Trial ended");
-  assert.deepEqual(planStatus(acct("active"), NOW), { label: "Active", tone: "win", banner: null });
-  assert.deepEqual(planStatus(acct("comped"), NOW), { label: "Active", tone: "win", banner: null });
-  assert.deepEqual(planStatus(acct("past_due"), NOW), {
-    label: "Payment failed", tone: "loss",
-    banner: "Payment failed — update your card. Sending continues while we retry.",
+test("planStatus names how many numbers a payment problem affects; stopped beats past due", () => {
+  assert.deepEqual(planStatus(acct("active"), billing(0, 1)), {
+    label: "Payment failed",
+    tone: "loss",
+    banner: "Payment failed for 1 number — update your card. Sending continues while we retry.",
   });
-  const paused = planStatus(acct("paused"), NOW);
-  assert.equal(paused.banner, "Sending is paused — update billing to resume");
-  assert.equal(paused.tone, "loss");
-  assert.deepEqual(planStatus(acct("cancelled"), NOW), { label: "Cancelled", tone: "muted", banner: null });
-});
-
-test("planStatus pending: an abandoned Checkout shows the trial has not started", () => {
-  assert.deepEqual(planStatus(acct("pending"), NOW), {
-    label: "Trial not started",
-    tone: "warn",
-    banner: "Finish signing up to start your 7-day free trial. No card needed.",
+  assert.deepEqual(planStatus(acct("active"), billing(2, 1)), {
+    label: "Billing stopped",
+    tone: "loss",
+    banner: "2 numbers stopped sending because a payment could not be taken. Add a card to restart.",
   });
 });
 
-test("planStatus paused after a trial with no card says the trial ended; unpaid keeps the billing banner", () => {
-  const ended = new Date(NOW.getTime() - day).toISOString();
-  assert.deepEqual(planStatus(acct("paused", ended), NOW), { label: "Trial ended", tone: "loss", banner: TRIAL_ENDED_NO_CARD });
-  assert.equal(TRIAL_ENDED_NO_CARD, "Your trial has ended. Add a card to keep sending.");
-  assert.equal(planStatus(acct("paused", null), NOW).banner, "Sending is paused — update billing to resume");
-});
-
-test("planStatus reminds a trial with no card in its last 2 days, and only when the card is known to be missing", () => {
-  const in2 = new Date(NOW.getTime() + 2 * day).toISOString();
-  const in1 = new Date(NOW.getTime() + day).toISOString();
-  const in4 = new Date(NOW.getTime() + 4 * day).toISOString();
-  assert.equal(planStatus(acct("trialing", in2), NOW, { hasCard: false }).banner, "Your trial ends in 2 days. Add a card to keep sending.");
-  assert.equal(planStatus(acct("trialing", in1), NOW, { hasCard: false }).banner, "Your trial ends in 1 day. Add a card to keep sending.");
-  assert.equal(planStatus(acct("trialing", in4), NOW, { hasCard: false }).banner, null);
-  assert.equal(planStatus(acct("trialing", in2), NOW, { hasCard: true }).banner, null);
-  assert.equal(planStatus(acct("trialing", in2), NOW).banner, null);
-});
-
-test("needsCard: a trial ended with no card, or a card-less trial in its last days", () => {
-  const ended = new Date(NOW.getTime() - day).toISOString();
-  const in2 = new Date(NOW.getTime() + 2 * day).toISOString();
-  const in4 = new Date(NOW.getTime() + 4 * day).toISOString();
-  assert.equal(needsCard(acct("paused", ended), NOW, undefined), true);
-  assert.equal(needsCard(acct("paused", null), NOW, undefined), false);
-  assert.equal(needsCard(acct("trialing", in2), NOW, false), true);
-  assert.equal(needsCard(acct("trialing", in2), NOW, true), false);
-  assert.equal(needsCard(acct("trialing", in2), NOW, undefined), false);
-  assert.equal(needsCard(acct("trialing", in4), NOW, false), false);
-  for (const s of ["pending", "active", "past_due", "cancelled", "comped"] as const) assert.equal(needsCard(acct(s, ended), NOW, false), false, s);
+test("needsCard: only a card-on-file account with numbers stopped on billing", () => {
+  assert.equal(needsCard(acct("active"), billing(1)), true);
+  assert.equal(needsCard(acct("active"), billing(0, 4)), false);
+  for (const s of ["pending", "trialing", "past_due", "paused", "cancelled", "comped"] as const) assert.equal(needsCard(acct(s), billing(1)), false, s);
 });
 
 test("needsAttention reasons in priority order: disconnected, waiting_qr, providerNudge, cap, null", () => {
@@ -105,19 +67,13 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
 });
 
-test("headline reads '2 sub-accounts active · £19.98/month' and switches tier at 11 and 25", () => {
-  const rows = [row(), row(), row({ activated: false, state: { kind: "not_active" } })];
-  assert.equal(headline(rows), "2 sub-accounts active · £19.98/month");
-  assert.equal(headline([row()]), "1 sub-account active · £9.99/month");
-  assert.equal(headline([]), "0 sub-accounts active · £0.00/month");
-  assert.equal(headline(Array.from({ length: 10 }, () => row())), "10 sub-accounts active · £99.90/month");
-  assert.equal(headline(Array.from({ length: 11 }, () => row())), "11 sub-accounts active · £87.89/month");
-  assert.equal(headline(Array.from({ length: 25 }, () => row())), "25 sub-accounts active · £149.75/month");
-});
-
-test("activeCount counts activated rows only", () => {
-  assert.equal(activeCount([row(), row({ activated: false }), row()]), 2);
-  assert.equal(activeCount([]), 0);
+test("headline reads '2 numbers billed · £19.98/month' and switches tier at 11 and 25", () => {
+  assert.equal(headline(2), "2 numbers billed · £19.98/month");
+  assert.equal(headline(1), "1 number billed · £9.99/month");
+  assert.equal(headline(0), "0 numbers billed · £0.00/month");
+  assert.equal(headline(10), "10 numbers billed · £99.90/month");
+  assert.equal(headline(11), "11 numbers billed · £87.89/month");
+  assert.equal(headline(25), "25 numbers billed · £149.75/month");
 });
 
 test("rowActionsFor for not_active, waiting_qr, connected and disconnected rows", () => {

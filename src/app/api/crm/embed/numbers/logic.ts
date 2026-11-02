@@ -32,6 +32,8 @@
  * it. `removeLocationNumber` then deletes the number and its sticky rows and
  * moves the default if needed (Task 2). Removing the location's last number
  * is refused before anything is touched (deactivate the location instead).
+ * Between the logout and the delete, the number's own subscription is
+ * cancelled (per-number billing, 0020).
  */
 import { createHash } from "node:crypto";
 import type { GhlRepository } from "@/lib/data";
@@ -41,6 +43,8 @@ import type { GuardFailureBody } from "@/lib/bridge-panel-guard";
 import { parseLabelInput, parseSlotParam, type LocationSlot } from "@/lib/location-numbers";
 import { toEmbedWhatsappSummary } from "@/lib/embed-summary";
 import { embedStateFor } from "@/app/api/crm/embed/session/logic";
+import { cancelNumber, subscribeNumbers, syncNumberPrices, type NumberBillingDeps } from "@/lib/billing/numbers";
+import { hasCardOnFile } from "@/lib/billing/activation";
 
 /** The narrow repo slice this module touches — `repo` in production, a fake in tests. */
 export type EmbedNumbersRepo = Pick<
@@ -59,6 +63,10 @@ export type EmbedNumbersRepo = Pick<
   | "getAccountById"
   | "getUserTenant"
   | "setUserTenant"
+  // Per-number billing (0020): each number is its own subscription, started on add and cancelled on remove.
+  | "getNumberBilling"
+  | "listNumberBillingForAccount"
+  | "updateNumberBilling"
 >;
 
 /** What the browser sees for one number. Structurally unable to carry a tenant id. */
@@ -137,14 +145,15 @@ const LAST_NUMBER = () =>
   failure(409, "last_number", "This is the only WhatsApp number on this sub-account, so it can't be removed.");
 const LIMIT = () => failure(409, "limit", "This sub-account already has 3 WhatsApp numbers.");
 /**
- * Accounts and billing (merge ruling): one billed unit per activated
- * LOCATION, whatever its number count — so numbers 2-3 never consume an
- * activation slot, but they can only be added to a location that may send.
+ * Accounts and billing: numbers 2-3 never consume an activation slot, but
+ * they can only be added to an activated location whose account has a card on
+ * file (or is comped), because each one starts its own billed subscription.
  */
 const NOT_SENDABLE = (state: string) =>
   failure(409, state, "Activate WhatsApp for this sub-account, with billing up to date, before adding another number.");
 const NO_USER = () => failure(400, "no_user", "We couldn't tell which HighLevel user you are. Reload this page inside HighLevel and try again.");
 const LOGOUT_FAILED = () => failure(502, "logout_failed", "Couldn't disconnect that WhatsApp number. Please try again.");
+const BILLING_FAILED = () => failure(502, "billing_failed", "We couldn't update billing for that number just now, so nothing was changed. Please try again.");
 
 async function okList(repo: EmbedNumbersRepo, locationId: string, slot?: LocationSlot, ghlUserId: string | null = null): Promise<NumbersRouteResult> {
   const numbers = await listEmbedNumbers(repo, locationId, ghlUserId);
@@ -157,6 +166,7 @@ async function okList(repo: EmbedNumbersRepo, locationId: string, slot?: Locatio
  */
 export async function decideAddNumber(
   repo: EmbedNumbersRepo,
+  billing: NumberBillingDeps,
   locationId: string,
   body: Record<string, unknown> | null
 ): Promise<NumbersRouteResult> {
@@ -166,20 +176,39 @@ export async function decideAddNumber(
   // Same gate as the embed session's token mint (`embedStateFor`), re-checked
   // here because an embed token outlives a cancellation or deactivation.
   // Activation is per location (`ghl_accounts.activated_at`), so nothing here
-  // touches the activation count or the Stripe quantity.
+  // touches the activation count. Billing is per number: the new number gets
+  // its own subscription (trial included), or is taken off again.
   const account = await repo.getGhlAccountByLocationId(locationId);
   if (!account) return UNKNOWN_NUMBER();
   const owner = account.accountId ? await repo.getAccountById(account.accountId) : null;
   const state = embedStateFor(account, owner?.billingStatus ?? null, null);
   if (state.state !== "ok") return NOT_SENDABLE(state.state);
+  // No card on file: nothing to bill the new number against.
+  if (!owner || !hasCardOnFile(owner.billingStatus)) return NOT_SENDABLE("billing_paused");
   const added = await repo.addLocationNumber(locationId, label.label);
   if (!added.ok) return LIMIT();
+  if (owner.billingStatus !== "comped") {
+    let subscribed: { ok: boolean };
+    try {
+      subscribed = await subscribeNumbers(repo, billing, owner, [added.number.tenantId]);
+    } catch (err) {
+      await repo.removeLocationNumber(locationId, added.number.slot);
+      throw err;
+    }
+    if (!subscribed.ok) {
+      await repo.removeLocationNumber(locationId, added.number.slot);
+      return BILLING_FAILED();
+    }
+    await syncNumberPrices(repo, billing, owner);
+  }
   return okList(repo, locationId, added.number.slot);
 }
 
 /** The bridge call `decideRemoveNumber` makes — `logoutWhatsappSession` in production. */
 export interface RemoveNumberDeps {
   logout: (tenantId: string) => Promise<BridgeOkResult>;
+  /** Cancels the removed number's subscription and re-prices the rest. */
+  billing: NumberBillingDeps;
 }
 
 /**
@@ -216,11 +245,19 @@ export async function decideRemoveNumber(
     if (!LOGOUT_FAILURES_THAT_ALLOW_REMOVAL.has(logout.code)) return LOGOUT_FAILED();
   }
 
+  // Billing stops before the row goes, so a removed number is never left billing.
+  // A failure keeps the (logged-out) number in place to retry.
+  const numberBilling = await repo.getNumberBilling(target.tenantId);
+  if (numberBilling && !(await cancelNumber(repo, deps.billing, numberBilling))) return BILLING_FAILED();
+
   const removed = await repo.removeLocationNumber(locationId, slot.slot);
   if (!removed.ok) {
     // A concurrent change since the read above.
     return removed.reason === "last_number" ? LAST_NUMBER() : UNKNOWN_NUMBER();
   }
+  const location = await repo.getGhlAccountByLocationId(locationId);
+  const owner = location?.accountId ? await repo.getAccountById(location.accountId) : null;
+  if (owner) await syncNumberPrices(repo, deps.billing, owner);
   return okList(repo, locationId);
 }
 

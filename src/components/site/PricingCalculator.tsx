@@ -7,7 +7,7 @@ import { CALC_MAX, CALC_MIN, calculatorValue } from "@/lib/site/calculator";
 const DEFAULT = "5";
 
 /**
- * The calculator is one sentence: "If I activate [5] sub-accounts, I'll pay £49.95 a month."
+ * The calculator is one sentence: "If I activate [5] numbers, I'll pay £49.95 a month."
  * The label is the first clause; the amount sits in a polite live region, and
  * the help or error line below is the input's description.
  */
@@ -35,7 +35,7 @@ export function PricingCalculator({ currency }: { currency: string }) {
           aria-invalid={invalid}
           className="mx-1 min-h-11 w-[5.5ch] rounded-lg border-2 border-outline bg-well px-2 text-center font-display font-extrabold [font-variant-numeric:tabular-nums] [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />{" "}
-        sub-accounts,{" "}
+        numbers,{" "}
         <span aria-live="polite" className="whitespace-nowrap">
           {empty ? null : (
             <>

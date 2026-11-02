@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyCheckoutSession,
   completeSignup,
   createCheckoutForAccount,
   decideCallback,
@@ -13,7 +12,7 @@ import {
 process.env.ONBOARD_STATE_SECRET ||= "test-secret-not-used-anywhere-real";
 import { signKindedState } from "@/lib/signed-state";
 import type { Account } from "@/lib/types";
-import type { StripeCheckoutSession, StripeSubscription } from "@/lib/stripe/billing";
+import { startCheckoutFlow, addCardFlow } from "@/lib/billing/self-serve";
 
 const account = (over: Partial<Account> = {}): Account => ({
   id: "acc-1",
@@ -51,9 +50,6 @@ function fakeRepo(opts: { profile?: boolean; accounts?: Account[] } = {}) {
       log.push(`claim:${loc}:${acc}`);
       return false;
     },
-    async getAccountById(id) {
-      return store.get(id) ?? null;
-    },
     async updateAccountBilling(id, patch) {
       log.push(`update:${id}:${JSON.stringify(patch)}`);
       const a = store.get(id);
@@ -65,15 +61,21 @@ function fakeRepo(opts: { profile?: boolean; accounts?: Account[] } = {}) {
 
 const verifyClaim = (t: string) => (t === "good-claim" ? { locationId: "loc" } : null);
 
-function deps(log: string[], over: { checkoutOk?: boolean } = {}) {
+function deps(log: string[], over: { checkoutOk?: boolean; customerOk?: boolean } = {}) {
   return {
     appUrl: "https://app.test",
     verifyClaim,
-    async checkout(i: { accountId: string; customerEmail: string; successUrl: string; cancelUrl: string }) {
-      log.push(`checkout:${i.accountId}:${i.customerEmail}:${i.successUrl}:${i.cancelUrl}`);
+    async createCustomer(i: { accountId: string; email: string }) {
+      log.push(`customer:${i.accountId}:${i.email}`);
+      return over.customerOk === false
+        ? ({ ok: false, status: 500, code: null, message: "x" } as const)
+        : ({ ok: true, data: { id: "cus_new" } } as const);
+    },
+    async setup(i: { accountId: string; customerId: string; successUrl: string; cancelUrl: string }) {
+      log.push(`setup:${i.accountId}:${i.customerId}:${i.successUrl}:${i.cancelUrl}`);
       return over.checkoutOk === false
         ? ({ ok: false, status: 500, code: null, message: "x" } as const)
-        : ({ ok: true, data: { id: "cs_1", url: "https://stripe.test/pay" } } as const);
+        : ({ ok: true, data: { id: "cs_1", url: "https://stripe.test/setup" } } as const);
     },
   };
 }
@@ -133,15 +135,18 @@ test("decideCallback routes by profile first, then by a pending signup, else rej
   assert.equal(decideCallback({ role: "account", accountId: null }, pending), "reject");
 });
 
-test("completeSignup runs account, profile, Checkout in order, bound to the verified email", async () => {
-  const { repo, log } = fakeRepo();
+test("completeSignup runs account, profile, Stripe customer, then the save-a-card Checkout, bound to the verified email", async () => {
+  const { repo, log, store } = fakeRepo();
   const out = await completeSignup(repo, deps(log), who);
-  assert.deepEqual(out, { kind: "checkout", url: "https://stripe.test/pay" });
+  assert.deepEqual(out, { kind: "checkout", url: "https://stripe.test/setup" });
   assert.deepEqual(log, [
     "createAccount:Acme:business:a@b.co",
     "createProfile:u1:account:a@b.co:acc-1",
-    "checkout:acc-1:a@b.co:https://app.test/signup/complete?session_id={CHECKOUT_SESSION_ID}:https://app.test/login?error=checkout",
+    "customer:acc-1:a@b.co",
+    'update:acc-1:{"stripeCustomerId":"cus_new"}',
+    "setup:acc-1:cus_new:https://app.test/signup/complete?session_id={CHECKOUT_SESSION_ID}:https://app.test/login?error=checkout",
   ]);
+  assert.equal(store.get("acc-1")!.billingStatus, "pending", "no card until the setup Checkout completes");
 });
 
 test("completeSignup claims the verified location after the profile", async () => {
@@ -159,72 +164,39 @@ test("completeSignup ignores a forged or expired claim token", async () => {
   assert.ok(!log.some((l) => l.startsWith("claim:")));
 });
 
-test("completeSignup leaves the account behind when Checkout fails", async () => {
-  const { repo, log, store } = fakeRepo();
-  assert.deepEqual(await completeSignup(repo, deps(log, { checkoutOk: false }), who), { kind: "failed" });
-  assert.ok(store.has("acc-1"));
-  assert.ok(log.some((l) => l.startsWith("createProfile")));
+test("completeSignup leaves the account behind when the customer or the Checkout fails", async () => {
+  for (const over of [{ checkoutOk: false }, { customerOk: false }]) {
+    const { repo, log, store } = fakeRepo();
+    assert.deepEqual(await completeSignup(repo, deps(log, over), who), { kind: "failed" });
+    assert.ok(store.has("acc-1"));
+    assert.ok(log.some((l) => l.startsWith("createProfile")));
+  }
 });
 
-test("createCheckoutForAccount reuses the account id", async () => {
+test("createCheckoutForAccount reuses an existing Stripe customer and the account id", async () => {
   const { repo, log } = fakeRepo();
-  const d = deps(log);
-  const out = await createCheckoutForAccount(repo, d, account({ id: "acc-9", ownerEmail: "z@y.co" }));
+  const out = await createCheckoutForAccount(repo, deps(log), account({ id: "acc-9", ownerEmail: "z@y.co", stripeCustomerId: "cus_9" }));
   assert.equal(out.kind, "checkout");
-  assert.match(log[0], /^checkout:acc-9:z@y\.co:/);
+  assert.equal(log.length, 1);
+  assert.match(log[0], /^setup:acc-9:cus_9:/);
 });
 
-const sub = (over: Partial<StripeSubscription> = {}): StripeSubscription => ({
-  id: "sub",
-  status: "trialing",
-  customer: "cus",
-  trialEnd: 1_800_000_000,
-  canceledAt: null,
-  endedAt: null,
-  cancelAtPeriodEnd: false,
-  currentPeriodEnd: null,
-  itemId: "si",
-  quantity: 1,
-  cardLast4: null,
-  metadata: {},
-  ...over,
-});
-const session = (over: Partial<StripeCheckoutSession> = {}): StripeCheckoutSession => ({
-  id: "cs_1",
-  status: "complete",
-  customer: "cus",
-  subscription: sub(),
-  metadata: { account_id: "acc-1" },
-  ...over,
-});
-
-test("applyCheckoutSession writes the subscription facts and is idempotent", async () => {
-  const { repo, log } = fakeRepo({ accounts: [account()] });
-  assert.deepEqual(await applyCheckoutSession(repo, session()), { applied: true, accountId: "acc-1" });
-  assert.equal(
-    log[0],
-    `update:acc-1:${JSON.stringify({
-      stripeCustomerId: "cus",
-      stripeSubscriptionId: "sub",
-      billingStatus: "trialing",
-      trialEndsAt: "2027-01-15T08:00:00.000Z",
-    })}`,
-  );
-  assert.deepEqual(await applyCheckoutSession(repo, session()), { applied: true, accountId: "acc-1" });
-});
-
-test("applyCheckoutSession ignores incomplete sessions and unknown accounts", async () => {
-  const { repo, log } = fakeRepo({ accounts: [account()] });
-  assert.equal((await applyCheckoutSession(repo, session({ status: "open" }))).applied, false);
-  assert.equal((await applyCheckoutSession(repo, session({ metadata: {} }))).applied, false);
-  assert.equal((await applyCheckoutSession(repo, session({ subscription: null }))).applied, false);
-  assert.deepEqual(await applyCheckoutSession(repo, session({ metadata: { account_id: "nope" } })), { applied: false, accountId: "nope" });
-  assert.equal(log.length, 0);
-});
-
-test("applyCheckoutSession keeps the current status for an unmapped subscription status", async () => {
-  const { repo, log } = fakeRepo({ accounts: [account({ billingStatus: "pending" })] });
-  await applyCheckoutSession(repo, session({ subscription: sub({ status: "incomplete", trialEnd: null }) }));
-  assert.match(log[0], /"billingStatus":"pending"/);
-  assert.match(log[0], /"trialEndsAt":null/);
+test("startCheckoutFlow: only an account with no card on file; addCardFlow: only an account with one", async () => {
+  for (const status of ["pending", "cancelled", "trialing", "paused"] as const) {
+    const { repo, log } = fakeRepo();
+    const out = await startCheckoutFlow(repo, account({ billingStatus: status, stripeCustomerId: "cus_1" }), deps(log));
+    assert.deepEqual(out, { kind: "redirect", url: "https://stripe.test/setup" }, status);
+  }
+  for (const status of ["active", "comped"] as const) {
+    const { repo, log } = fakeRepo();
+    assert.deepEqual(await startCheckoutFlow(repo, account({ billingStatus: status }), deps(log)), { kind: "not_pending" });
+    assert.deepEqual(log, []);
+  }
+  const log: string[] = [];
+  const d = deps(log);
+  assert.deepEqual(await addCardFlow(account({ billingStatus: "active", stripeCustomerId: "cus_1" }), d), { kind: "redirect", url: "https://stripe.test/setup" });
+  assert.match(log[0], /^setup:acc-1:cus_1:https:\/\/app\.test\/dashboard\/billing\?result=card_added:/);
+  for (const a of [account({ billingStatus: "pending", stripeCustomerId: "cus_1" }), account({ billingStatus: "active", stripeCustomerId: null }), account({ billingStatus: "comped" })]) {
+    assert.deepEqual(await addCardFlow(a, d), { kind: "not_needed" });
+  }
 });

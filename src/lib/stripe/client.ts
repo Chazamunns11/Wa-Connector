@@ -8,22 +8,23 @@ const API_BASE = "https://api.stripe.com/v1";
 
 export interface StripeConfig {
   secretKey: string;
-  priceId: string;
+  /** The Stripe Product every number's subscription item is priced against (inline price_data per tier). */
+  productId: string;
   webhookSecret: string | null;
   automaticTax: boolean;
 }
 
 export function isStripeConfigured(): boolean {
-  return Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRICE_ID);
+  return Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRODUCT_ID);
 }
 
 export function stripeConfig(): StripeConfig {
   const secretKey = process.env.STRIPE_SECRET_KEY;
-  const priceId = process.env.STRIPE_PRICE_ID;
-  if (!secretKey || !priceId) throw new Error("Stripe is not configured");
+  const productId = process.env.STRIPE_PRODUCT_ID;
+  if (!secretKey || !productId) throw new Error("Stripe is not configured");
   return {
     secretKey,
-    priceId,
+    productId,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || null,
     automaticTax: process.env.STRIPE_AUTOMATIC_TAX === "true",
   };
@@ -56,7 +57,7 @@ export type StripeResult<T> =
   | { ok: false; status: number; code: string | null; message: string };
 
 export async function stripeRequest<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   params: Record<string, unknown> = {},
   opts: { idempotencyKey?: string; fetchImpl?: typeof fetch } = {},
@@ -70,7 +71,8 @@ export async function stripeRequest<T>(
   };
   let url = `${API_BASE}${path}`;
   const init: RequestInit = { method, headers };
-  if (method === "GET") {
+  // Stripe takes GET and DELETE parameters in the query string.
+  if (method === "GET" || method === "DELETE") {
     if (body) url += `?${body}`;
   } else {
     headers["Content-Type"] = "application/x-www-form-urlencoded";

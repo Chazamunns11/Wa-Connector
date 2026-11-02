@@ -1,7 +1,7 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import { monthlyCostPence, pricingConfig } from "@/lib/pricing";
-import type { retrieveSubscription } from "@/lib/stripe/billing";
-import { activeCount } from "./derive";
+import type { retrieveCustomerCard } from "@/lib/stripe/billing";
+import { billedCount } from "@/lib/billing/numbers";
 import { DEFAULT_DAILY_CAP, toLocationRow } from "./map";
 import type { AccountDataSource, AccountSummary, BillingSummary, LocationRow } from "./types";
 
@@ -9,7 +9,12 @@ const DAY_MS = 86_400_000;
 
 type AccountRepo = Pick<
   GhlRepository,
-  "getAccountById" | "listGhlAccountsForAccount" | "getWhatsappSessionSummariesForTenants" | "getLocationStats" | "countOptOutsByTenant"
+  | "getAccountById"
+  | "listGhlAccountsForAccount"
+  | "getWhatsappSessionSummariesForTenants"
+  | "getLocationStats"
+  | "countOptOutsByTenant"
+  | "listNumberBillingForAccount"
 >;
 
 /** The real account data, read through the service-role repository for one account id (already authorised by the session). */
@@ -17,13 +22,13 @@ export class SupabaseAccountDataSource implements AccountDataSource {
   readonly preview = false;
 
   private readonly repo: AccountRepo;
-  private readonly deps: { retrieveSubscription: typeof retrieveSubscription };
+  private readonly deps: { retrieveCustomerCard: typeof retrieveCustomerCard };
   private readonly accountId: string;
   private readonly now: Date;
 
   constructor(
     repo: AccountRepo,
-    deps: { retrieveSubscription: typeof retrieveSubscription },
+    deps: { retrieveCustomerCard: typeof retrieveCustomerCard },
     accountId: string,
     now: Date,
   ) {
@@ -42,9 +47,7 @@ export class SupabaseAccountDataSource implements AccountDataSource {
       kind: a.kind,
       email: a.ownerEmail,
       billingStatus: a.billingStatus,
-      trialEndsAt: a.trialEndsAt,
       stripeCustomerId: a.stripeCustomerId,
-      stripeSubscriptionId: a.stripeSubscriptionId,
     };
   }
 
@@ -64,26 +67,25 @@ export class SupabaseAccountDataSource implements AccountDataSource {
     );
   }
 
-  async getBilling(knownRows?: LocationRow[]): Promise<BillingSummary> {
-    const account = await this.getAccount();
-    const currency = pricingConfig().currency;
-    const base: BillingSummary = {
-      cardLast4: null,
-      nextInvoiceAt: null,
-      nextInvoiceAmount: null,
-      currency,
-      portalAvailable: !!account.stripeCustomerId,
-      cancelAtPeriodEnd: false,
-    };
-    if (!account.stripeSubscriptionId) return { ...base, portalAvailable: false };
-    const [sub, rows] = await Promise.all([this.deps.retrieveSubscription(account.stripeSubscriptionId), knownRows ?? this.listLocations()]);
-    if (!sub.ok) return base;
+  async getBilling(opts: { withCard?: boolean } = {}): Promise<BillingSummary> {
+    const [account, numbers] = await Promise.all([this.getAccount(), this.repo.listNumberBillingForAccount(this.accountId)]);
+    const count = (status: string) => numbers.filter((n) => n.billingStatus === status).length;
+    const billedNumbers = billedCount(numbers);
+    let cardLast4: string | null = null;
+    if (opts.withCard && account.stripeCustomerId) {
+      const card = await this.deps.retrieveCustomerCard(account.stripeCustomerId);
+      // Degrades to "no card details" when Stripe fails; the page still renders.
+      if (card.ok) cardLast4 = card.data.cardLast4;
+    }
     return {
-      ...base,
-      cardLast4: sub.data.cardLast4,
-      nextInvoiceAt: sub.data.currentPeriodEnd ? new Date(sub.data.currentPeriodEnd * 1000).toISOString() : null,
-      nextInvoiceAmount: monthlyCostPence(activeCount(rows)) / 100,
-      cancelAtPeriodEnd: sub.data.cancelAtPeriodEnd,
+      cardLast4,
+      billedNumbers,
+      trialingNumbers: count("trialing"),
+      pastDueNumbers: count("past_due"),
+      stoppedNumbers: count("paused") + count("incomplete"),
+      monthlyAmount: monthlyCostPence(billedNumbers) / 100,
+      currency: pricingConfig().currency,
+      portalAvailable: !!account.stripeCustomerId,
     };
   }
 }

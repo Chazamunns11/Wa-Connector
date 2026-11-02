@@ -2,15 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SupabaseAccountDataSource } from "@/lib/account-data/supabase";
 import { getAccountDataSource } from "@/lib/account-data";
-import { monthlyCostPence, pricingConfig } from "@/lib/pricing";
-import type { Account, GhlAccountSummary, LocationStats, WhatsappSessionSummary } from "@/lib/types";
+import { pricingConfig } from "@/lib/pricing";
+import type { Account, GhlAccountSummary, LocationStats, NumberBilling, WhatsappSessionSummary } from "@/lib/types";
+import { number } from "./billing-fakes";
 
 const NOW = new Date("2026-10-16T12:00:00Z");
 const DAY = 86_400_000;
 
 const ACCOUNT: Account = {
   id: "acc-1", name: "Sample Wellness", kind: "agency", ownerEmail: "o@example.com",
-  stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1", billingStatus: "trialing",
+  stripeCustomerId: "cus_1", stripeSubscriptionId: null, billingStatus: "active",
   trialEndsAt: "2026-10-20T12:00:00.000Z", cancelledAt: null, cleanedUpAt: null, createdAt: "2026-10-13T12:00:00Z",
 };
 
@@ -22,7 +23,7 @@ function loc(id: string, label: string, activated: boolean): GhlAccountSummary {
   } as GhlAccountSummary;
 }
 
-function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[] } = {}) {
+function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]; numbers?: NumberBilling[] } = {}) {
   const calls: { name: string; args: unknown[] }[] = [];
   const locations = opts.locations ?? [loc("a", "Alpha", true), loc("b", "Bravo", false), loc("c", "Charlie", true)];
   const repo = {
@@ -36,6 +37,18 @@ function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]
       calls.push({ name: "optOuts", args: [ids] });
       return new Map([["ten-a", 2]]);
     },
+    async listNumberBillingForAccount(id: string) {
+      calls.push({ name: "numbers", args: [id] });
+      return opts.numbers ?? [
+        number("n1", { billingStatus: "trialing" }),
+        number("n2", { billingStatus: "active" }),
+        number("n3", { billingStatus: "past_due" }),
+        number("n4", { billingStatus: "paused" }),
+        number("n5", { billingStatus: "incomplete" }),
+        number("n6", { billingStatus: "cancelled" }),
+        number("n7"),
+      ];
+    },
     async getLocationStats(ids: string[], since: string): Promise<Record<string, LocationStats>> {
       calls.push({ name: "stats", args: [ids, since] });
       return Object.fromEntries(ids.map((i) => [i, { pendingSend: 0, failedLast7Days: { count: 0, reasons: [] }, everReceived: true }]));
@@ -44,12 +57,12 @@ function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]
   return { repo, calls };
 }
 const stripeCalls: string[] = [];
-const retrieveSubscription = async (id: string) => {
+const retrieveCustomerCard = async (id: string) => {
   stripeCalls.push(id);
-  return { ok: true as const, data: { id, status: "trialing", customer: "cus_1", trialEnd: null, canceledAt: null, endedAt: null, cancelAtPeriodEnd: true, currentPeriodEnd: 1_792_000_000, itemId: "si_1", quantity: 2, cardLast4: "4242", metadata: {} } };
+  return { ok: true as const, data: { cardLast4: "4242" } };
 };
 const make = (f: ReturnType<typeof fakes>, now = NOW) =>
-  new SupabaseAccountDataSource(f.repo as never, { retrieveSubscription } as never, "acc-1", now);
+  new SupabaseAccountDataSource(f.repo as never, { retrieveCustomerCard } as never, "acc-1", now);
 
 test("listLocations reads the account's rows, then summaries by tenant and stats since 7 days, in label order", async () => {
   const f = fakes({ locations: [loc("a", "Alpha", true), loc("b", "Bravo", false), loc("c", "Charlie", true)] });
@@ -72,66 +85,61 @@ test("listLocations with no rows makes no probe queries", async () => {
   assert.deepEqual(f.calls.map((c) => c.name), ["listGhlAccountsForAccount"]);
 });
 
-test("getAccount maps Account to AccountSummary, including Stripe ids", async () => {
+test("getAccount maps Account to AccountSummary", async () => {
   const a = await make(fakes()).getAccount();
-  assert.deepEqual(a, {
-    id: "acc-1", name: "Sample Wellness", kind: "agency", email: "o@example.com", billingStatus: "trialing",
-    trialEndsAt: "2026-10-20T12:00:00.000Z", stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1",
-  });
+  assert.deepEqual(a, { id: "acc-1", name: "Sample Wellness", kind: "agency", email: "o@example.com", billingStatus: "active", stripeCustomerId: "cus_1" });
 });
 
 test("getAccount refuses a missing account", async () => {
   await assert.rejects(make(fakes({ account: null })).getAccount());
 });
 
-test("getBilling reads the subscription; next invoice uses volume pricing over active numbers", async () => {
+test("getBilling counts the account's numbers by their own billing; the month prices every billed number at the tier", async () => {
   stripeCalls.length = 0;
   const b = await make(fakes()).getBilling();
-  assert.deepEqual(stripeCalls, ["sub_1"]);
-  assert.equal(b.cardLast4, "4242");
-  assert.equal(b.nextInvoiceAt, new Date(1_792_000_000 * 1000).toISOString());
-  assert.equal(b.nextInvoiceAmount, monthlyCostPence(2) / 100);
-  assert.equal(b.currency, pricingConfig().currency);
-  assert.equal(b.portalAvailable, true);
-  assert.equal(b.cancelAtPeriodEnd, true);
-});
-
-test("getBilling given the rows does not list locations again", async () => {
-  const f = fakes();
-  const src = make(f);
-  const rows = await src.listLocations();
-  const before = f.calls.length;
-  const b = await src.getBilling(rows);
-  assert.equal(b.nextInvoiceAmount, monthlyCostPence(2) / 100);
-  assert.equal(f.calls.slice(before).filter((c) => c.name === "listGhlAccountsForAccount").length, 0);
-});
-
-test("getBilling at 25 active sub-accounts prices every sub-account at the volume rate", async () => {
-  const many = Array.from({ length: 25 }, (_, i) => loc(`l${i}`, `L${i}`, true));
-  const b = await make(fakes({ locations: many })).getBilling();
-  assert.equal(b.nextInvoiceAmount, 149.75);
-});
-
-test("getBilling for an account with no subscription (comped or pending) never calls Stripe", async () => {
-  stripeCalls.length = 0;
-  const comped = { ...ACCOUNT, billingStatus: "comped" as const, stripeCustomerId: null, stripeSubscriptionId: null };
-  const b = await make(fakes({ account: comped })).getBilling();
-  assert.deepEqual(stripeCalls, []);
+  assert.deepEqual(stripeCalls, [], "no Stripe call unless the card is asked for");
   assert.deepEqual(b, {
-    cardLast4: null, nextInvoiceAt: null, nextInvoiceAmount: null, currency: pricingConfig().currency,
-    portalAvailable: false, cancelAtPeriodEnd: false,
+    cardLast4: null,
+    billedNumbers: 3,
+    trialingNumbers: 1,
+    pastDueNumbers: 1,
+    stoppedNumbers: 2,
+    monthlyAmount: 29.97,
+    currency: pricingConfig().currency,
+    portalAvailable: true,
   });
+});
+
+test("getBilling withCard reads the customer's card once", async () => {
+  stripeCalls.length = 0;
+  const b = await make(fakes()).getBilling({ withCard: true });
+  assert.deepEqual(stripeCalls, ["cus_1"]);
+  assert.equal(b.cardLast4, "4242");
+});
+
+test("getBilling at 25 billed numbers prices every number at the volume rate", async () => {
+  const many = Array.from({ length: 25 }, (_, i) => number(`n${i}`, { billingStatus: "active" }));
+  const b = await make(fakes({ numbers: many })).getBilling();
+  assert.equal(b.monthlyAmount, 149.75);
+});
+
+test("getBilling for an account with no Stripe customer (comped or pending) never calls Stripe and has no portal", async () => {
+  stripeCalls.length = 0;
+  const comped = { ...ACCOUNT, billingStatus: "comped" as const, stripeCustomerId: null };
+  const b = await make(fakes({ account: comped, numbers: [] })).getBilling({ withCard: true });
+  assert.deepEqual(stripeCalls, []);
+  assert.equal(b.portalAvailable, false);
+  assert.equal(b.monthlyAmount, 0);
 });
 
 test("getBilling degrades to no card details when Stripe fails, keeping the portal if a customer exists", async () => {
   const failing = new SupabaseAccountDataSource(
     fakes().repo as never,
-    { retrieveSubscription: async () => ({ ok: false, status: 502, code: null, message: "x" }) } as never,
+    { retrieveCustomerCard: async () => ({ ok: false, status: 502, code: null, message: "x" }) } as never,
     "acc-1", NOW,
   );
-  const b = await failing.getBilling();
+  const b = await failing.getBilling({ withCard: true });
   assert.equal(b.cardLast4, null);
-  assert.equal(b.nextInvoiceAt, null);
   assert.equal(b.portalAvailable, true);
 });
 

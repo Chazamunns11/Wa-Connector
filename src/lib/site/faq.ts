@@ -1,5 +1,5 @@
 import type { BrandConfig } from "@/lib/brand-config";
-import { TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS, pricingConfig, tierSentence } from "@/lib/pricing";
+import { TRIAL_DAYS, pricingConfig, tierSentence } from "@/lib/pricing";
 
 export interface FaqEntry {
   id: string;
@@ -72,17 +72,17 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     trial: {
       question: "How does the free trial work?",
-      answer: `${TRIAL_DAYS}-day free trial, no card needed, with up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. If the trial ends before you add a card, sending pauses until you do. After that it's ${tiers}`,
+      answer: `You save a card when you sign up, and nothing is charged then. Each WhatsApp number you add gets its own ${TRIAL_DAYS}-day free trial, and is charged to that card when its trial ends, then every month on that day. After that it's ${tiers}`,
     },
     cancel: {
       question: "Can I cancel, and what happens if a payment fails?",
       answer:
-        "You can cancel whenever you like from the billing portal, and it takes effect at the end of the period you've paid for. If a payment fails, sending carries on while Stripe retries it. If the subscription ends unpaid, sending pauses until you pay.",
+        "You can cancel whenever you like. Remove a number, or deactivate its sub-account, and its billing stops straight away, with any unused part of the month credited to your next bill. If a payment fails, that number keeps sending while Stripe retries it. If it ends unpaid, that number stops sending until you pay.",
     },
     "agency-or-single": {
       question: "Is it for agencies or a single business?",
       answer:
-        "Both. A single business activates its one sub-account; an agency activates the sub-accounts it wants to use. Either way you pay per activated sub-account, and each sub-account can have up to 3 WhatsApp numbers at no extra cost. If you resell it to your own clients, you set your price and can work out what you would keep.",
+        "Both. A single business activates its one sub-account; an agency activates the sub-accounts it wants to use. Either way you pay per WhatsApp number, and each sub-account can have up to 3 numbers. If you resell it to your own clients, you set your price and can work out what you would keep.",
       link: { text: "Try the resale calculator", href: "/pricing#resale" },
     },
     "white-label": {

@@ -4,19 +4,14 @@ import { redirect } from "next/navigation";
 import { requireAccountSession } from "@/lib/account-session";
 import type { ActivateDeps } from "@/lib/billing/activate";
 import { platformCap } from "@/lib/billing/activation";
+import { numberBillingDeps } from "@/lib/billing/live-deps";
 import { repo } from "@/lib/data";
-import { notifyText } from "@/lib/slack";
 import { runRowAction } from "@/lib/site/row-action";
-import { retrieveSubscription, setSubscriptionItemQuantity } from "@/lib/stripe/billing";
 import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
 
 function activateDeps(): ActivateDeps {
   return {
-    retrieveSubscription,
-    setQuantity: setSubscriptionItemQuantity,
-    notify: (text) => {
-      void notifyText(text);
-    },
+    ...numberBillingDeps(),
     now: () => new Date(),
     platformCap,
   };

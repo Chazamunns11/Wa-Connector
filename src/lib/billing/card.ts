@@ -1,44 +1,31 @@
 import type { GhlRepository } from "@/lib/data/repository";
-import type {
-  endTrialNow,
-  resumeSubscription,
-  retrieveSubscription,
-  setCustomerDefaultPaymentMethod,
-  setSubscriptionDefaultPaymentMethod,
-  StripeCheckoutSession,
-} from "@/lib/stripe/billing";
+import type { resumeSubscription, retrieveSubscription, setCustomerDefaultPaymentMethod, StripeCheckoutSession } from "@/lib/stripe/billing";
 
 export interface CardSetupDeps {
   retrieveSubscription: typeof retrieveSubscription;
   setCustomerDefault: typeof setCustomerDefaultPaymentMethod;
-  setSubscriptionDefault: typeof setSubscriptionDefaultPaymentMethod;
   resume: typeof resumeSubscription;
-  endTrial: typeof endTrialNow;
 }
 
-export type CardSetupOutcome =
-  | { kind: "ignored" }
-  | { kind: "unknown_account" }
-  | { kind: "saved" }
-  | { kind: "resumed" }
-  | { kind: "trial_ended" };
+export type CardSetupOutcome = { kind: "ignored" } | { kind: "unknown_account" } | { kind: "saved"; resumed: number };
 
 const fail = (what: string, message: string): never => {
   throw new Error(`card setup: ${what} failed: ${message}`);
 };
 
 /**
- * Applies a completed "Add a card" (setup-mode Checkout). The account comes
- * from the session's metadata and the customer and subscription from the
- * account row, never from the event body. Order matters for a paused
- * subscription: the customer default first (a resume charges it), then the
- * resume, then the subscription's own default. billing_status is not written
- * here: Stripe's `customer.subscription.resumed` / `updated` event does that.
- * Safe to replay: each step is idempotent on Stripe's side, and a subscription
- * that is no longer paused is not resumed again.
+ * Applies a completed "save a card" (setup-mode Checkout), at signup or from
+ * the billing page. The account comes from the session's metadata and the
+ * customer from the account row, never from the event body. The card becomes
+ * the customer's default (what every number subscription charges), a `pending`
+ * account becomes `active` (card on file: it may now add numbers), and any
+ * number Stripe paused because its trial ended with no card is resumed (which
+ * charges it now). Number statuses are not written here: Stripe's own
+ * subscription events do that. Safe to replay: each step is idempotent, and a
+ * subscription that is no longer paused is not resumed again.
  */
 export async function applyCardSetup(
-  repo: Pick<GhlRepository, "getAccountById">,
+  repo: Pick<GhlRepository, "getAccountById" | "updateAccountBilling" | "listNumberBillingForAccount">,
   deps: CardSetupDeps,
   session: StripeCheckoutSession,
 ): Promise<CardSetupOutcome> {
@@ -47,31 +34,31 @@ export async function applyCardSetup(
   const accountId = session.metadata.account_id;
   if (!pm || !accountId) return { kind: "ignored" };
   const account = await repo.getAccountById(accountId);
-  if (!account || !account.stripeCustomerId || !account.stripeSubscriptionId) return { kind: "unknown_account" };
+  if (!account || !account.stripeCustomerId) return { kind: "unknown_account" };
   // A session for another customer can never move this account's card.
   if (session.customer && session.customer !== account.stripeCustomerId) return { kind: "ignored" };
-  const subId = account.stripeSubscriptionId;
 
   const c = await deps.setCustomerDefault(account.stripeCustomerId, pm);
   if (!c.ok) fail("customer default", c.message);
 
-  const live = await deps.retrieveSubscription(subId);
-  if (!live.ok) return fail("retrieve subscription", live.message);
+  if (account.billingStatus !== "active" && account.billingStatus !== "comped") {
+    await repo.updateAccountBilling(account.id, {
+      billingStatus: "active",
+      // A returning cancelled account must not be cleaned up again.
+      ...(account.billingStatus === "cancelled" ? { cancelledAt: null, cleanedUpAt: null } : {}),
+    });
+  }
 
-  let outcome: CardSetupOutcome = { kind: "saved" };
-  if (live.data.status === "paused") {
-    const r = await deps.resume(subId);
+  let resumed = 0;
+  for (const n of await repo.listNumberBillingForAccount(account.id)) {
+    if (n.billingStatus !== "paused" || !n.stripeSubscriptionId) continue;
+    const live = await deps.retrieveSubscription(n.stripeSubscriptionId);
+    if (!live.ok) return fail("retrieve subscription", live.message);
+    // `unpaid` is stored as paused too, but only Stripe `paused` can be resumed; an unpaid invoice is paid in the portal.
+    if (live.data.status !== "paused") continue;
+    const r = await deps.resume(n.stripeSubscriptionId);
     if (!r.ok) fail("resume", r.message);
-    outcome = { kind: "resumed" };
+    resumed += 1;
   }
-
-  const s = await deps.setSubscriptionDefault(subId, pm);
-  if (!s.ok) fail("subscription default", s.message);
-
-  if (outcome.kind === "saved" && live.data.status === "trialing" && session.metadata.then === "end_trial") {
-    const e = await deps.endTrial(subId);
-    if (!e.ok) fail("end trial", e.message);
-    outcome = { kind: "trial_ended" };
-  }
-  return outcome;
+  return { kind: "saved", resumed };
 }

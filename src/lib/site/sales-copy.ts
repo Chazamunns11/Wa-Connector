@@ -31,7 +31,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     heroH1: "Two-way WhatsApp chat in GoHighLevel, from your own number.",
     heroSub: `Set ${name} as the Telephony Provider and the Send SMS steps you already have go out on WhatsApp. When the customer writes back, the reply lands in Conversations.`,
     ctaNote:
-      "7-day free trial, no card needed. The trial covers up to 3 sub-accounts, and if it ends before you add a card, sending pauses until you do.",
+      "7-day free trial on every WhatsApp number. Save a card once, and nothing is charged until a number's trial ends.",
     setup: {
       heading: "How you set it up",
       lead: "About ten minutes. The setup guide walks through every screen.",
@@ -89,7 +89,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
         },
         {
           title: "Made for agencies",
-          body: `One dashboard shows every sub-account and its numbers. From ${MID_FROM} sub-accounts every sub-account drops to the lower price, and you set what your clients pay.`,
+          body: `One dashboard shows every sub-account and its numbers. From ${MID_FROM} numbers every number drops to the lower price, and you set what your clients pay.`,
         },
         {
           title: "Careful with your number",
@@ -106,7 +106,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     faqAllLink: "All the questions, on one page",
     priceStrip: {
       terms:
-        "7-day free trial, no card needed. The trial covers up to 3 sub-accounts, and you can cancel any time from the billing portal.",
+        "7-day free trial on every WhatsApp number, billed monthly per number after that. Remove a number and its billing stops.",
     },
     ctaLabel: "Start 7-day free trial",
   };

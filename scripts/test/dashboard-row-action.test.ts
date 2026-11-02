@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { runRowAction, type RowActionDeps, type RowActionRepo } from "@/lib/site/row-action";
 import { runOwnedWhatsappAction, NOT_FOUND, type OwnedLocationsRepo } from "@/lib/site/owned-whatsapp";
 import { ActivationCapError } from "@/lib/billing/activation";
-import { parseSubscription } from "@/lib/stripe/billing";
-import type { Account, BillingStatus, GhlAccount } from "@/lib/types";
+import type { BillingStatus, GhlAccount } from "@/lib/types";
+import { account, fakeStripe, number, numbersRepo } from "./billing-fakes";
 
 function form(fields: Record<string, string>): FormData {
   const f = new FormData();
@@ -16,7 +16,6 @@ function form(fields: Record<string, string>): FormData {
 function harness(
   opts: {
     status?: BillingStatus;
-    active?: number;
     stripeFails?: boolean;
     capThrow?: boolean;
     bridgeOk?: boolean;
@@ -27,33 +26,26 @@ function harness(
 ) {
   const calls: string[] = [];
   const owned = [{ locationId: "loc-1", tenantId: "tenant-1" }];
-  const acct = { id: "acc-1", billingStatus: opts.status ?? "active", stripeSubscriptionId: "sub" } as Account;
+  const acct = account({ billingStatus: opts.status ?? "active" });
+  const nums = numbersRepo([number("tenant-1", opts.activated ? { stripeSubscriptionId: "sub_1", billingStatus: "active" } : {})]);
+  const stripe = fakeStripe({ failOn: opts.stripeFails ? ["create", "cancel"] : [] });
   const repo: RowActionRepo = {
     listGhlAccountsForAccount: async () => owned as never,
     getGhlAccountByLocationId: async (id: string) =>
       ({ locationId: id, accountId: id === "loc-1" ? "acc-1" : "acc-2", activatedAt: opts.activated ? "2026-10-01T00:00:00.000Z" : null }) as GhlAccount,
     getAccountById: async () => acct,
-    countActivatedForAccount: async () => opts.active ?? 0,
-    countActivatedAll: async () => opts.all ?? opts.active ?? 0,
+    countActivatedAll: async () => opts.all ?? 0,
     setGhlActivated: async (_l, at) => {
       calls.push(`db:${at === null ? "clear" : "set"}`);
-      if (opts.capThrow && at !== null) throw new ActivationCapError("trial_cap");
+      if (opts.capThrow && at !== null) throw new ActivationCapError("platform_cap");
       return 1;
     },
+    listNumberBillingForAccount: nums.listNumberBillingForAccount,
+    updateNumberBilling: nums.updateNumberBilling,
   };
   const deps: RowActionDeps = {
     activate: {
-      retrieveSubscription: (async () => {
-        calls.push("retrieve");
-        return opts.stripeFails
-          ? { ok: false, status: 500, code: null, message: "boom" }
-          : { ok: true, data: parseSubscription({ id: "sub", status: "active", customer: "cus", items: { data: [{ id: "si_1", quantity: 1 }] } })! };
-      }) as never,
-      setQuantity: (async (i: string, q: number) => {
-        calls.push(`qty:${q}`);
-        return opts.stripeFails ? { ok: false, status: 500, code: null, message: "boom" } : { ok: true, data: { id: i, quantity: q } };
-      }) as never,
-      notify: () => {},
+      ...stripe.deps,
       now: () => new Date("2026-10-16T10:00:00.000Z"),
       platformCap: () => (opts.cap === undefined ? null : opts.cap),
     },
@@ -62,7 +54,7 @@ function harness(
       return opts.bridgeOk === false ? { ok: false, code: "x", message: "x" } : { ok: true };
     },
   };
-  return { repo, deps, calls };
+  return { repo, deps, calls, stripe };
 }
 
 const session = { accountId: "acc-1" };
@@ -82,25 +74,28 @@ test("an unknown intent is not_found", async () => {
   assert.deepEqual(h.calls, []);
 });
 
-test("activate: ok, trial_cap, stripe_failed and billing_inactive each give the right result and focus", async () => {
+test("activate: ok, platform_cap, stripe_failed and billing_inactive each give the right result and focus", async () => {
   const f = form({ intent: "activate", location: "loc-1" });
-  const ok = harness({ active: 0 });
+  const ok = harness();
   assert.equal(await runRowAction(ok.repo, ok.deps, session, f), "/dashboard?result=activated&focus=loc-1#row-loc-1");
-  const cap = harness({ status: "trialing", active: 3 });
-  assert.equal(await runRowAction(cap.repo, cap.deps, session, f), "/dashboard?result=trial_cap&focus=loc-1#row-loc-1");
-  const race = harness({ status: "trialing", active: 2, capThrow: true });
-  assert.equal(await runRowAction(race.repo, race.deps, session, f), "/dashboard?result=trial_cap&focus=loc-1#row-loc-1");
+  assert.deepEqual(ok.stripe.log, ["create:tenant-1:999:trial"]);
+  const cap = harness({ cap: 3, all: 3 });
+  assert.equal(await runRowAction(cap.repo, cap.deps, session, f), "/dashboard?result=platform_cap&focus=loc-1#row-loc-1");
+  const race = harness({ capThrow: true });
+  assert.equal(await runRowAction(race.repo, race.deps, session, f), "/dashboard?result=platform_cap&focus=loc-1#row-loc-1");
   const stripe = harness({ stripeFails: true });
   assert.equal(await runRowAction(stripe.repo, stripe.deps, session, f), "/dashboard?result=stripe_failed&focus=loc-1#row-loc-1");
-  const inactive = harness({ status: "cancelled" });
-  assert.equal(await runRowAction(inactive.repo, inactive.deps, session, f), "/dashboard?result=billing_inactive&focus=loc-1#row-loc-1");
+  for (const status of ["pending", "cancelled"] as const) {
+    const inactive = harness({ status });
+    assert.equal(await runRowAction(inactive.repo, inactive.deps, session, f), "/dashboard?result=billing_inactive&focus=loc-1#row-loc-1");
+  }
 });
 
 test("deactivate gives deactivated, or deactivated_billing_pending when the Stripe sync failed", async () => {
   const f = form({ intent: "deactivate", location: "loc-1" });
-  const ok = harness({ active: 2, activated: true });
+  const ok = harness({ activated: true });
   assert.equal(await runRowAction(ok.repo, ok.deps, session, f), "/dashboard?result=deactivated&focus=loc-1#row-loc-1");
-  const pending = harness({ active: 2, activated: true, stripeFails: true });
+  const pending = harness({ activated: true, stripeFails: true });
   assert.equal(await runRowAction(pending.repo, pending.deps, session, f), "/dashboard?result=deactivated_billing_pending&focus=loc-1#row-loc-1");
   assert.ok(pending.calls.includes("db:clear"));
 });

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { siteButton } from "@/components/site/button";
 import { SITE_ROUTES } from "@/lib/site/routes";
-import { MID_FROM, NUMBERS_INCLUDED, VOLUME_FROM, midPrice, pricingConfig, standardPrice, volumePrice } from "@/lib/pricing";
+import { MID_FROM, TRIAL_DAYS, VOLUME_FROM, midPrice, pricingConfig, standardPrice, volumePrice } from "@/lib/pricing";
 
 /** The closing price strip, on the coral ground: the price as the headline, one plain terms line, an Ink pill. */
 export function PricingSummary({ ctaLabel, terms }: { ctaLabel: string; terms: string }) {
@@ -10,10 +10,10 @@ export function PricingSummary({ ctaLabel, terms }: { ctaLabel: string; terms: s
     <div className="flex flex-wrap items-center justify-between gap-x-12 gap-y-8">
       <div>
         <h2 className="price-h2 font-display font-extrabold">
-          {standardPrice(pricing.currency)} a month per sub-account
+          {standardPrice(pricing.currency)} a month per number
         </h2>
         <p className="mt-3.5 max-w-[52ch] text-[1.15rem] font-semibold">
-          Up to {NUMBERS_INCLUDED} WhatsApp numbers included. {MID_FROM} to {VOLUME_FROM - 1} sub-accounts: {midPrice(pricing.currency)} each. {VOLUME_FROM} or more sub-accounts: {volumePrice(pricing.currency)} each, for all of them.
+          A {TRIAL_DAYS}-day free trial on every WhatsApp number. {MID_FROM} to {VOLUME_FROM - 1} numbers: {midPrice(pricing.currency)} each. {VOLUME_FROM} or more numbers: {volumePrice(pricing.currency)} each, for all of them.
         </p>
         <p className="mt-2 max-w-[52ch] font-medium">Every feature on every plan. No setup fee, no charge per message.</p>
         <p className="mt-2 max-w-[52ch] font-medium">{terms}</p>

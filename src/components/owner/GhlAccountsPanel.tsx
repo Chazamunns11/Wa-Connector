@@ -193,7 +193,7 @@ export function GhlAccountsPanel({
       ? "The WhatsApp service isn't responding right now — statuses below may be stale."
       : null;
   const resultMessage = ghlResultMessage(result, { installed: installedCount, failed: failedCount, capped: cappedCount });
-  // Extra-number bolt-on: every number beyond a location's first is billable.
+  // Numbers beyond each location's first (each number is billed as its own subscription; 0020).
   const extraNumbers = accounts.reduce((sum, a) => sum + Math.max(0, (numbersByLocation[a.locationId]?.length ?? 0) - 1), 0);
 
   return (
@@ -227,7 +227,7 @@ export function GhlAccountsPanel({
       ) : null}
       {accounts.length > 0 ? (
         <p className="px-5 pt-2 text-xs text-ink-dim">
-          Extra WhatsApp numbers across all sub-accounts (billable bolt-on): <strong className="text-ink">{extraNumbers}</strong>
+          Extra WhatsApp numbers across all sub-accounts (each billed as its own number): <strong className="text-ink">{extraNumbers}</strong>
         </p>
       ) : null}
       {headerLine ? (

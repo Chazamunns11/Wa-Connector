@@ -86,6 +86,9 @@ function makeWorld(accountOverrides: Partial<GhlAccount> = {}) {
     async getGhlAccountByLocationId(locationId: string) {
       return locationId === LOCATION ? account : null;
     },
+    async getNumberBilling(tenantId: string) {
+      return { tenantId, locationId: "loc", stripeSubscriptionId: "sub", billingStatus: "active" as const, trialEndsAt: null, pricePence: 999 };
+    },
     async getAccountById(id: string) {
       return { id, billingStatus: "active" };
     },

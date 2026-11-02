@@ -48,6 +48,9 @@ function setup(rowList: GhlOutboundMessage[]) {
   let onLedgerRead: (() => void) | undefined;
   const repo = {
     async getGhlAccountByLocationId() { return account(); },
+    async getNumberBilling(tenantId: string) {
+      return { tenantId, locationId: "loc", stripeSubscriptionId: "sub", billingStatus: "active" as const, trialEndsAt: null, pricePence: 999 };
+    },
     async getAccountById(id: string) {
       return { id, name: "A", kind: "business", ownerEmail: "o@x.test", stripeCustomerId: null, stripeSubscriptionId: null, billingStatus: "active", trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, createdAt: "2026-10-01T00:00:00Z" } as Account;
     },

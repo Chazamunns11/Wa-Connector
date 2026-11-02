@@ -1,33 +1,35 @@
 import type { BillingStatus } from "@/lib/types";
-import { TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
 
-export type ActivateRefusal = "already_active" | "billing_inactive" | "trial_cap" | "platform_cap";
+export type ActivateRefusal = "already_active" | "billing_inactive" | "platform_cap";
 
-/** Thrown by the repository when the database refuses an activation at a cap (the race backstop). */
+/** Thrown by the repository when the database refuses an activation at the platform cap (the race backstop). */
 export class ActivationCapError extends Error {
-  readonly reason: "trial_cap" | "platform_cap";
-  constructor(reason: "trial_cap" | "platform_cap") {
+  readonly reason: "platform_cap";
+  constructor(reason: "platform_cap") {
     super(reason);
     this.reason = reason;
     this.name = "ActivationCapError";
   }
 }
 
-const BILLABLE: ReadonlySet<BillingStatus> = new Set(["trialing", "active", "past_due", "comped"]);
+/**
+ * Accounts that may add (and so be billed for) numbers: a card is on file
+ * (`active`, set when the setup Checkout completes) or the account is comped.
+ * A `pending` account has no card yet, so it is refused.
+ */
+const CARD_ON_FILE: ReadonlySet<BillingStatus> = new Set(["active", "comped"]);
 
-/** Precedence: already_active, billing_inactive, trial_cap, platform_cap. */
+export const hasCardOnFile = (status: BillingStatus): boolean => CARD_ON_FILE.has(status);
+
+/** Precedence: already_active, billing_inactive, platform_cap. */
 export function canActivate(input: {
   billingStatus: BillingStatus;
   alreadyActive: boolean;
-  accountActive: number;
   platformActive: number;
   platformCap: number | null;
 }): { ok: true } | { ok: false; reason: ActivateRefusal } {
   if (input.alreadyActive) return { ok: false, reason: "already_active" };
-  if (!BILLABLE.has(input.billingStatus)) return { ok: false, reason: "billing_inactive" };
-  if (input.billingStatus === "trialing" && input.accountActive >= TRIAL_MAX_SUB_ACCOUNTS) {
-    return { ok: false, reason: "trial_cap" };
-  }
+  if (!hasCardOnFile(input.billingStatus)) return { ok: false, reason: "billing_inactive" };
   if (input.platformCap !== null && input.platformActive >= input.platformCap) {
     return { ok: false, reason: "platform_cap" };
   }

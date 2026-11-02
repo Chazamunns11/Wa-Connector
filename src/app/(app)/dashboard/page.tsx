@@ -8,14 +8,15 @@ import { Container } from "@/components/site/Container";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { getAccountDataSource } from "@/lib/account-data";
 import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
-import { fleetSummary, headline, needsAttention, needsCard, planStatus, TRIAL_REMINDER_DAYS, trialDaysLeft } from "@/lib/account-data/derive";
+import { fleetSummary, headline, needsAttention, needsCard, planStatus } from "@/lib/account-data/derive";
+import { hasCardOnFile } from "@/lib/billing/activation";
 import { isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
 import { billingHref, DASHBOARD_RESULT_COPY, dashboardHref, parseFilter, parseResult } from "@/lib/site/dashboard-url";
 
 import { siteButton } from "@/components/site/button";
-import { addCardAction, endTrialNowAction, startCheckoutAction } from "./billing/actions";
+import { addCardAction, startCheckoutAction } from "./billing/actions";
 
 // Session-gated (requireAccountSession reads cookies): never prerendered.
 export const dynamic = "force-dynamic";
@@ -45,16 +46,13 @@ export default async function DashboardPage({
   const result = parseResult(params.result);
   const now = new Date();
   const source = getAccountDataSource(session, now);
-  const [account, rows] = await Promise.all([source.getAccount(), source.listLocations()]);
-  // Only a trial in its last days needs to know about the card (one Stripe read), for the "add a card" reminder.
-  const nearTrialEnd = account.billingStatus === "trialing" && trialDaysLeft(account.trialEndsAt, now) <= TRIAL_REMINDER_DAYS;
-  const hasCard = nearTrialEnd ? (await source.getBilling(rows)).cardLast4 !== null : undefined;
-  const bannerAction =
-    account.billingStatus === "pending"
-      ? { action: startCheckoutAction, label: "Start your free trial" }
-      : needsCard(account, now, hasCard)
-        ? { action: addCardAction, label: "Add a card" }
-        : undefined;
+  // getBilling here is one database read (number counts), no Stripe call.
+  const [account, rows, billing] = await Promise.all([source.getAccount(), source.listLocations(), source.getBilling()]);
+  const bannerAction = !hasCardOnFile(account.billingStatus)
+    ? { action: startCheckoutAction, label: "Save a card" }
+    : needsCard(account, billing)
+      ? { action: addCardAction, label: "Add a card" }
+      : undefined;
 
   // Both only ever name a row of this account's own list; the link is minted here, never carried in a URL.
   const focusRow = rows.find((r) => r.id === first(params.focus));
@@ -88,8 +86,8 @@ export default async function DashboardPage({
         <Container>
           <PlanHeader
             accountName={account.name}
-            status={planStatus(account, now, { hasCard })}
-            headline={headline(rows)}
+            status={planStatus(account, billing)}
+            headline={headline(billing.billedNumbers)}
             hasLocations={rows.length > 0}
             billingHref={billingHref()}
             summary={summary}
@@ -102,13 +100,6 @@ export default async function DashboardPage({
         {result ? (
           <p role="status" className="mb-6 rounded-[12px] border-2 border-info bg-info-soft p-4 font-medium text-ink">
             {result === "link" && !connectUrl ? DASHBOARD_RESULT_COPY.link_unavailable : DASHBOARD_RESULT_COPY[result]}
-            {result === "trial_cap" && account.billingStatus === "trialing" ? (
-              <form action={endTrialNowAction} className="mt-3">
-                <button type="submit" className={siteButton("ink")}>
-                  Start my paid plan now
-                </button>
-              </form>
-            ) : null}
           </p>
         ) : null}
         <GhlResultNotice

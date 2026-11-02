@@ -1,4 +1,4 @@
-import { NUMBERS_INCLUDED, TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
+import { TRIAL_DAYS } from "@/lib/pricing";
 import type { BrandConfig } from "@/lib/brand-config";
 import { FEATURES, featureEntries } from "@/lib/site/features";
 
@@ -20,14 +20,14 @@ export function IncludedList({ brand }: { brand: BrandConfig }) {
       title: "Every feature on every plan",
       body: `${list[0].toUpperCase()}${list.slice(1)}.${soon ? " WhatsApp groups are coming soon, at no extra charge." : " WhatsApp groups too, at no extra charge."}`,
     },
-    { title: "No setup fee and no charge per message", body: `${brand.name} bills per activated sub-account, with up to ${NUMBERS_INCLUDED} WhatsApp numbers included, and nothing else.` },
+    { title: "No setup fee and no charge per message", body: `${brand.name} bills per WhatsApp number, per month, and nothing else.` },
     {
-      title: `A ${TRIAL_DAYS}-day free trial`,
-      body: `No card needed. It covers up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. If the trial ends before you add a card, sending pauses until you do.`,
+      title: `A ${TRIAL_DAYS}-day free trial on every number`,
+      body: "Save a card once. Each number you add starts its own free trial, and nothing is charged until that trial ends.",
     },
     {
-      title: "Billed monthly per active sub-account",
-      body: "Cancel any time from the billing portal. It takes effect at the end of the period you've paid for.",
+      title: "Billed monthly per number",
+      body: "Each number is its own monthly payment, on the day its trial ended. Remove a number and its billing stops straight away.",
     },
   ];
   return (
