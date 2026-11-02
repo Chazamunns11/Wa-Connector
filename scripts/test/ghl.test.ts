@@ -20,6 +20,7 @@ import {
   exchangeGhlCode,
   getGhlLocationTokenFromAgency,
   ghlAppId,
+  ghlAuthUrl,
   ghlTenantKeyQueryFilters,
   listGhlInstalledLocations,
   ghlGroupContactKey,
@@ -4306,5 +4307,20 @@ test("sendGhlSms: a success without a messageId (or without JSON) still succeeds
   ]) {
     const { result } = await withCapturedFetch(respond, () => sendGhlSms("loc-token", { contactId: "contact-9", message: "hi" }));
     assert.deepEqual(result, { ok: true, messageId: null });
+  }
+});
+
+test("ghlAuthUrl: version_id derives from the client id, and GHL_APP_VERSION_ID overrides it", () => {
+  const saved = process.env.GHL_APP_VERSION_ID;
+  try {
+    delete process.env.GHL_APP_VERSION_ID;
+    assert.equal(new URL(ghlAuthUrl("s")!).searchParams.get("version_id"), "app1234567890");
+    process.env.GHL_APP_VERSION_ID = " v2id ";
+    assert.equal(new URL(ghlAuthUrl("s")!).searchParams.get("version_id"), "v2id");
+    process.env.GHL_APP_VERSION_ID = "  ";
+    assert.equal(new URL(ghlAuthUrl("s")!).searchParams.get("version_id"), "app1234567890");
+  } finally {
+    if (saved === undefined) delete process.env.GHL_APP_VERSION_ID;
+    else process.env.GHL_APP_VERSION_ID = saved;
   }
 });
