@@ -103,6 +103,8 @@ export interface PanelGuardLocation {
   locationId: string;
   label: string;
   status: GhlAccountStatus;
+  /** The HighLevel user behind an embed request (setter seats, 0018), from the signed embed token; null/absent elsewhere. */
+  ghlUserId?: string | null;
 }
 
 /** One config gate, checked in the order supplied — see this file's header, step 0. */

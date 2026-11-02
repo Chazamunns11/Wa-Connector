@@ -282,6 +282,8 @@ interface FakeNumbersRepo extends EmbedNumbersRepo {
   /** Accounts and billing (merge): the location's activation and its owner's billing status. */
   activatedAt: string | null;
   billingStatus: Account["billingStatus"];
+  /** Setter seats (0018): ghlUserId -> tenantId. */
+  userNumbers: Map<string, string>;
 }
 
 function fakeNumbersRepo(initial: LocationNumber[]): FakeNumbersRepo {
@@ -340,6 +342,15 @@ function fakeNumbersRepo(initial: LocationNumber[]): FakeNumbersRepo {
       repo.calls.push(`summary:${tenantId}`);
       return summaryFor(tenantId);
     },
+    userNumbers: new Map(),
+    async getUserTenant(_locationId: string, ghlUserId: string) {
+      return repo.userNumbers.get(ghlUserId) ?? null;
+    },
+    async setUserTenant(_locationId: string, ghlUserId: string, tenantId: string | null) {
+      repo.calls.push(`user:${ghlUserId}:${tenantId}`);
+      if (tenantId) repo.userNumbers.set(ghlUserId, tenantId);
+      else repo.userNumbers.delete(ghlUserId);
+    },
   };
   return repo;
 }
@@ -354,7 +365,7 @@ test("listEmbedNumbers: slot, label, isDefault and a redacted summary per number
       { slot: 2, label: "Sales line", isDefault: false },
     ]
   );
-  assert.deepEqual(Object.keys(numbers[0]).sort(), ["isDefault", "key", "label", "slot", "summary"]);
+  assert.deepEqual(Object.keys(numbers[0]).sort(), ["isDefault", "key", "label", "mine", "slot", "summary"]);
   assert.equal(numbers[0].summary?.phoneNumber, "+447700900123");
   assert.equal(repo.calls.filter((c) => c.startsWith("summary:")).length, 2);
   assertNoTenantId(numbers, "listEmbedNumbers");
@@ -528,4 +539,41 @@ test("decideAddNumber: a cancelled owner account -> 409 billing_paused, nothing 
   assert.equal(result.status, 409);
   assert.equal((result.body as { code: string }).code, "billing_paused");
   assert.equal(repo.numbers.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Setter seats (0018) — "Send my replies from this number"
+// ---------------------------------------------------------------------------
+
+test("decideUpdateNumber: myReplies assigns THIS user (from the signed token) to the slot, and the list marks it mine", async () => {
+  const repo = fakeNumbersRepo(SLOTS_1_2);
+  const result = await decideUpdateNumber(repo, LOCATION_ID, { slot: 2, myReplies: true }, "user-setter");
+  assert.equal(result.status, 200);
+  assert.equal(repo.userNumbers.get("user-setter"), TENANT_2);
+  const numbers = result.status === 200 ? result.body.numbers : [];
+  assert.deepEqual(numbers.map((n) => n.mine), [false, true]);
+  assertNoTenantId(numbers, "decideUpdateNumber myReplies");
+});
+
+test("decideUpdateNumber: myReplies false clears only this number's assignment", async () => {
+  const repo = fakeNumbersRepo(SLOTS_1_2);
+  repo.userNumbers.set("user-setter", TENANT_2);
+  await decideUpdateNumber(repo, LOCATION_ID, { slot: 1, myReplies: false }, "user-setter");
+  assert.equal(repo.userNumbers.get("user-setter"), TENANT_2, "clearing slot 1 must not touch the slot 2 assignment");
+  await decideUpdateNumber(repo, LOCATION_ID, { slot: 2, myReplies: false }, "user-setter");
+  assert.equal(repo.userNumbers.has("user-setter"), false);
+});
+
+test("decideUpdateNumber: myReplies with no user in the token is refused, nothing written", async () => {
+  const repo = fakeNumbersRepo(SLOTS_1_2);
+  const result = await decideUpdateNumber(repo, LOCATION_ID, { slot: 2, myReplies: true }, null);
+  assert.equal(result.status, 400);
+  assert.equal(result.status === 400 && result.body.code, "no_user");
+  assert.equal(repo.userNumbers.size, 0);
+});
+
+test("decideUpdateNumber: a non-boolean myReplies is a malformed body", async () => {
+  const repo = fakeNumbersRepo(SLOTS_1_2);
+  const result = await decideUpdateNumber(repo, LOCATION_ID, { slot: 2, myReplies: "yes" }, "user-setter");
+  assert.equal(result.status, 400);
 });

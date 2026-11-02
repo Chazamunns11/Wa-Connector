@@ -159,6 +159,8 @@ export type GhlProviderRepo = Pick<
   // goes out from (`resolveOutboundSendingNumber` below).
   | "listLocationNumbers"
   | "getStickyTenant"
+  // Setter seats (0018) — the sending user's own number beats sticky.
+  | "getUserTenant"
   // Opt-in groups (Task 9) — a GHL contact standing for a WhatsApp group is
   // sent to that group, from the group's own number
   // (`resolveGroupOutbound` below), and a group our number has left is
@@ -1152,7 +1154,7 @@ export async function handleProviderOutboundMessage(
     // location's default number, never on a number the location no longer has.
     sendingNumber = group
       ? groupSendingNumber(account, group.numberRemoved ? account.tenantId : group.tenantId)
-      : await resolveOutboundSendingNumber(repo, account, contactId);
+      : await resolveOutboundSendingNumber(repo, account, contactId, typeof payload.userId === "string" && payload.userId ? payload.userId : null);
 
     ({ message: row, isNew } = await repo.recordGhlOutboundMessage({
       locationId: account.locationId,
@@ -1570,8 +1572,8 @@ export async function sendAppOriginatedText(
  * see `resolveSendingTenant`'s JSDoc) — then this is exactly the
  * pre-multiple-numbers behaviour.
  */
-function resolveOutboundSendingNumber(repo: GhlProviderRepo, account: GhlAccount, ghlContactId: string): Promise<SendingNumber> {
-  return resolveSendingTenant(repo, account.locationId, ghlContactId, account.tenantId);
+function resolveOutboundSendingNumber(repo: GhlProviderRepo, account: GhlAccount, ghlContactId: string, ghlUserId: string | null = null): Promise<SendingNumber> {
+  return resolveSendingTenant(repo, account.locationId, ghlContactId, account.tenantId, ghlUserId);
 }
 
 /**

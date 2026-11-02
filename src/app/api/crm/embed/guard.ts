@@ -153,7 +153,7 @@ export function requestedSlotFromBody(body: Record<string, unknown> | null): Slo
 /** Checks 0-2, shared verbatim by both guards below. */
 function embedLocationGuardOptions(
   repo: GhlEmbedGuardRepo
-): PanelLocationGuardOptions<{ locationId: string }, "embed_not_configured", "missing_token" | "invalid_token", "unknown_location" | "account_disabled"> {
+): PanelLocationGuardOptions<{ locationId: string; userId: string | null }, "embed_not_configured", "missing_token" | "invalid_token", "unknown_location" | "account_disabled"> {
   return {
     // Check 0 — see this file's header, "THE KILL-SWITCH GAP". Cheapest
     // checks first, same order `POST /api/crm/embed/session` already uses.
@@ -167,7 +167,7 @@ function embedLocationGuardOptions(
       const account = await repo.getGhlAccountByLocationId(verified.locationId);
       if (!account) return { ok: false, status: 403, error: "unknown_location" };
       if (account.status === "disabled") return { ok: false, status: 403, error: "account_disabled" };
-      return { ok: true, location: { locationId: account.locationId, label: account.label, status: account.status } };
+      return { ok: true, location: { locationId: account.locationId, label: account.label, status: account.status, ghlUserId: verified.userId } };
     },
     logPrefix: "[api/crm/embed/guard] authorizeGhlEmbedRequest",
   };

@@ -35,7 +35,7 @@ import { decideAddNumber, decideRemoveNumber, decideUpdateNumber, type NumbersRo
 
 export const dynamic = "force-dynamic";
 
-type Decide = (locationId: string, body: Record<string, unknown> | null) => Promise<NumbersRouteResult>;
+type Decide = (locationId: string, body: Record<string, unknown> | null, ghlUserId: string | null) => Promise<NumbersRouteResult>;
 
 async function handle(request: Request, method: string, decide: Decide): Promise<NextResponse> {
   try {
@@ -44,7 +44,7 @@ async function handle(request: Request, method: string, decide: Decide): Promise
       return NextResponse.json(guardFailureResponseBody(auth), { status: auth.status });
     }
     const body = await readSmallJsonBody(request);
-    const result = await decide(auth.location.locationId, body);
+    const result = await decide(auth.location.locationId, body, auth.location.ghlUserId ?? null);
     return NextResponse.json(result.body, { status: result.status });
   } catch (err) {
     // Never echoes `err` into the response.
@@ -64,5 +64,5 @@ export async function DELETE(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  return handle(request, "PATCH", (locationId, body) => decideUpdateNumber(repo, locationId, body));
+  return handle(request, "PATCH", (locationId, body, ghlUserId) => decideUpdateNumber(repo, locationId, body, ghlUserId));
 }

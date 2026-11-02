@@ -1212,6 +1212,21 @@ test("handleProviderOutboundMessage: a contact sticky to a second number sends f
   assert.equal([...rows.values()][0].tenantId, SECOND_TENANT_ID);
 });
 
+test("handleProviderOutboundMessage (setter seats, 0018): the webhook's userId routes to that user's number, over the contact's sticky number", async () => {
+  const numbers = { [LOCATION_ID]: TWO_NUMBERS[LOCATION_ID].map((n) => ({ ...n })) };
+  const { repo, rows } = createFakeRepo([makeAccount()], { numbers, sticky: STICKY_TO_SECOND });
+  const seen: string[] = [];
+  (repo as unknown as { getUserTenant: (l: string, u: string) => Promise<string | null> }).getUserTenant = async (_l, userId) => {
+    seen.push(userId);
+    return userId === "user-coach" ? TENANT_ID : null;
+  };
+  const { deps, sendCalls } = makeDeps();
+  await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-user", userId: "user-coach" }), deps);
+  assert.deepEqual(seen, ["user-coach"]);
+  assert.equal(sendCalls[0].coachId, TENANT_ID, "the coach's own number, not the contact's sticky second number");
+  assert.equal([...rows.values()][0].tenantId, TENANT_ID);
+});
+
 test("handleProviderOutboundMessage: no sticky row -> the location's default number", async () => {
   const numbers = { [LOCATION_ID]: TWO_NUMBERS[LOCATION_ID].map((n) => ({ ...n, isDefault: n.slot === 2 })) };
   const { repo, rows } = createFakeRepo([makeAccount()], { numbers });

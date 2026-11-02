@@ -193,6 +193,8 @@ export function GhlAccountsPanel({
       ? "The WhatsApp service isn't responding right now — statuses below may be stale."
       : null;
   const resultMessage = ghlResultMessage(result, { installed: installedCount, failed: failedCount, capped: cappedCount });
+  // Extra-number bolt-on: every number beyond a location's first is billable.
+  const extraNumbers = accounts.reduce((sum, a) => sum + Math.max(0, (numbersByLocation[a.locationId]?.length ?? 0) - 1), 0);
 
   return (
     <Card padded={false}>
@@ -222,6 +224,11 @@ export function GhlAccountsPanel({
       ) : null}
       {resultMessage && resultMessage.tone !== "win" && resultError ? (
         <p className="px-5 pt-1 text-xs text-ink-dim">HighLevel said: {resultError}</p>
+      ) : null}
+      {accounts.length > 0 ? (
+        <p className="px-5 pt-2 text-xs text-ink-dim">
+          Extra WhatsApp numbers across all sub-accounts (billable bolt-on): <strong className="text-ink">{extraNumbers}</strong>
+        </p>
       ) : null}
       {headerLine ? (
         <p className={`px-5 pt-2 text-xs ${bridgeConfigured ? "text-warn" : "text-ink-faint"}`}>{headerLine}</p>
@@ -264,6 +271,17 @@ export function GhlAccountsPanel({
                     </Button>
                   </div>
                 </div>
+                {numbers.length > 0 ? (
+                  <ul className="mt-2 flex flex-col gap-0.5 text-xs text-ink-dim" aria-label={`WhatsApp numbers for ${account.label}`}>
+                    {numbers.map((n) => (
+                      <li key={n.slot}>
+                        {n.label ?? `Number ${n.slot}`}
+                        {n.isDefault ? " (default)" : ""}: {n.status ?? "never set up"}
+                        {n.phoneNumber ? ` — ${n.phoneNumber}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {account.status === "needs_reauth" ? (
                   <p className="mt-2 text-xs text-warn">
                     This install needs re-authorising{account.lastError ? ` — ${account.lastError}` : ""}. Reinstall via

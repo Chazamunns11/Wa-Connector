@@ -876,6 +876,26 @@ export class SupabaseGhlRepository implements GhlRepository {
     return data ? (data as { tenant_id: string }).tenant_id : null;
   }
 
+  async getUserTenant(locationId: string, ghlUserId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_user_numbers")
+      .select("tenant_id")
+      .eq("location_id", locationId)
+      .eq("ghl_user_id", ghlUserId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? (data as { tenant_id: string }).tenant_id : null;
+  }
+
+  async setUserTenant(locationId: string, ghlUserId: string, tenantId: string | null) {
+    const supabase = getServiceClient();
+    const { error } = tenantId
+      ? await supabase.from("ghl_user_numbers").upsert({ location_id: locationId, ghl_user_id: ghlUserId, tenant_id: tenantId }, { onConflict: "location_id,ghl_user_id" })
+      : await supabase.from("ghl_user_numbers").delete().eq("location_id", locationId).eq("ghl_user_id", ghlUserId);
+    if (error) throw error;
+  }
+
   async recordInboundForStickiness(locationId: string, ghlContactId: string, tenantId: string, receivedAtIso: string) {
     const supabase = getServiceClient();
     const readExisting = async () => {

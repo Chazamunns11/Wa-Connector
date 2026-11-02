@@ -121,6 +121,12 @@ export interface GhlRepository {
   /** The tenant a contact most recently messaged on, or null (fall back to the default number). */
   getStickyTenant(locationId: string, ghlContactId: string): Promise<string | null>;
 
+  /** Setter seats (0018): the number (tenant) a HighLevel user's replies go out from in this location, or null (sticky/default routing). */
+  getUserTenant(locationId: string, ghlUserId: string): Promise<string | null>;
+
+  /** Set (tenantId) or clear (null) a HighLevel user's sending number in this location. The tenant must be one of the location's numbers (FK). */
+  setUserTenant(locationId: string, ghlUserId: string, tenantId: string | null): Promise<void>;
+
   /** Upsert the contact's sticky number, overwriting only when `receivedAtIso` is strictly newer. */
   recordInboundForStickiness(
     locationId: string,
