@@ -44,7 +44,7 @@ interface UpsertCall {
   companyId: string | null;
   accessToken: string;
   accessTokenExpiresAt: string;
-  refreshToken: string;
+  refreshToken: string | null;
 }
 
 function createFakeRepo(seed: FakeRow[] = []): {
@@ -83,6 +83,11 @@ function createFakeRepo(seed: FakeRow[] = []): {
     },
   } as unknown as GhlOauthCallbackRepo;
   return { repo, byLocation, upsertCalls, claimCalls, createTenantCalls };
+}
+
+/** A successful `getLocationToken` result, as `getGhlLocationTokenFromAgency` returns it. */
+function minted(overrides: Partial<GhlTokens> = {}) {
+  return { ok: true as const, tokens: makeTokens(overrides) };
 }
 
 function makeTokens(overrides: Partial<GhlTokens> = {}): GhlTokens {
@@ -170,11 +175,56 @@ test("installGhlLocation: tokens missing locationId return false without touchin
   assert.equal(bundle.upsertCalls.length, 0);
 });
 
-test("installGhlLocation: tokens missing refreshToken return false without touching the repo", async () => {
+test("installGhlLocation: tokens with neither a refreshToken nor a companyId fail without touching the repo", async () => {
   const bundle = createFakeRepo([]);
-  const ok = await installGhlLocation(bundle.repo, makeTokens({ refreshToken: null }));
+  const ok = await installGhlLocation(bundle.repo, makeTokens({ refreshToken: null, companyId: null }));
   assert.equal(ok, "failed");
   assert.equal(bundle.upsertCalls.length, 0);
+});
+
+// REGRESSION (Nov 2026, /admin?ghl=bulk_failed&installed=0&failed=1): an
+// agency-minted location token has NO refresh token (HighLevel's spec,
+// GetLocationAccessTokenSuccessfulResponseDto). It must install, with a null
+// refresh token, so it is later re-minted from the stored agency token.
+test("installGhlLocation: an agency-minted token (no refreshToken, companyId set) installs with a null refresh token", async () => {
+  const bundle = createFakeRepo([]);
+  const ok = await installGhlLocation(bundle.repo, makeTokens({ locationId: "loc-agency", refreshToken: null, companyId: "company-1" }));
+  assert.equal(ok, "installed");
+  assert.equal(bundle.upsertCalls.length, 1);
+  assert.equal(bundle.upsertCalls[0].refreshToken, null);
+  assert.equal(bundle.upsertCalls[0].companyId, "company-1");
+});
+
+test("runGhlBulkInstall: the real HighLevel locationToken shape (no refresh_token) installs instead of failing silently", async () => {
+  const bundle = createFakeRepo([]);
+  const result = await runGhlBulkInstall(
+    bundle.repo,
+    { getLocationToken: async (companyId, locationId) => minted({ locationId, companyId, refreshToken: null }) },
+    "company-1",
+    [loc("fiIgfPVIACqCyVDiDRuT")]
+  );
+  assert.deepEqual(result, { totalFound: 1, installed: 1, failed: 0, conflicts: 0, skippedOverCap: 0, errors: [] });
+});
+
+test("runGhlBulkInstall: failures carry HighLevel's own error text per location, not just a count", async () => {
+  const bundle = createFakeRepo([]);
+  bundle.repo.upsertGhlAccount = async () => {
+    throw new Error("simulated write failure");
+  };
+  const result = await runGhlBulkInstall(
+    bundle.repo,
+    {
+      getLocationToken: async (_c, locationId) =>
+        locationId === "loc-1" ? { ok: false as const, error: "HighLevel refused a location token: HTTP 401: The token is not authorized for this scope." } : minted({ locationId }),
+    },
+    "company-1",
+    [loc("loc-1"), loc("loc-2")]
+  );
+  assert.equal(result.failed, 2);
+  assert.deepEqual(result.errors, [
+    "loc-1: HighLevel refused a location token: HTTP 401: The token is not authorized for this scope.",
+    "loc-2: Could not save the sub-account: simulated write failure",
+  ]);
 });
 
 test("installGhlLocation: a repo write that throws is caught and returns false, never throws", async () => {
@@ -201,21 +251,21 @@ test("runGhlBulkInstall: every location succeeds -> installed matches, failed is
   const locations = [loc("loc-1"), loc("loc-2"), loc("loc-3")];
   const result = await runGhlBulkInstall(
     bundle.repo,
-    { getLocationToken: async (_companyId, locationId) => makeTokens({ locationId }) },
+    { getLocationToken: async (_companyId, locationId) => minted({ locationId }) },
     "company-1",
     locations
   );
-  assert.deepEqual(result, { totalFound: 3, installed: 3, failed: 0, conflicts: 0, skippedOverCap: 0 });
+  assert.deepEqual(result, { totalFound: 3, installed: 3, failed: 0, conflicts: 0, skippedOverCap: 0, errors: [] });
   assert.equal(bundle.upsertCalls.length, 3);
 });
 
-test("runGhlBulkInstall: some locations fail the token exchange (getLocationToken returns null) — counted, never abort the batch", async () => {
+test("runGhlBulkInstall: some locations fail the token exchange (getLocationToken fails) — counted, never abort the batch", async () => {
   const bundle = createFakeRepo([]);
   const locations = [loc("loc-1"), loc("loc-2"), loc("loc-3"), loc("loc-4")];
   const failing = new Set(["loc-2", "loc-4"]);
   const result = await runGhlBulkInstall(
     bundle.repo,
-    { getLocationToken: async (_companyId, locationId) => (failing.has(locationId) ? null : makeTokens({ locationId })) },
+    { getLocationToken: async (_companyId, locationId) => (failing.has(locationId) ? { ok: false as const, error: "HighLevel refused a location token: HTTP 401: The token is not authorized for this scope." } : minted({ locationId })) },
     "company-1",
     locations
   );
@@ -241,7 +291,7 @@ test("runGhlBulkInstall: some locations fail the SAVE (installGhlLocation itself
   const locations = [loc("loc-1"), loc("loc-2"), loc("loc-3")];
   const result = await runGhlBulkInstall(
     bundle.repo,
-    { getLocationToken: async (_companyId, locationId) => makeTokens({ locationId }) },
+    { getLocationToken: async (_companyId, locationId) => minted({ locationId }) },
     "company-1",
     locations
   );
@@ -252,8 +302,8 @@ test("runGhlBulkInstall: some locations fail the SAVE (installGhlLocation itself
 
 test("runGhlBulkInstall: zero locations returned -> a completely empty, honest result, never an error", async () => {
   const bundle = createFakeRepo([]);
-  const result = await runGhlBulkInstall(bundle.repo, { getLocationToken: async () => makeTokens() }, "company-1", []);
-  assert.deepEqual(result, { totalFound: 0, installed: 0, failed: 0, conflicts: 0, skippedOverCap: 0 });
+  const result = await runGhlBulkInstall(bundle.repo, { getLocationToken: async () => minted() }, "company-1", []);
+  assert.deepEqual(result, { totalFound: 0, installed: 0, failed: 0, conflicts: 0, skippedOverCap: 0, errors: [] });
   assert.equal(bundle.upsertCalls.length, 0);
 });
 
@@ -267,7 +317,7 @@ test("runGhlBulkInstall: more locations than the cap -> only `cap` are attempted
     {
       getLocationToken: async (_companyId, locationId) => {
         calls++;
-        return makeTokens({ locationId });
+        return minted({ locationId });
       },
     },
     "company-1",
@@ -283,7 +333,7 @@ test("runGhlBulkInstall: more locations than the cap -> only `cap` are attempted
 test("runGhlBulkInstall: with no explicit cap argument, defaults to GHL_BULK_INSTALL_CAP", async () => {
   const bundle = createFakeRepo([]);
   const locations = Array.from({ length: GHL_BULK_INSTALL_CAP + 2 }, (_, i) => loc(`loc-${i + 1}`));
-  const result = await runGhlBulkInstall(bundle.repo, { getLocationToken: async (_companyId, locationId) => makeTokens({ locationId }) }, "company-1", locations);
+  const result = await runGhlBulkInstall(bundle.repo, { getLocationToken: async (_companyId, locationId) => minted({ locationId }) }, "company-1", locations);
   assert.equal(result.installed, GHL_BULK_INSTALL_CAP);
   assert.equal(result.skippedOverCap, 2);
 });
@@ -301,7 +351,7 @@ test("runGhlBulkInstall: locations are exchanged SEQUENTIALLY, never overlapping
         // loc-2/loc-3's "start" events would land BEFORE loc-1's "end".
         await new Promise((resolve) => setTimeout(resolve, locationId === "loc-1" ? 20 : 0));
         events.push(`end-${locationId}`);
-        return makeTokens({ locationId });
+        return minted({ locationId });
       },
     },
     "company-1",
@@ -366,13 +416,13 @@ test("runGhlBulkInstall: one location owned elsewhere is skipped and counted, th
   const seen: string[] = [];
   const result = await runGhlBulkInstall(
     bundle.repo,
-    { getLocationToken: async (_c, locationId) => makeTokens({ locationId }), onConflict: (id) => void seen.push(id) },
+    { getLocationToken: async (_c, locationId) => minted({ locationId }), onConflict: (id) => void seen.push(id) },
     "company-1",
     [loc("loc-1"), loc("loc-2"), loc("loc-3")],
     GHL_BULK_INSTALL_CAP,
     "acc-1"
   );
-  assert.deepEqual(result, { totalFound: 3, installed: 2, failed: 0, conflicts: 1, skippedOverCap: 0 });
+  assert.deepEqual(result, { totalFound: 3, installed: 2, failed: 0, conflicts: 1, skippedOverCap: 0, errors: [] });
   assert.deepEqual(seen, ["loc-2"]);
   assert.deepEqual(bundle.claimCalls.map((c) => c.locationId), ["loc-1", "loc-3"]);
 });

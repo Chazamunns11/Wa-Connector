@@ -147,6 +147,7 @@ export function GhlAccountsPanel({
   installedCount,
   failedCount,
   cappedCount,
+  resultError,
 }: {
   accounts: GhlAccountSummary[];
   /**
@@ -176,6 +177,8 @@ export function GhlAccountsPanel({
   failedCount?: number;
   /** `> 0` means `GHL_BULK_INSTALL_CAP` (src/app/api/crm/oauth/callback/logic.ts) was hit this run — surfaced rather than silently dropped, per this repo's "no silent caps" convention. */
   cappedCount?: number;
+  /** HighLevel's own reason for a failed install (`?error=` from the OAuth callback), shown under a failure banner only. Plain text, React-escaped, capped by the page. */
+  resultError?: string;
 }) {
   // Which row (by tenantId) currently has its connect panel expanded — at
   // most one at a time, mirroring the coach card's single-QR-surface rule
@@ -216,6 +219,9 @@ export function GhlAccountsPanel({
         >
           {resultMessage.text}
         </p>
+      ) : null}
+      {resultMessage && resultMessage.tone !== "win" && resultError ? (
+        <p className="px-5 pt-1 text-xs text-ink-dim">HighLevel said: {resultError}</p>
       ) : null}
       {headerLine ? (
         <p className={`px-5 pt-2 text-xs ${bridgeConfigured ? "text-warn" : "text-ink-faint"}`}>{headerLine}</p>

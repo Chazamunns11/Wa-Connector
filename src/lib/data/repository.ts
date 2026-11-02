@@ -14,6 +14,7 @@ import type {
   GhlAccount,
   GhlAccountBrandingPatch,
   GhlAccountDraft,
+  GhlCompany,
   GhlAccountSummary,
   GhlHealthSnapshot,
   GhlOutboundAttachment,
@@ -277,7 +278,21 @@ export interface GhlRepository {
    * credential is good again. Called from `src/lib/ghl-provider.ts`'s
    * `resolveGhlAccessToken` (Phase 2).
    */
-  saveGhlTokens(locationId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string }): Promise<void>;
+  saveGhlTokens(locationId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string | null }): Promise<void>;
+
+  /**
+   * Agency installs (migration 0017) — the Company token an agency install
+   * hands back, one row per HighLevel company. Upserted by the OAuth callback
+   * (resets status to active); read and refreshed by `resolveGhlAccessToken`
+   * to mint location tokens for accounts with no refresh token of their own.
+   * Same single-flight claim contract as `claimGhlTokenRefresh`: HighLevel
+   * refresh tokens rotate on use, so only the claim winner may spend one.
+   */
+  getGhlCompany(companyId: string): Promise<GhlCompany | null>;
+  upsertGhlCompany(company: { companyId: string; accessToken: string; accessTokenExpiresAt: string; refreshToken: string; scope: string | null }): Promise<void>;
+  saveGhlCompanyTokens(companyId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string }): Promise<void>;
+  claimGhlCompanyTokenRefresh(companyId: string): Promise<boolean>;
+  markGhlCompanyNeedsReauth(companyId: string, error: string): Promise<void>;
 
   /**
    * GHL rejected the refresh token (`invalid_grant`) — flips `status` to

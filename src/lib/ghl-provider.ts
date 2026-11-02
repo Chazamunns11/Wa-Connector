@@ -97,10 +97,13 @@ import {
   deriveIdempotencyKey,
   deriveMediaFallbackIdempotencyKey,
   isAppOriginatedMessageId,
+  getGhlLocationTokenFromAgency,
   isMediaOutboundEnabled,
+  refreshGhlCompanyToken,
   refreshGhlToken,
   type sendGhlSms,
   updateGhlMessageStatus,
+  type GhlLocationTokenResult,
   type RefreshGhlTokenResult,
 } from "@/lib/ghl";
 import { brandConfig } from "@/lib/brand-config";
@@ -140,6 +143,11 @@ export type GhlProviderRepo = Pick<
   | "claimGhlTokenRefresh"
   | "saveGhlTokens"
   | "markGhlNeedsReauth"
+  // Agency installs (0017) — `resolveGhlAccessToken`'s mint path.
+  | "getGhlCompany"
+  | "claimGhlCompanyTokenRefresh"
+  | "saveGhlCompanyTokens"
+  | "markGhlCompanyNeedsReauth"
   // Media plan (docs/MEDIA-PLAN.md §5, build-order step 8) — outbound
   // attachment parts (`handleMediaSplitOutbound`/`drainMultipartRow` below).
   | "recordGhlOutboundAttachments"
@@ -184,7 +192,17 @@ export type GhlProviderRepo = Pick<
  * …) it never calls. `GhlProviderRepo` already contains all four of these,
  * so every existing call site below keeps typechecking unchanged.
  */
-export type GhlTokenRefreshRepo = Pick<GhlRepository, "getGhlAccountByLocationId" | "claimGhlTokenRefresh" | "saveGhlTokens" | "markGhlNeedsReauth">;
+export type GhlTokenRefreshRepo = Pick<
+  GhlRepository,
+  | "getGhlAccountByLocationId"
+  | "claimGhlTokenRefresh"
+  | "saveGhlTokens"
+  | "markGhlNeedsReauth"
+  | "getGhlCompany"
+  | "claimGhlCompanyTokenRefresh"
+  | "saveGhlCompanyTokens"
+  | "markGhlCompanyNeedsReauth"
+>;
 
 /**
  * The Delivery URL's parsed payload (plan §0's confirmed field list for
@@ -237,6 +255,9 @@ export interface GhlProviderDeps {
     errorMessage?: string
   ) => Promise<{ ok: true } | { ok: false; error: string; status?: number }>;
   refreshToken: (refreshToken: string) => Promise<RefreshGhlTokenResult>;
+  /** Agency installs (migration 0017): refresh the agency token, and mint a location token from it. Optional so existing fakes keep working; unset, the real `refreshGhlCompanyToken` / `getGhlLocationTokenFromAgency`. */
+  refreshCompanyToken?: (refreshToken: string) => Promise<RefreshGhlTokenResult>;
+  mintLocationToken?: (agencyAccessToken: string, companyId: string, locationId: string) => Promise<GhlLocationTokenResult>;
   /** How long the loser of `claimGhlTokenRefresh` waits before re-reading (plan's D2 — "sleep ~1s"). Overridable so tests don't actually wait a second. */
   refreshWaitMs: number;
   /**
@@ -490,7 +511,7 @@ async function runSmsFallback(
 }
 
 /** The narrow slice `resolveGhlAccessToken` actually touches — see `GhlTokenRefreshRepo`'s identical rationale, just for `deps` instead of `repo`. `GhlProviderDeps` already contains all three, so `defaultGhlProviderDeps` (and every existing call site) keeps typechecking unchanged. */
-export type GhlTokenRefreshDeps = Pick<GhlProviderDeps, "refreshToken" | "refreshWaitMs" | "notify">;
+export type GhlTokenRefreshDeps = Pick<GhlProviderDeps, "refreshToken" | "refreshCompanyToken" | "mintLocationToken" | "refreshWaitMs" | "notify">;
 
 /** How stale `accessTokenExpiresAt` may be before a send/status call proactively refreshes rather than risking a 401 mid-flight. */
 const TOKEN_EXPIRY_SKEW_MS = 60_000;
@@ -806,6 +827,10 @@ export async function resolveGhlAccessToken(repo: GhlTokenRefreshRepo, deps: Ghl
     return null;
   }
 
+  // Agency install with no location refresh token (migration 0017): mint a
+  // new location token from the agency token instead of refreshing.
+  if (!account.refreshToken) return mintGhlTokenFromAgency(repo, deps, account);
+
   const won = await repo.claimGhlTokenRefresh(account.locationId);
   if (!won) {
     // Someone else is refreshing right now — sleep briefly and read what they
@@ -848,6 +873,69 @@ export async function resolveGhlAccessToken(repo: GhlTokenRefreshRepo, deps: Ghl
     refreshToken: tokens.refreshToken ?? account.refreshToken,
   });
   return tokens.accessToken;
+}
+
+/**
+ * An agency-installed location's token, re-minted with `POST
+ * /oauth/locationToken` from the stored agency token (`ghl_companies`).
+ * Minting spends nothing, so it needs no claim; refreshing the AGENCY token
+ * does (its refresh token rotates), so that is single-flight exactly like
+ * the location refresh above. A definitive refusal marks the location
+ * needs_reauth so it shows on the admin page — the fix is to install again
+ * from the agency chooser.
+ */
+async function mintGhlTokenFromAgency(repo: GhlTokenRefreshRepo, deps: GhlTokenRefreshDeps, account: GhlAccount): Promise<string | null> {
+  const needsReinstall = async (reason: string) => {
+    await repo.markGhlNeedsReauth(account.locationId, reason);
+    deps.notify(`GHL location ${account.locationId} (${account.label}) needs reinstalling from the agency — ${reason}. WhatsApp sending is paused until then.`);
+    return null;
+  };
+  if (!account.companyId) return needsReinstall("no refresh token and no agency install to mint one from");
+  const company = await repo.getGhlCompany(account.companyId);
+  if (!company) return needsReinstall("the agency connection is missing");
+  if (company.status !== "active") return needsReinstall("the agency connection needs reconnecting");
+
+  let agencyToken: string | null = isAccessTokenFresh(company.accessToken, company.accessTokenExpiresAt) ? company.accessToken : null;
+  if (!agencyToken) {
+    if (!(await repo.claimGhlCompanyTokenRefresh(company.companyId))) {
+      await sleep(deps.refreshWaitMs);
+      const fresh = await repo.getGhlCompany(company.companyId);
+      if (!fresh || fresh.status !== "active" || !isAccessTokenFresh(fresh.accessToken, fresh.accessTokenExpiresAt)) return null;
+      agencyToken = fresh.accessToken;
+    } else {
+      const refreshed = await (deps.refreshCompanyToken ?? refreshGhlCompanyToken)(company.refreshToken);
+      if (!refreshed.ok) {
+        if (refreshed.kind === "invalid_grant") {
+          await repo.markGhlCompanyNeedsReauth(company.companyId, "GHL rejected the agency refresh token");
+          return needsReinstall("HighLevel rejected the agency refresh token");
+        }
+        console.error(`[ghl-provider] agency token refresh for company ${company.companyId} failed transiently — will retry on the next call`);
+        return null;
+      }
+      await repo.saveGhlCompanyTokens(company.companyId, {
+        accessToken: refreshed.tokens.accessToken,
+        accessTokenExpiresAt: refreshed.tokens.expiresAt,
+        refreshToken: refreshed.tokens.refreshToken ?? company.refreshToken,
+      });
+      agencyToken = refreshed.tokens.accessToken;
+    }
+  }
+
+  const minted = await (deps.mintLocationToken ?? getGhlLocationTokenFromAgency)(agencyToken, company.companyId, account.locationId);
+  if (!minted.ok) {
+    // Logged, left active: the next send/drain pass tries again. The message
+    // rows themselves carry the failure into the admin view.
+    console.error(`[ghl-provider] could not mint a token for location ${account.locationId}: ${minted.error}`);
+    return null;
+  }
+  // If HighLevel did include a refresh token, saving it makes this location
+  // self-refreshing from now on.
+  await repo.saveGhlTokens(account.locationId, {
+    accessToken: minted.tokens.accessToken,
+    accessTokenExpiresAt: minted.tokens.expiresAt,
+    refreshToken: minted.tokens.refreshToken,
+  });
+  return minted.tokens.accessToken;
 }
 
 const REASON_SENDING_NUMBER_NOT_ON_LOCATION = "Sending number isn't on this sub-account — not sent";

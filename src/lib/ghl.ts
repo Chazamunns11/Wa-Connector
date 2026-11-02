@@ -105,6 +105,14 @@ const SCOPES = [
   "contacts.readonly",
   "contacts.write",
   "conversations/message.readonly",
+  // Agency (bulk) installs — HighLevel's spec (apps/oauth.json) marks
+  // GET /oauth/installedLocations `Agency-Access-Only: oauth.readonly` and
+  // POST /oauth/locationToken `Agency-Access-Only: oauth.write`. Without
+  // oauth.write an agency install cannot get a single location token.
+  // Both must ALSO be ticked on the app in the developer portal first:
+  // asking for a scope the app hasn't enabled breaks the install.
+  "oauth.readonly",
+  "oauth.write",
 ];
 
 /**
@@ -281,6 +289,8 @@ export type GhlExchangeResult =
       refreshToken: string | null;
       expiresAt: string;
       companyId: string;
+      /** The scopes HighLevel says it granted (space-separated), or null if it didn't say. Not secret — logged and stored so a missing `oauth.write` is diagnosable. */
+      scope: string | null;
       /** `json.isBulkInstallation === true` on the raw exchange response — diagnostic only (nothing here branches on it; a Company-scoped token is handled identically whether or not this is set), kept because it is the ONE field in the production log above that explains WHY GHL chose to issue a Company token at all. */
       isBulkInstall: boolean;
     };
@@ -442,6 +452,7 @@ export async function exchangeGhlCode(code: string): Promise<GhlExchangeResult |
     refreshToken: tokens.refreshToken,
     expiresAt: tokens.expiresAt,
     companyId: tokens.companyId,
+    scope: typeof result.json.scope === "string" ? result.json.scope : null,
     isBulkInstall: result.json.isBulkInstallation === true,
   };
 }
@@ -464,7 +475,7 @@ export async function exchangeGhlCode(code: string): Promise<GhlExchangeResult |
  */
 export type RefreshGhlTokenResult = { ok: true; tokens: GhlTokens } | { ok: false; kind: "invalid_grant" | "transient" };
 
-export async function refreshGhlToken(refreshToken: string): Promise<RefreshGhlTokenResult> {
+export async function refreshGhlToken(refreshToken: string, userType: "Location" | "Company" = "Location"): Promise<RefreshGhlTokenResult> {
   const env = ghlEnv();
   // Unconfigured is a deployment/config state, not evidence the refresh
   // token is bad — transient (self-heals the moment the env vars are set).
@@ -474,12 +485,30 @@ export async function refreshGhlToken(refreshToken: string): Promise<RefreshGhlT
     client_secret: env.clientSecret,
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    user_type: "Location",
+    user_type: userType,
   });
   if (!result.ok) return result;
   const tokens = tokensFrom(result.json);
   if (!tokens) return { ok: false, kind: "transient" };
   return { ok: true, tokens: { ...tokens, refreshToken: tokens.refreshToken ?? refreshToken } };
+}
+
+/** Refresh an agency (Company) token — `user_type: "Company"` per HighLevel's GetAccessCodebodyDto. Same discriminated result as `refreshGhlToken`. */
+export function refreshGhlCompanyToken(refreshToken: string): Promise<RefreshGhlTokenResult> {
+  return refreshGhlToken(refreshToken, "Company");
+}
+
+/**
+ * HighLevel's own error text for a non-2xx API response, for showing to the
+ * operator: `HTTP 401: The token is not authorized for this scope.` Reads
+ * the body's `message` (string or string[]) and `error` fields only — error
+ * bodies carry no tokens. Capped at 300 chars.
+ */
+export async function ghlErrorDetail(res: Response): Promise<string> {
+  const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  const message = Array.isArray(json?.message) ? json.message.filter((m) => typeof m === "string").join("; ") : json?.message;
+  const detail = firstString(message, json?.error);
+  return `HTTP ${res.status}${detail ? `: ${detail}` : ""}`.slice(0, 300);
 }
 
 /**
@@ -502,15 +531,19 @@ export function ghlAppId(): string | null {
  * same investigation that diagnosed the production `no_location` bug — see this file's header and
  * `GhlExchangeResult`'s own JSDoc).
  *
- * Never throws — `null` on any non-2xx response, an unparseable body, or a parsed body that (per
- * `tokensFrom`) still carries no `locationId` — that last case would mean GHL accepted the request
- * but somehow still didn't scope the result to the location asked for, which this function treats
- * exactly like any other failure rather than handing the caller a token it can't attribute to a
- * location. Same never-log-the-token-or-body discipline as every other export here: only HTTP
- * status is ever logged on failure, never the agency token, the response body, or the derived
- * token.
+ * Requires the agency-only `oauth.write` scope (apps/oauth.json). Never throws — `{ ok: false,
+ * error }` carries HighLevel's own error text (`ghlErrorDetail`: status + the error body's
+ * message, which holds no tokens) so the install callback can show the real reason instead of a
+ * bare count. A 2xx body with no `locationId` is a failure too.
+ *
+ * REFRESH TOKEN MAY BE ABSENT: HighLevel's OpenAPI response schema has no `refresh_token`, while
+ * its TargetUserSubAccount sample shows one. Both are handled: with one, the location refreshes
+ * itself like any other install; without one (`refreshToken: null`), it is re-minted from the
+ * stored agency token (`ghl_companies`, migration 0017).
  */
-export async function getGhlLocationTokenFromAgency(agencyAccessToken: string, companyId: string, locationId: string): Promise<GhlTokens | null> {
+export type GhlLocationTokenResult = { ok: true; tokens: GhlTokens } | { ok: false; error: string };
+
+export async function getGhlLocationTokenFromAgency(agencyAccessToken: string, companyId: string, locationId: string): Promise<GhlLocationTokenResult> {
   try {
     const res = await fetch(`${API_BASE}/oauth/locationToken`, {
       method: "POST",
@@ -524,17 +557,19 @@ export async function getGhlLocationTokenFromAgency(agencyAccessToken: string, c
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!res.ok) {
-      console.error(`[ghl] oauth/locationToken rejected: HTTP ${res.status}`);
-      return null;
+      const error = await ghlErrorDetail(res);
+      console.error(`[ghl] oauth/locationToken rejected for location ${locationId}: ${error}`);
+      return { ok: false, error: `HighLevel refused a location token: ${error}` };
     }
     const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!json) return null;
-    const tokens = tokensFrom(json);
-    if (!tokens || !tokens.locationId) return null;
-    return tokens;
+    const tokens = json ? tokensFrom(json) : null;
+    if (!tokens || !tokens.locationId) return { ok: false, error: "HighLevel's location token response had no location id" };
+    // The spec's response has no companyId; we know it, so carry it — a
+    // location with no refresh token is re-minted from this company's token.
+    return { ok: true, tokens: { ...tokens, companyId: tokens.companyId ?? companyId } };
   } catch (err) {
     console.error("[ghl] oauth/locationToken unreachable:", err);
-    return null;
+    return { ok: false, error: "HighLevel's location token endpoint did not answer" };
   }
 }
 
@@ -596,9 +631,14 @@ export function parseGhlInstalledLocations(json: unknown): GhlInstalledLocation[
  * handled far more defensively than `oauth/locationToken`'s. Never throws — `null` on any non-2xx
  * response or a body `parseGhlInstalledLocations` can't make sense of.
  */
-export async function listGhlInstalledLocations(agencyAccessToken: string, companyId: string, appId: string): Promise<GhlInstalledLocation[] | null> {
+export async function listGhlInstalledLocations(
+  agencyAccessToken: string,
+  companyId: string,
+  appId: string
+): Promise<{ ok: true; locations: GhlInstalledLocation[] } | { ok: false; error: string }> {
   try {
-    const params = new URLSearchParams({ companyId, appId });
+    // `limit` defaults to 20 in HighLevel's spec — ask for more than the bulk cap.
+    const params = new URLSearchParams({ companyId, appId, limit: "100" });
     const res = await fetch(`${API_BASE}/oauth/installedLocations?${params.toString()}`, {
       method: "GET",
       headers: {
@@ -609,14 +649,16 @@ export async function listGhlInstalledLocations(agencyAccessToken: string, compa
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (!res.ok) {
-      console.error(`[ghl] oauth/installedLocations rejected: HTTP ${res.status}`);
-      return null;
+      const error = await ghlErrorDetail(res);
+      console.error(`[ghl] oauth/installedLocations rejected: ${error}`);
+      return { ok: false, error: `HighLevel would not list the installed sub-accounts: ${error}` };
     }
     const json = await res.json().catch(() => null);
-    return parseGhlInstalledLocations(json);
+    const locations = parseGhlInstalledLocations(json);
+    return locations ? { ok: true, locations } : { ok: false, error: "HighLevel's installed sub-accounts response was not recognised" };
   } catch (err) {
     console.error("[ghl] oauth/installedLocations unreachable:", err);
-    return null;
+    return { ok: false, error: "HighLevel's installed sub-accounts endpoint did not answer" };
   }
 }
 

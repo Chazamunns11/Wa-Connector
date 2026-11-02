@@ -118,6 +118,7 @@ export default async function DashboardPage({
           installed={count(params.installed)}
           failed={count(params.failed)}
           conflicts={count(params.conflicts)}
+          error={first(params.error)}
         />
 
         <section aria-labelledby="subaccounts">

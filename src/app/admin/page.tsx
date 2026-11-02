@@ -28,9 +28,9 @@ export const dynamic = "force-dynamic";
 export default async function AdminPage({
   searchParams,
 }: {
-  searchParams: Promise<{ ghl?: string; installed?: string; failed?: string; capped?: string }>;
+  searchParams: Promise<{ ghl?: string; installed?: string; failed?: string; capped?: string; error?: string }>;
 }) {
-  const { ghl, installed, failed, capped } = await searchParams;
+  const { ghl, installed, failed, capped, error } = await searchParams;
   // User-controlled query params, however plain-looking — parsed
   // defensively rather than trusted: a tampered/garbage count
   // (`installed=abc`, a negative number, `NaN`) must degrade to "not shown"
@@ -110,6 +110,7 @@ export default async function AdminPage({
           installedCount={ghlInstalledCount}
           failedCount={ghlFailedCount}
           cappedCount={ghlCappedCount}
+          resultError={typeof error === "string" ? error.slice(0, 500) : undefined}
         />
 
         <GhlHealthPanel snapshot={ghlHealth} nowMs={nowMs()} />

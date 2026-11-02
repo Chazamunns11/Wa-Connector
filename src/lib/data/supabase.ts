@@ -18,6 +18,7 @@ import type {
   GhlAccount,
   GhlAccountBrandingPatch,
   GhlAccountDraft,
+  GhlCompany,
   GhlAccountStatus,
   GhlAccountSummary,
   GhlOutboundAttachment,
@@ -249,7 +250,7 @@ interface GhlAccountRow {
   conversation_provider_id: string | null;
   access_token: string | null;
   access_token_expires_at: string | null;
-  refresh_token: string;
+  refresh_token: string | null;
   status: string;
   last_error: string | null;
   created_at: string;
@@ -1159,10 +1160,66 @@ export class SupabaseGhlRepository implements GhlRepository {
     return (data as { id: string }).id;
   }
 
-  async saveGhlTokens(locationId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string }) {
+  async saveGhlTokens(locationId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string | null }) {
     const supabase = getServiceClient();
     const { error } = await supabase
       .from("ghl_accounts")
+      .update({
+        access_token: tokens.accessToken,
+        access_token_expires_at: tokens.accessTokenExpiresAt,
+        // An agency-minted token has no refresh token: never null out a stored one.
+        ...(tokens.refreshToken ? { refresh_token: tokens.refreshToken } : {}),
+        status: "active",
+        last_error: null,
+        token_refresh_claimed_at: null,
+      })
+      .eq("location_id", locationId);
+    if (error) throw error;
+  }
+
+  async getGhlCompany(companyId: string): Promise<GhlCompany | null> {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_companies")
+      .select("company_id, access_token, access_token_expires_at, refresh_token, scope, status, last_error")
+      .eq("company_id", companyId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const row = data as Record<string, string | null>;
+    return {
+      companyId: row.company_id as string,
+      accessToken: row.access_token as string,
+      accessTokenExpiresAt: row.access_token_expires_at as string,
+      refreshToken: row.refresh_token as string,
+      scope: row.scope,
+      status: row.status === "needs_reauth" ? "needs_reauth" : "active",
+      lastError: row.last_error,
+    };
+  }
+
+  async upsertGhlCompany(company: { companyId: string; accessToken: string; accessTokenExpiresAt: string; refreshToken: string; scope: string | null }) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_companies").upsert(
+      {
+        company_id: company.companyId,
+        access_token: company.accessToken,
+        access_token_expires_at: company.accessTokenExpiresAt,
+        refresh_token: company.refreshToken,
+        scope: company.scope,
+        status: "active",
+        last_error: null,
+        token_refresh_claimed_at: null,
+      },
+      { onConflict: "company_id" }
+    );
+    if (error) throw error;
+  }
+
+  async saveGhlCompanyTokens(companyId: string, tokens: { accessToken: string; accessTokenExpiresAt: string; refreshToken: string }) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_companies")
       .update({
         access_token: tokens.accessToken,
         access_token_expires_at: tokens.accessTokenExpiresAt,
@@ -1171,7 +1228,29 @@ export class SupabaseGhlRepository implements GhlRepository {
         last_error: null,
         token_refresh_claimed_at: null,
       })
-      .eq("location_id", locationId);
+      .eq("company_id", companyId);
+    if (error) throw error;
+  }
+
+  async claimGhlCompanyTokenRefresh(companyId: string) {
+    const supabase = getServiceClient();
+    const staleBefore = new Date(Date.now() - 30_000).toISOString();
+    const { data, error } = await supabase
+      .from("ghl_companies")
+      .update({ token_refresh_claimed_at: new Date().toISOString() })
+      .eq("company_id", companyId)
+      .or(`token_refresh_claimed_at.is.null,token_refresh_claimed_at.lt.${staleBefore}`)
+      .select("company_id");
+    if (error) throw error;
+    return (data?.length ?? 0) > 0;
+  }
+
+  async markGhlCompanyNeedsReauth(companyId: string, error_: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ghl_companies")
+      .update({ status: "needs_reauth", last_error: error_.slice(0, 500), token_refresh_claimed_at: null })
+      .eq("company_id", companyId);
     if (error) throw error;
   }
 
