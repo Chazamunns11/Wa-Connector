@@ -234,7 +234,7 @@ test("createNumberSubscription: one inline-priced monthly item on STRIPE_PRODUCT
         params: {
           customer: "cus",
           items: [{ price_data: { currency: "gbp", product: "prod_1", unit_amount: 799, recurring: { interval: "month" } } }],
-          metadata: { account_id: "acc-1", location_id: "loc-1", tenant_id: "t1" },
+          metadata: { account_id: "acc-1", location_id: "loc-1", tenant_id: "t1", pingwren_mrr: "0" },
           payment_behavior: "allow_incomplete",
           trial_period_days: 7,
           trial_settings: { end_behavior: { missing_payment_method: "pause" } },

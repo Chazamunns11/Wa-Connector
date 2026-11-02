@@ -175,7 +175,9 @@ export async function createNumberSubscription(
   const params: Record<string, unknown> = {
     customer: input.customerId,
     items: [{ price_data: priceData(cfg.productId, input.unitAmountPence) }],
-    metadata: { account_id: input.accountId, location_id: input.locationId, tenant_id: input.tenantId },
+    // pingwren_mrr "0": the shared Stripe account's mrr-sync skips these, so agency
+    // number fees don't count as coach CRM MRR.
+    metadata: { account_id: input.accountId, location_id: input.locationId, tenant_id: input.tenantId, pingwren_mrr: "0" },
     payment_behavior: "allow_incomplete",
     ...(input.trial
       ? { trial_period_days: TRIAL_DAYS, trial_settings: { end_behavior: { missing_payment_method: "pause" } } }
