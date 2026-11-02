@@ -16,6 +16,7 @@ export function generateMetadata(): Metadata {
 /** The docs index cards. Built per render, so the brand name comes from the runtime config. */
 function docsList(name: string) {
   return [
+    { href: SITE_ROUTES.start, title: "Get started in 3 steps", text: "For agency owners: pay, connect GoHighLevel, send your client a link. About five minutes." },
     { href: SITE_ROUTES.setup, title: "Setup guide", text: "Install, set the Telephony Provider, scan the QR code and send a test. About ten minutes." },
     { href: SITE_ROUTES.connect, title: "How to connect", text: "A two-page sheet for whoever scans the QR code. Print it or send the PDF to your client." },
     { href: SITE_ROUTES.faq, title: "FAQ", text: "Straight answers on linked devices, ban risk, the daily cap and what happens when a phone goes offline." },

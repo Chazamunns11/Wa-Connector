@@ -22,6 +22,7 @@ import {
   connectNumberAction,
   listNumbersAction,
   logoutNumberAction,
+  numberLinkAction,
   pollNumberAction,
   removeNumberAction,
   updateNumberAction,
@@ -60,6 +61,7 @@ export function LocationNumbersPanel({
   const [confirmRemove, setConfirmRemove] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [newLabel, setNewLabel] = useState("");
+  const [link, setLink] = useState<{ slot: number; url: string } | null>(null);
 
   const apply = useCallback((r: NumbersResult) => {
     if (r.ok) {
@@ -134,6 +136,18 @@ export function LocationNumbersPanel({
                   <Button size="sm" variant="secondary" disabled={busy} onClick={() => setOpen(open === n.slot ? null : n.slot)}>
                     {open === n.slot ? "Close" : n.summary?.status === "connected" ? "Manage" : "Connect"}
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={async () => {
+                      const url = await numberLinkAction(locationId, n.slot);
+                      if (url) setLink({ slot: n.slot, url });
+                      else setError("Links aren't available right now. Use Connect to show the QR code here instead.");
+                    }}
+                  >
+                    Get link
+                  </Button>
                   {!n.isDefault ? (
                     <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run(() => updateNumberAction(locationId, { slot: n.slot, makeDefault: true }))}>
                       Make default
@@ -157,6 +171,19 @@ export function LocationNumbersPanel({
                   ) : null}
                 </div>
               </div>
+
+              {link?.slot === n.slot ? (
+                <div className="mt-2 flex flex-col gap-1">
+                  <input
+                    readOnly
+                    aria-label={`Connect link for ${title}`}
+                    value={link.url}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="w-full rounded-md border border-divider bg-transparent px-2 py-1 font-mono text-xs text-ink"
+                  />
+                  <p className="text-xs text-ink-dim">Send this to whoever has this number&rsquo;s phone. They open it and scan the QR code. It works for 7 days.</p>
+                </div>
+              ) : null}
 
               {renaming === n.slot ? (
                 <form
