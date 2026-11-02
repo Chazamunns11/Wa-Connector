@@ -227,7 +227,7 @@ export function GhlAccountsPanel({
       ) : null}
       {accounts.length > 0 ? (
         <p className="px-5 pt-2 text-xs text-ink-dim">
-          Extra WhatsApp numbers across all sub-accounts (beyond each one's first): <strong className="text-ink">{extraNumbers}</strong>
+          Extra WhatsApp numbers across all sub-accounts (beyond each one&rsquo;s first): <strong className="text-ink">{extraNumbers}</strong>
         </p>
       ) : null}
       {headerLine ? (
