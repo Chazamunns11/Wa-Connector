@@ -63,6 +63,12 @@ support replies. The logic is in `src/lib/public-status.ts`.
 
 ## Install for a new client sub-account
 
+> **Live PortalHub clients share this agency.** In the agency install chooser,
+> tick only the sub-accounts that are moving to PingWren. Never "approve all",
+> and never set PingWren as the SMS provider on a sub-account PortalHub still
+> serves, or link a number that is already linked to PortalHub: that sub-account
+> would get every inbound message twice, or stop sending through PortalHub.
+
 1. **Install the app.** Either from the agency (Marketplace, agency view, pick
    the sub-accounts) or on the one sub-account. An agency install needs
    `oauth.readonly` and `oauth.write` ticked in the developer portal and
