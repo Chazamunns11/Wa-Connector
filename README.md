@@ -61,6 +61,37 @@ stuck for over an hour), and never names a customer or shows counts. Its two
 reads are cached for 60 seconds. Link to it from the marketing site and
 support replies. The logic is in `src/lib/public-status.ts`.
 
+## Live address: hub.pingwren.co.uk
+
+The agency app (sign-up, login, dashboard, billing) lives at
+`https://hub.pingwren.co.uk`. The marketing site stays on Netlify at
+`pingwren.co.uk`. No code holds the address; it all comes from
+`NEXT_PUBLIC_APP_URL`. To move it:
+
+1. **Vercel** (the PingWren project) > Settings > Domains: add
+   `hub.pingwren.co.uk`. Vercel shows the CNAME target it wants.
+2. **GoDaddy** (DNS for pingwren.co.uk) > DNS: add a CNAME, name `hub`, value
+   the target Vercel showed. Wait until Vercel says the domain is valid.
+3. **Vercel** > Environment Variables: `NEXT_PUBLIC_APP_URL=https://hub.pingwren.co.uk`,
+   then redeploy (it is read at build time).
+4. **HighLevel developer portal** (PingWren app):
+   - Advanced Settings > Auth > Redirect URL: add `https://hub.pingwren.co.uk/api/crm/oauth/callback`
+   - Conversation Providers > Delivery URL: `https://hub.pingwren.co.uk/api/webhooks/crm-provider`
+   - Custom Page URL: `https://hub.pingwren.co.uk/embed/crm`
+5. **Supabase** (Wa-Connector project) > Authentication > URL Configuration:
+   Site URL `https://hub.pingwren.co.uk`, and add `https://hub.pingwren.co.uk/auth/callback`.
+6. **Railway** (PingWren bridge): `PORTAL_INBOUND_URL=https://hub.pingwren.co.uk/api/webhooks/whatsapp-replies`
+   and `PORTAL_OUTBOUND_URL=https://hub.pingwren.co.uk/api/webhooks/crm-outbound-status`.
+7. **Stripe** > Webhooks: point the endpoint at `https://hub.pingwren.co.uk/api/webhooks/billing`.
+8. On `pingwren.co.uk`, point the "Log in" / "Start free trial" buttons at
+   `https://hub.pingwren.co.uk/login` and `/signup`.
+
+Keep `pingwren.vercel.app` working until all of the above is done. Connect
+links already sent out keep the old address and still work while it does.
+
+The app may be framed by `app.pingwren.co.uk` and any `*.pingwren.co.uk`
+(the PingWren-branded HighLevel), as well as HighLevel's own domains.
+
 ## Install for a new client sub-account
 
 > **Live PortalHub clients share this agency.** In the agency install chooser,
