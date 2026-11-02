@@ -1,5 +1,5 @@
 import { stripeConfig, stripeRequest, type StripeResult } from "./client";
-import { FIRST_TIER_NUMBERS, LATER_PRICE_PER_NUMBER_PENCE, PRICE_PER_NUMBER_PENCE, TRIAL_DAYS, CURRENCY } from "../pricing";
+import { TRIAL_DAYS, CURRENCY } from "../pricing";
 
 export interface StripeSubscription {
   id: string;
@@ -12,6 +12,8 @@ export interface StripeSubscription {
   currentPeriodEnd: number | null;
   itemId: string | null;
   quantity: number;
+  /** The first item's unit price in pence (a number subscription has exactly one item). */
+  unitAmount: number | null;
   cardLast4: string | null;
   metadata: Record<string, string>;
 }
@@ -19,12 +21,13 @@ export interface StripeSubscription {
 export interface StripeCheckoutSession {
   id: string;
   status: string | null;
-  /** `subscription` for signup and restarts, `setup` for "Add a card". */
+  /** Always `setup` for sessions this app creates ("save a card"). */
   mode: string | null;
   customer: string | null;
-  subscription: StripeSubscription | null;
   /** The payment method a setup-mode session saved (from the expanded setup_intent). */
   setupPaymentMethod: string | null;
+  /** The billing address entered on that card (`billing_address_collection: required`), in Stripe's shape. */
+  setupBillingAddress: Record<string, string> | null;
   metadata: Record<string, string>;
 }
 
@@ -56,7 +59,7 @@ export function parseSubscription(raw: unknown): StripeSubscription | null {
   const customer = idOf(o.customer);
   const items = (o.items as { data?: unknown } | undefined)?.data;
   if (!id || !status || !customer || !Array.isArray(items)) return null;
-  const first = (items[0] ?? null) as { id?: unknown; quantity?: unknown } | null;
+  const first = (items[0] ?? null) as { id?: unknown; quantity?: unknown; price?: { unit_amount?: unknown } | null } | null;
   const card = (o.default_payment_method as { card?: { last4?: unknown } } | null | undefined)?.card;
   return {
     id,
@@ -69,6 +72,7 @@ export function parseSubscription(raw: unknown): StripeSubscription | null {
     currentPeriodEnd: num(o.current_period_end),
     itemId: str(first?.id),
     quantity: num(first?.quantity) ?? 0,
+    unitAmount: num(first?.price?.unit_amount),
     cardLast4: str(card?.last4),
     metadata: stringMap(o.metadata),
   };
@@ -80,15 +84,22 @@ function parseCheckoutSession(raw: unknown): StripeCheckoutSession | null {
   const id = str(o.id);
   if (!id) return null;
   const setupIntent = o.setup_intent as { payment_method?: unknown } | null | undefined;
+  const pm = setupIntent && typeof setupIntent === "object" ? (setupIntent.payment_method as { billing_details?: { address?: unknown } } | null) : null;
+  const address = pm && typeof pm === "object" ? stringMap(pm.billing_details?.address) : {};
   return {
     id,
     status: str(o.status),
     mode: str(o.mode),
     customer: idOf(o.customer),
-    subscription: parseSubscription(o.subscription),
     setupPaymentMethod: setupIntent && typeof setupIntent === "object" ? idOf(setupIntent.payment_method) : null,
+    setupBillingAddress: address.country ? address : null,
     metadata: stringMap(o.metadata),
   };
+}
+
+/** Inline monthly price for one number at `unitAmountPence`, against the one Stripe Product. */
+function priceData(productId: string, unitAmountPence: number) {
+  return { currency: CURRENCY.toLowerCase(), product: productId, unit_amount: unitAmountPence, recurring: { interval: "month" } };
 }
 
 function mapData<A, B>(r: StripeResult<A>, fn: (a: A) => B | null): StripeResult<B> {
@@ -97,56 +108,13 @@ function mapData<A, B>(r: StripeResult<A>, fn: (a: A) => B | null): StripeResult
   return b === null ? { ok: false, status: 502, code: null, message: "unexpected Stripe response" } : { ok: true, data: b };
 }
 
-export async function createCheckoutSession(
-  input: {
-    accountId: string;
-    customerEmail: string;
-    successUrl: string;
-    cancelUrl: string;
-    /** Default true. False bills straight away (restarts never get a second trial). */
-    trial?: boolean;
-    /** Re-use this Stripe customer instead of creating one from the email. */
-    customerId?: string;
-  },
-  deps?: BillingDeps,
-): Promise<StripeResult<{ id: string; url: string }>> {
-  const cfg = stripeConfig();
-  const trial = input.trial !== false;
-  const params: Record<string, unknown> = {
-    mode: "subscription",
-    ...(input.customerId ? { customer: input.customerId } : { customer_email: input.customerEmail }),
-    client_reference_id: input.accountId,
-    line_items: [{ price: cfg.priceId, quantity: 1 }],
-    // Nov 2026 (Charlie: "it must charge"): the trial TAKES A CARD at checkout
-    // and Stripe charges it automatically on day 7. `pause` stays as a safety
-    // net for a card later removed: then sending stops until one is added.
-    subscription_data: trial
-      ? {
-          trial_period_days: TRIAL_DAYS,
-          trial_settings: { end_behavior: { missing_payment_method: "pause" } },
-          metadata: { account_id: input.accountId },
-        }
-      : { metadata: { account_id: input.accountId } },
-    metadata: { account_id: input.accountId, owner_email: input.customerEmail },
-    // Always collect a card: a trial is charged on day 7, a restart today.
-    payment_method_collection: "always",
-    success_url: input.successUrl,
-    cancel_url: input.cancelUrl,
-  };
-  if (cfg.automaticTax) {
-    params.automatic_tax = { enabled: true };
-    params.customer_update = { address: "auto" };
-  }
-  const r = await req(deps)<{ id?: unknown; url?: unknown }>("POST", "/checkout/sessions", params);
-  return mapData(r, (d) => (typeof d.id === "string" && typeof d.url === "string" ? { id: d.id, url: d.url } : null));
-}
-
 /**
- * "Add a card": a setup-mode Checkout on the account's existing customer. It
- * only saves a card; the webhook then makes it the default and, if the trial
- * ended without one, resumes the paused subscription. The Customer Portal is
- * not used for this because adding a card there does not resume a paused
- * subscription.
+ * "Save a card": a setup-mode Checkout on the account's customer, used at
+ * signup and from the billing page. It only saves a card; the webhook then
+ * makes it the customer's default (what every number subscription charges),
+ * marks the account as having a card, and resumes any number paused because
+ * its trial ended with no card. The Customer Portal is not used for this
+ * because adding a card there does not resume a paused subscription.
  */
 export async function createCardSetupSession(
   input: {
@@ -154,16 +122,20 @@ export async function createCardSetupSession(
     customerId: string;
     successUrl: string;
     cancelUrl: string;
-    /** Set when the card is added to end the trial straight away ("Start my paid plan now"). */
-    then?: "end_trial";
   },
   deps?: BillingDeps,
 ): Promise<StripeResult<{ id: string; url: string }>> {
-  const metadata = { account_id: input.accountId, purpose: "add_card", ...(input.then ? { then: input.then } : {}) };
+  const metadata = { account_id: input.accountId, purpose: "add_card" };
   const r = await req(deps)<{ id?: unknown; url?: unknown }>("POST", "/checkout/sessions", {
     mode: "setup",
     customer: input.customerId,
     payment_method_types: ["card"],
+    // Always collect the billing address. It lands on the card's billing
+    // details and applyCardSetup copies it onto the customer, which is what
+    // Stripe Tax reads when a number subscription is created
+    // (STRIPE_AUTOMATIC_TAX). customer_update[address] is not used: Stripe
+    // documents it for tax in payment/subscription Checkout, not setup mode.
+    billing_address_collection: "required",
     client_reference_id: input.accountId,
     metadata,
     setup_intent_data: { metadata },
@@ -175,7 +147,7 @@ export async function createCardSetupSession(
 
 export async function retrieveCheckoutSession(id: string, deps?: BillingDeps): Promise<StripeResult<StripeCheckoutSession>> {
   const r = await req(deps)<unknown>("GET", `/checkout/sessions/${id}`, {
-    expand: ["subscription", "subscription.default_payment_method", "setup_intent"],
+    expand: ["setup_intent", "setup_intent.payment_method"],
   });
   return mapData(r, parseCheckoutSession);
 }
@@ -186,64 +158,106 @@ export async function retrieveSubscription(id: string, deps?: BillingDeps): Prom
 }
 
 /**
- * Set the number of billed WhatsApp numbers. Nov 2026 (Charlie: "a new
- * invoice per change, so nobody reaches month end owing loads"):
- *   - `always_invoice`: Stripe invoices the prorated difference IMMEDIATELY,
- *     instead of saving it up for the next monthly invoice
- *     (docs.stripe.com/billing/subscriptions/prorations). A decrease becomes
- *     a credit on the customer's balance, used against the next invoice.
- *   - `refuseIfUnpaid` (for an increase the customer asked for: activating a
- *     sub-account, adding a number): `payment_behavior: error_if_incomplete`,
- *     so if that invoice cannot be paid Stripe returns an error and does NOT
- *     change the quantity (docs.stripe.com/api/subscription_items/update).
- *     The caller then refuses the change. Re-syncs use `allow_incomplete`:
- *     they correct the count and must never be blocked by a card.
+ * One WhatsApp number's own subscription: one item priced inline at the
+ * account's current tier (`unitAmountPence`) against STRIPE_PRODUCT_ID, so no
+ * per-tier Price objects need creating by hand. With `trial` it runs
+ * TRIAL_DAYS free and then charges the customer's default card; Stripe anchors
+ * the monthly renewal to the trial end. A trial that ends with no card pauses
+ * (sending stops) rather than invoicing. Without `trial` (a number that has had
+ * a subscription before) the first month is charged now; a failed charge
+ * leaves it `incomplete`, which may not send.
  */
-export async function setSubscriptionItemQuantity(
-  itemId: string,
-  quantity: number,
+export async function createNumberSubscription(
+  input: { customerId: string; accountId: string; locationId: string; tenantId: string; unitAmountPence: number; trial: boolean },
   deps?: BillingDeps,
-  opts: { refuseIfUnpaid?: boolean } = {},
-): Promise<StripeResult<{ id: string; quantity: number }>> {
-  const r = await req(deps)<{ id?: unknown; quantity?: unknown }>("POST", `/subscription_items/${itemId}`, {
-    quantity,
-    proration_behavior: "always_invoice",
-    payment_behavior: opts.refuseIfUnpaid ? "error_if_incomplete" : "allow_incomplete",
-  });
-  return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id, quantity: num(d.quantity) ?? quantity } : null));
-}
-
-export async function endTrialNow(subscriptionId: string, deps?: BillingDeps): Promise<StripeResult<StripeSubscription>> {
-  const r = await req(deps)<unknown>("POST", `/subscriptions/${subscriptionId}`, {
-    trial_end: "now",
-    proration_behavior: "none",
-  });
+): Promise<StripeResult<StripeSubscription>> {
+  const cfg = stripeConfig();
+  const params: Record<string, unknown> = {
+    customer: input.customerId,
+    items: [{ price_data: priceData(cfg.productId, input.unitAmountPence) }],
+    // pingwren_mrr "0": the shared Stripe account's mrr-sync skips these, so agency
+    // number fees don't count as coach CRM MRR.
+    metadata: { account_id: input.accountId, location_id: input.locationId, tenant_id: input.tenantId, pingwren_mrr: "0" },
+    payment_behavior: "allow_incomplete",
+    ...(input.trial
+      ? { trial_period_days: TRIAL_DAYS, trial_settings: { end_behavior: { missing_payment_method: "pause" } } }
+      : {}),
+  };
+  if (cfg.automaticTax) params.automatic_tax = { enabled: true };
+  const r = await req(deps)<unknown>("POST", "/subscriptions", params);
   return mapData(r, parseSubscription);
 }
 
-/** Makes a saved card the customer's default for invoices (what a resume charges). */
-export async function setCustomerDefaultPaymentMethod(
-  customerId: string,
-  paymentMethodId: string,
+/**
+ * Moves a number's subscription item to a new tier price with NO proration:
+ * the change shows from that subscription's next invoice (its trial-end charge
+ * or next monthly renewal).
+ */
+export async function setSubscriptionItemPrice(
+  itemId: string,
+  unitAmountPence: number,
   deps?: BillingDeps,
 ): Promise<StripeResult<{ id: string }>> {
-  const r = await req(deps)<{ id?: unknown }>("POST", `/customers/${customerId}`, {
-    invoice_settings: { default_payment_method: paymentMethodId },
+  const r = await req(deps)<{ id?: unknown }>("POST", `/subscription_items/${itemId}`, {
+    price_data: priceData(stripeConfig().productId, unitAmountPence),
+    proration_behavior: "none",
   });
   return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id } : null));
 }
 
-/** Makes a saved card the subscription's own default (what the billing page shows). */
-export async function setSubscriptionDefaultPaymentMethod(
-  subscriptionId: string,
+/**
+ * Cancels a number's subscription now (the number was removed or its
+ * sub-account deactivated). Same convention as the old quantity decrease:
+ * immediate, with the unused part of the paid month prorated into a final
+ * credit invoice that Stripe keeps as customer balance for the next charge.
+ */
+export async function cancelSubscription(subscriptionId: string, deps?: BillingDeps): Promise<StripeResult<StripeSubscription>> {
+  const r = await req(deps)<unknown>("DELETE", `/subscriptions/${subscriptionId}`, { invoice_now: true, prorate: true });
+  return mapData(r, parseSubscription);
+}
+
+/** A Stripe Customer for an account, created before its first card is saved. */
+export async function createCustomer(
+  input: { accountId: string; email: string },
+  deps?: BillingDeps,
+): Promise<StripeResult<{ id: string }>> {
+  const r = await req(deps)<{ id?: unknown }>(
+    "POST",
+    "/customers",
+    { email: input.email, metadata: { account_id: input.accountId } },
+    { idempotencyKey: `customer-${input.accountId}` },
+  );
+  return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id } : null));
+}
+
+/** The last four digits of the customer's default card (what every number subscription charges), or null. */
+export async function retrieveCustomerCard(customerId: string, deps?: BillingDeps): Promise<StripeResult<{ cardLast4: string | null }>> {
+  const r = await req(deps)<{ id?: unknown; invoice_settings?: { default_payment_method?: unknown } }>("GET", `/customers/${customerId}`, {
+    expand: ["invoice_settings.default_payment_method"],
+  });
+  return mapData(r, (d) => {
+    if (typeof d.id !== "string") return null;
+    const pm = d.invoice_settings?.default_payment_method as { card?: { last4?: unknown } } | null | undefined;
+    return { cardLast4: str(pm?.card?.last4) };
+  });
+}
+
+/**
+ * Makes a saved card the customer's default for invoices (what every number
+ * subscription charges) and, when given, saves its billing address on the
+ * customer (what Stripe Tax uses).
+ */
+export async function setCustomerDefaultPaymentMethod(
+  customerId: string,
   paymentMethodId: string,
   deps?: BillingDeps,
-): Promise<StripeResult<StripeSubscription>> {
-  const r = await req(deps)<unknown>("POST", `/subscriptions/${subscriptionId}`, {
-    default_payment_method: paymentMethodId,
-    expand: ["default_payment_method"],
+  address?: Record<string, string> | null,
+): Promise<StripeResult<{ id: string }>> {
+  const r = await req(deps)<{ id?: unknown }>("POST", `/customers/${customerId}`, {
+    invoice_settings: { default_payment_method: paymentMethodId },
+    ...(address ? { address } : {}),
   });
-  return mapData(r, parseSubscription);
+  return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id } : null));
 }
 
 /**
@@ -265,24 +279,4 @@ export async function createPortalSession(
     return_url: returnUrl,
   });
   return mapData(r, (d) => (typeof d.url === "string" ? { url: d.url } : null));
-}
-
-/**
- * The Stripe Price the app expects behind STRIPE_PRICE_ID (Nov 2026): a
- * monthly GRADUATED price per connected WhatsApp number (the quantity, set
- * by src/lib/billing/quantity.ts): numbers 1-10 at 999p each, and each
- * number from the 11th at 799p. Used by the go-live checklist to
- * create the Price; the app itself only needs STRIPE_PRICE_ID.
- */
-export function stripeNumberPrice() {
-  return {
-    currency: CURRENCY.toLowerCase(),
-    billing_scheme: "tiered" as const,
-    tiers_mode: "graduated" as const,
-    tiers: [
-      { up_to: FIRST_TIER_NUMBERS, unit_amount: PRICE_PER_NUMBER_PENCE },
-      { up_to: "inf" as const, unit_amount: LATER_PRICE_PER_NUMBER_PENCE },
-    ],
-    recurring: { interval: "month" as const },
-  };
 }

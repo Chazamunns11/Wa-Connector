@@ -7,11 +7,9 @@ export interface AccountSummary {
   name: string;
   kind: AccountKind;
   email: string;
+  /** `pending` = no card yet, `active` = card on file, `comped` = never billed. */
   billingStatus: BillingStatus;
-  /** ISO timestamp, or null when there is no trial. */
-  trialEndsAt: string | null;
   stripeCustomerId: string | null;
-  stripeSubscriptionId: string | null;
 }
 
 export type WhatsappState =
@@ -37,23 +35,29 @@ export interface LocationRow {
   awaitingFirstMessage?: boolean;
 }
 
+/** Billing is per WhatsApp number: these are counts over the account's numbers (ghl_location_numbers). */
 export interface BillingSummary {
+  /** Only read from Stripe when asked for (`getBilling({ withCard: true })`). */
   cardLast4: string | null;
-  /** ISO timestamp. */
-  nextInvoiceAt: string | null;
-  /** Major units, in `currency`. */
-  nextInvoiceAmount: number | null;
-  /** ISO 4217 code of `nextInvoiceAmount` (from pricingConfig()). */
+  /** Numbers that count toward the tier: trialing, active or past due. */
+  billedNumbers: number;
+  /** Of those, still in their free trial. */
+  trialingNumbers: number;
+  /** Of those, with a failed payment Stripe is retrying (still sending). */
+  pastDueNumbers: number;
+  /** Numbers whose billing stopped them sending (Stripe paused, unpaid or incomplete). */
+  stoppedNumbers: number;
+  /** The month at the current tier, every number at the tier price. Major units, in `currency`. */
+  monthlyAmount: number;
+  /** ISO 4217 code of `monthlyAmount` (from pricingConfig()). */
   currency: string;
   portalAvailable: boolean;
-  /** True when the subscription ends at the period end (cancelled in the portal). */
-  cancelAtPeriodEnd: boolean;
 }
 
 export interface AccountDataSource {
   readonly preview: boolean;
   getAccount(): Promise<AccountSummary>;
   listLocations(): Promise<LocationRow[]>;
-  /** Pass the rows already listed to avoid reading them twice. */
-  getBilling(rows?: LocationRow[]): Promise<BillingSummary>;
+  /** One database read; `withCard` adds one Stripe read for the card on file. */
+  getBilling(opts?: { withCard?: boolean }): Promise<BillingSummary>;
 }

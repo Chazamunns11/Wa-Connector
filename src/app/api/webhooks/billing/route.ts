@@ -9,19 +9,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { repo } from "@/lib/data";
 import { notifyText } from "@/lib/slack";
 import { verifyStripeSignature } from "@/lib/stripe/webhook";
-import {
-  endTrialNow,
-  resumeSubscription,
-  retrieveCheckoutSession,
-  retrieveSubscription,
-  setCustomerDefaultPaymentMethod,
-  setSubscriptionDefaultPaymentMethod,
-  setSubscriptionItemQuantity,
-} from "@/lib/stripe/billing";
+import { resumeSubscription, retrieveCheckoutSession, retrieveSubscription, setCustomerDefaultPaymentMethod } from "@/lib/stripe/billing";
 import { applyCardSetup } from "@/lib/billing/card";
 import { handleBillingEvent, type StripeEvent } from "@/lib/billing/webhook-handler";
-import { syncSubscriptionQuantity } from "@/lib/billing/quantity";
-import { applyCheckoutSession } from "@/lib/billing/onboard";
+import { syncNumberPrices } from "@/lib/billing/numbers";
+import { numberBillingDeps } from "@/lib/billing/live-deps";
 
 export const dynamic = "force-dynamic";
 
@@ -53,23 +45,11 @@ export async function POST(request: NextRequest) {
     const outcome = await handleBillingEvent(
       repo,
       {
-        applyCheckout: (session) => applyCheckoutSession(repo, session),
         applyCardSetup: (session) =>
-          applyCardSetup(
-            repo,
-            {
-              retrieveSubscription,
-              setCustomerDefault: setCustomerDefaultPaymentMethod,
-              setSubscriptionDefault: setSubscriptionDefaultPaymentMethod,
-              resume: resumeSubscription,
-              endTrial: endTrialNow,
-            },
-            session,
-          ),
+          applyCardSetup(repo, { retrieveSubscription, setCustomerDefault: setCustomerDefaultPaymentMethod, resume: resumeSubscription }, session),
         retrieveCheckoutSession,
         retrieveSubscription,
-        syncQuantity: (account) =>
-          syncSubscriptionQuantity(repo, { retrieveSubscription, setQuantity: setSubscriptionItemQuantity, notify }, account),
+        syncPrices: (account) => syncNumberPrices(repo, { ...numberBillingDeps(), notify }, account),
         notify,
       },
       event,

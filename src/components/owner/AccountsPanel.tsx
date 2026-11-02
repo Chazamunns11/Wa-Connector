@@ -1,7 +1,6 @@
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Chip, type ChipTone } from "@/components/ui/Chip";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { formatDate } from "@/lib/format";
 import type { AccountAdminRow, BillingStatus } from "@/lib/types";
 
 const STATUS_TONE: Record<BillingStatus, ChipTone> = {
@@ -14,7 +13,7 @@ const STATUS_TONE: Record<BillingStatus, ChipTone> = {
   cancelled: "loss",
 };
 
-/** Owner-only list of every account: plan state, how many numbers are live, and who to contact. Read-only. */
+/** Owner-only list of every account: card state, live sub-accounts, billed numbers, and who to contact. Read-only. */
 export function AccountsPanel({ rows }: { rows: AccountAdminRow[] }) {
   return (
     <Card>
@@ -29,13 +28,13 @@ export function AccountsPanel({ rows }: { rows: AccountAdminRow[] }) {
                 <th className="py-2 pr-4 font-medium">Name</th>
                 <th className="py-2 pr-4 font-medium">Kind</th>
                 <th className="py-2 pr-4 font-medium">Status</th>
-                <th className="py-2 pr-4 font-medium">Numbers active</th>
-                <th className="py-2 pr-4 font-medium">Trial ends</th>
+                <th className="py-2 pr-4 font-medium">Sub-accounts active</th>
+                <th className="py-2 pr-4 font-medium">Numbers billed</th>
                 <th className="py-2 font-medium">Owner email</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(({ account, locations, activeNumbers }) => (
+              {rows.map(({ account, locations, activeNumbers, billedNumbers }) => (
                 <tr key={account.id} className="border-t">
                   <td className="py-2 pr-4 text-ink">{account.name}</td>
                   <td className="py-2 pr-4 capitalize">{account.kind}</td>
@@ -45,7 +44,7 @@ export function AccountsPanel({ rows }: { rows: AccountAdminRow[] }) {
                   <td className="py-2 pr-4 tabular-nums">
                     {activeNumbers} / {locations}
                   </td>
-                  <td className="py-2 pr-4">{account.trialEndsAt ? formatDate(account.trialEndsAt) : "-"}</td>
+                  <td className="py-2 pr-4 tabular-nums">{billedNumbers}</td>
                   <td className="py-2 break-all">{account.ownerEmail}</td>
                 </tr>
               ))}

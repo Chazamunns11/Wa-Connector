@@ -193,7 +193,7 @@ export function GhlAccountsPanel({
       ? "The WhatsApp service isn't responding right now — statuses below may be stale."
       : null;
   const resultMessage = ghlResultMessage(result, { installed: installedCount, failed: failedCount, capped: cappedCount });
-  // Numbers beyond each location's first (every number is billed at £7.99; this is the extra count).
+  // Numbers beyond each location's first (each number is its own subscription; this is only a count).
   const extraNumbers = accounts.reduce((sum, a) => sum + Math.max(0, (numbersByLocation[a.locationId]?.length ?? 0) - 1), 0);
 
   return (

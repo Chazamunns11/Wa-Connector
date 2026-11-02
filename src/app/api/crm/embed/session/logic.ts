@@ -3,7 +3,7 @@
  * Pure (no Next imports) so `node --test` covers it. The route calls it after
  * the `not_installed` check.
  */
-import type { BillingStatus, GhlAccount } from "@/lib/types";
+import type { BillingStatus, GhlAccount, NumberBilling } from "@/lib/types";
 
 export type EmbedState =
   | { state: "disabled" }
@@ -20,7 +20,7 @@ export function embedPausedMessage(trialEnded: boolean): string {
   return trialEnded ? EMBED_TRIAL_ENDED_MESSAGE : EMBED_PAUSED_MESSAGE;
 }
 
-/** Billing statuses that may send; mirrors `sendingGate` in `src/lib/billing/gate.ts`. */
+/** Account statuses that let the embed open. Per-number billing is checked when sending (`sendingGate`, src/lib/billing/gate.ts) and when adding a number. */
 const LIVE: ReadonlySet<BillingStatus> = new Set(["trialing", "active", "past_due", "comped"]);
 
 /**
@@ -41,4 +41,33 @@ export function embedStateFor(
   }
   if (!account.activatedAt) return { state: "not_activated" };
   return { state: "ok" };
+}
+
+/** Why one number can't send for billing reasons, or null when it can. */
+export type NumberBillingPaused = null | "paused" | "trial_ended";
+
+/**
+ * Per-number billing (0020): a number sends only while its own subscription is
+ * trialing, active or past due (`sendingGate`). A comped account never touches
+ * Stripe, so its numbers are never paused. A Stripe `paused` number that kept
+ * its trial end is one whose trial ended with no usable card.
+ */
+export function numberBillingPaused(
+  owner: BillingStatus | null,
+  number: Pick<NumberBilling, "billingStatus" | "trialEndsAt"> | null,
+): NumberBillingPaused {
+  if (owner === "comped") return null;
+  const status = number?.billingStatus ?? null;
+  if (status === "trialing" || status === "active" || status === "past_due") return null;
+  return status === "paused" && number?.trialEndsAt ? "trial_ended" : "paused";
+}
+
+/**
+ * The whole embed shows "billing paused" only when NONE of the location's
+ * numbers can send; the reason is "trial ended" only if that is true of every
+ * one. Otherwise each paused number is marked on its own card. Null = carry on.
+ */
+export function embedStateForNumbers(numbers: { billingPaused: NumberBillingPaused }[]): EmbedState | null {
+  if (numbers.length === 0 || numbers.some((n) => n.billingPaused === null)) return null;
+  return numbers.every((n) => n.billingPaused === "trial_ended") ? { state: "billing_paused", reason: "trial_ended" } : { state: "billing_paused" };
 }

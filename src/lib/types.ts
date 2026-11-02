@@ -720,10 +720,46 @@ export interface AccountBillingPatch {
   cleanedUpAt?: string | null;
 }
 
+/**
+ * One WhatsApp number's own Stripe subscription (migration 0020). Null =
+ * never subscribed. `incomplete` = a no-trial restart whose first payment has
+ * not gone through yet. Only trialing/active/past_due may send.
+ */
+export type NumberBillingStatus = "trialing" | "active" | "past_due" | "paused" | "incomplete" | "cancelled";
+
+/** A number (ghl_location_numbers row) with its billing columns. Server-only: carries the tenant id. */
+export interface NumberBilling {
+  tenantId: string;
+  locationId: string;
+  stripeSubscriptionId: string | null;
+  billingStatus: NumberBillingStatus | null;
+  trialEndsAt: string | null;
+  /** The unit price (pence) Stripe last reported for this number's subscription. */
+  pricePence: number | null;
+  /** When the number row was created: its age decides its graduated price rank. */
+  createdAt: string;
+  /** When its subscription ended (`cancelled`); starts the credential cleanup grace. */
+  cancelledAt: string | null;
+  /** When the cleanup logged it out of the bridge (wiping its stored session). */
+  cleanedUpAt: string | null;
+}
+
+export interface NumberBillingPatch {
+  stripeSubscriptionId?: string | null;
+  billingStatus?: NumberBillingStatus | null;
+  trialEndsAt?: string | null;
+  pricePence?: number | null;
+  cancelledAt?: string | null;
+  cleanedUpAt?: string | null;
+}
+
 export interface AccountAdminRow {
   account: Account;
   locations: number;
+  /** Activated locations (the name predates per-number billing). */
   activeNumbers: number;
+  /** Numbers whose own subscription counts toward the tier (trialing, active, past due). */
+  billedNumbers: number;
 }
 
 export interface LocationStats {

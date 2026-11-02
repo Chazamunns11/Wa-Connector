@@ -106,7 +106,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     faqAllLink: "All the questions, on one page",
     priceStrip: {
       terms:
-        `${trialSentence()} You can cancel any time from the billing portal.`,
+        `${trialSentence()} Remove a number and its billing stops.`,
     },
     ctaLabel: "Start 7-day free trial",
   };

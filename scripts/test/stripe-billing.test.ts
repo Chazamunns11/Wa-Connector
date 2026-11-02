@@ -2,20 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  createCheckoutSession,
   retrieveCheckoutSession,
   retrieveSubscription,
-  setSubscriptionItemQuantity,
-  endTrialNow,
   createPortalSession,
   createCardSetupSession,
+  createCustomer,
+  retrieveCustomerCard,
   setCustomerDefaultPaymentMethod,
-  setSubscriptionDefaultPaymentMethod,
   resumeSubscription,
   parseSubscription,
-  stripeNumberPrice,
 } from "@/lib/stripe/billing";
-import { PRICE_PER_NUMBER_PENCE } from "@/lib/pricing";
 
 type Call = { method: string; path: string; params: Record<string, unknown> | undefined };
 function fake(data: unknown = {}) {
@@ -42,52 +38,29 @@ function withEnv(env: Record<string, string | undefined>, fn: () => Promise<void
   });
 }
 
-const input = { accountId: "acc-1", customerEmail: "a£7\.99.co", successUrl: "S", cancelUrl: "C" };
-const base = { STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRICE_ID: "price_9", STRIPE_WEBHOOK_SECRET: "whsec" };
+const base = { STRIPE_SECRET_KEY: "sk_test_x", STRIPE_PRODUCT_ID: "prod_9", STRIPE_WEBHOOK_SECRET: "whsec" };
 
-test("createCheckoutSession: 7-day trial that TAKES a card (charged on day 7), pausing only if no card is left; no tax by default", async () => {
-  await withEnv({ ...base, STRIPE_AUTOMATIC_TAX: undefined }, async () => {
-    const { calls, deps } = fake({ id: "cs_1", url: "U" });
-    await createCheckoutSession(input, deps);
-    assert.equal(calls[0].method, "POST");
-    assert.equal(calls[0].path, "/checkout/sessions");
-    assert.deepEqual(calls[0].params, {
-      mode: "subscription",
-      customer_email: "a£7\.99.co",
-      client_reference_id: "acc-1",
-      line_items: [{ price: "price_9", quantity: 1 }],
-      subscription_data: {
-        trial_period_days: 7,
-        trial_settings: { end_behavior: { missing_payment_method: "pause" } },
-        metadata: { account_id: "acc-1" },
-      },
-      metadata: { account_id: "acc-1", owner_email: "a£7\.99.co" },
-      payment_method_collection: "always",
-      success_url: "S",
-      cancel_url: "C",
-    });
-  });
+test("createCustomer: one customer per account, tagged and idempotent on the account id", async () => {
+  const calls: Array<{ method: string; path: string; params: unknown; opts: unknown }> = [];
+  const request = (async (method: string, path: string, params: unknown, opts: unknown) => {
+    calls.push({ method, path, params, opts });
+    return { ok: true, data: { id: "cus_1" } };
+  }) as never;
+  const r = await createCustomer({ accountId: "acc-1", email: "a@b.co" }, { request });
+  assert.ok(r.ok && r.data.id === "cus_1");
+  assert.deepEqual(calls, [
+    { method: "POST", path: "/customers", params: { email: "a@b.co", metadata: { account_id: "acc-1" } }, opts: { idempotencyKey: "customer-acc-1" } },
+  ]);
 });
 
-test("createCheckoutSession: automatic tax when enabled", async () => {
-  await withEnv({ ...base, STRIPE_AUTOMATIC_TAX: "true" }, async () => {
-    const { calls, deps } = fake({ id: "cs_1", url: "U" });
-    await createCheckoutSession(input, deps);
-    assert.deepEqual(calls[0].params?.automatic_tax, { enabled: true });
-    assert.deepEqual(calls[0].params?.customer_update, { address: "auto" });
-  });
-});
-
-test("createCheckoutSession: a restart has no trial, no trial_settings and still needs a card", async () => {
-  await withEnv({ ...base, STRIPE_AUTOMATIC_TAX: undefined }, async () => {
-    const { calls, deps } = fake({ id: "cs_1", url: "U" });
-    await createCheckoutSession({ ...input, trial: false, customerId: "cus_9" }, deps);
-    const p = calls[0].params as Record<string, unknown>;
-    assert.deepEqual(p.subscription_data, { metadata: { account_id: "acc-1" } });
-    assert.equal(p.customer, "cus_9");
-    assert.equal("customer_email" in p, false);
-    assert.equal(p.payment_method_collection, "always");
-  });
+test("retrieveCustomerCard reads the customer's default card (what every number charges)", async () => {
+  let f = fake({ id: "cus", invoice_settings: { default_payment_method: { card: { last4: "4242" } } } });
+  const r = await retrieveCustomerCard("cus", f.deps);
+  assert.deepEqual(f.calls[0], { method: "GET", path: "/customers/cus", params: { expand: ["invoice_settings.default_payment_method"] } });
+  assert.ok(r.ok && r.data.cardLast4 === "4242");
+  f = fake({ id: "cus", invoice_settings: { default_payment_method: null } });
+  const none = await retrieveCustomerCard("cus", f.deps);
+  assert.ok(none.ok && none.data.cardLast4 === null);
 });
 
 test("parseSubscription: typed shape, object customer, missing items", () => {
@@ -100,7 +73,7 @@ test("parseSubscription: typed shape, object customer, missing items", () => {
     ended_at: null,
     cancel_at_period_end: false,
     current_period_end: 2,
-    items: { data: [{ id: "si_1", quantity: 3 }] },
+    items: { data: [{ id: "si_1", quantity: 3, price: { unit_amount: 799 } }] },
     default_payment_method: { card: { last4: "4242" } },
     metadata: {},
   };
@@ -115,6 +88,7 @@ test("parseSubscription: typed shape, object customer, missing items", () => {
     currentPeriodEnd: 2,
     itemId: "si_1",
     quantity: 3,
+    unitAmount: 799,
     cardLast4: "4242",
     metadata: {},
   });
@@ -135,42 +109,24 @@ test("retrieve and mutate calls use the specified paths and params", async () =>
     assert.deepEqual(f.calls[0], { method: "GET", path: "/subscriptions/sub_1", params: { expand: ["default_payment_method"] } });
     assert.ok(r.ok && r.data.itemId === "si_1");
 
-    f = fake({ id: "cs_1", status: "complete", customer: "cus", subscription: sub, metadata: { account_id: "a" } });
+    f = fake({ id: "cs_1", status: "complete", customer: "cus", metadata: { account_id: "a" } });
     const c = await retrieveCheckoutSession("cs_1", f.deps);
-    assert.deepEqual(f.calls[0], {
-      method: "GET",
-      path: "/checkout/sessions/cs_1",
-      params: { expand: ["subscription", "subscription.default_payment_method", "setup_intent"] },
-    });
-    assert.ok(c.ok && c.data.subscription?.id === "sub_1" && c.data.metadata.account_id === "a");
-    assert.ok(c.ok && c.data.mode === null && c.data.setupPaymentMethod === null);
+    assert.deepEqual(f.calls[0], { method: "GET", path: "/checkout/sessions/cs_1", params: { expand: ["setup_intent", "setup_intent.payment_method"] } });
+    assert.ok(c.ok && c.data.metadata.account_id === "a");
+    assert.ok(c.ok && c.data.mode === null && c.data.setupPaymentMethod === null && c.data.setupBillingAddress === null);
 
-    f = fake({ id: "cs_2", status: "complete", mode: "setup", customer: "cus", subscription: null, setup_intent: { id: "seti_1", payment_method: "pm_1" }, metadata: {} });
+    f = fake({ id: "cs_2", status: "complete", mode: "setup", customer: "cus", setup_intent: { id: "seti_1", payment_method: "pm_1" }, metadata: {} });
     const s = await retrieveCheckoutSession("cs_2", f.deps);
-    assert.ok(s.ok && s.data.mode === "setup" && s.data.setupPaymentMethod === "pm_1" && s.data.subscription === null);
+    assert.ok(s.ok && s.data.mode === "setup" && s.data.setupPaymentMethod === "pm_1");
     f = fake({ id: "cs_3", mode: "setup", setup_intent: { payment_method: { id: "pm_2" } }, metadata: {} });
     const s2 = await retrieveCheckoutSession("cs_3", f.deps);
     assert.ok(s2.ok && s2.data.setupPaymentMethod === "pm_2");
-
-    f = fake({ id: "si_1", quantity: 0 });
-    await setSubscriptionItemQuantity("si_1", 0, f.deps);
-    // Every change is invoiced at once (no build-up to month end); a re-sync is never blocked by the card.
-    assert.deepEqual(f.calls[0], {
-      method: "POST", path: "/subscription_items/si_1", params: { quantity: 0, proration_behavior: "always_invoice", payment_behavior: "allow_incomplete" },
-    });
-
-    // An increase the customer asked for is charged now, or refused by Stripe if it can't be paid.
-    f = fake({ id: "si_1", quantity: 2 });
-    await setSubscriptionItemQuantity("si_1", 2, f.deps, { refuseIfUnpaid: true });
-    assert.deepEqual(f.calls[0], {
-      method: "POST", path: "/subscription_items/si_1", params: { quantity: 2, proration_behavior: "always_invoice", payment_behavior: "error_if_incomplete" },
-    });
-
-    f = fake(sub);
-    await endTrialNow("sub_1", f.deps);
-    assert.deepEqual(f.calls[0], {
-      method: "POST", path: "/subscriptions/sub_1", params: { trial_end: "now", proration_behavior: "none" },
-    });
+    // The card's billing address (collected by billing_address_collection: required) is carried for the customer.
+    const address = { line1: "1 High St", city: "Chesterfield", postal_code: "S40 1AA", country: "GB" };
+    f = fake({ id: "cs_4", mode: "setup", setup_intent: { payment_method: { id: "pm_3", billing_details: { address: { ...address, line2: null } } } }, metadata: {} });
+    const s3 = await retrieveCheckoutSession("cs_4", f.deps);
+    assert.ok(s3.ok);
+    if (s3.ok) assert.deepEqual(s3.data.setupBillingAddress, address);
 
     f = fake({ url: "P" });
     await createPortalSession("cus", "R", f.deps);
@@ -180,7 +136,7 @@ test("retrieve and mutate calls use the specified paths and params", async () =>
   });
 });
 
-test("add-a-card: setup-mode Checkout on the existing customer, card only, purpose in both metadata", async () => {
+test("save a card: setup-mode Checkout on the account's customer, card only, billing address required, purpose in both metadata", async () => {
   const f = fake({ id: "cs_s", url: "U" });
   const r = await createCardSetupSession({ accountId: "acc-1", customerId: "cus_1", successUrl: "S", cancelUrl: "C" }, f.deps);
   assert.ok(r.ok && r.data.url === "U");
@@ -192,6 +148,7 @@ test("add-a-card: setup-mode Checkout on the existing customer, card only, purpo
       mode: "setup",
       customer: "cus_1",
       payment_method_types: ["card"],
+      billing_address_collection: "required",
       client_reference_id: "acc-1",
       metadata,
       setup_intent_data: { metadata },
@@ -199,9 +156,6 @@ test("add-a-card: setup-mode Checkout on the existing customer, card only, purpo
       cancel_url: "C",
     },
   });
-  const g = fake({ id: "cs_s", url: "U" });
-  await createCardSetupSession({ accountId: "acc-1", customerId: "cus_1", successUrl: "S", cancelUrl: "C", then: "end_trial" }, g.deps);
-  assert.deepEqual((g.calls[0].params as { metadata: unknown }).metadata, { ...metadata, then: "end_trial" });
 });
 
 test("default payment method and resume calls", async () => {
@@ -209,30 +163,11 @@ test("default payment method and resume calls", async () => {
   let f = fake({ id: "cus" });
   await setCustomerDefaultPaymentMethod("cus", "pm_1", f.deps);
   assert.deepEqual(f.calls[0], { method: "POST", path: "/customers/cus", params: { invoice_settings: { default_payment_method: "pm_1" } } });
-  f = fake(sub);
-  await setSubscriptionDefaultPaymentMethod("sub_1", "pm_1", f.deps);
-  assert.deepEqual(f.calls[0], {
-    method: "POST", path: "/subscriptions/sub_1", params: { default_payment_method: "pm_1", expand: ["default_payment_method"] },
-  });
+  f = fake({ id: "cus" });
+  await setCustomerDefaultPaymentMethod("cus", "pm_1", f.deps, { line1: "1 High St", country: "GB" });
+  assert.deepEqual(f.calls[0].params, { invoice_settings: { default_payment_method: "pm_1" }, address: { line1: "1 High St", country: "GB" } });
   f = fake(sub);
   const r = await resumeSubscription("sub_1", f.deps);
   assert.deepEqual(f.calls[0], { method: "POST", path: "/subscriptions/sub_1/resume", params: { billing_cycle_anchor: "now" } });
   assert.ok(r.ok && r.data.status === "active");
 });
-
-test("stripeNumberPrice: monthly GRADUATED price per number, 999p for numbers 1-10 and 799p from the 11th (Nov 2026)", () => {
-  assert.equal(PRICE_PER_NUMBER_PENCE, 999);
-  assert.deepEqual(stripeNumberPrice(), {
-    currency: "gbp",
-    billing_scheme: "tiered",
-    tiers_mode: "graduated",
-    tiers: [
-      { up_to: 10, unit_amount: 999 },
-      { up_to: "inf", unit_amount: 799 },
-    ],
-    recurring: { interval: "month" },
-  });
-});
-
-
-

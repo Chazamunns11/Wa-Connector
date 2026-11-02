@@ -1,11 +1,12 @@
-import type { BillingStatus } from "@/lib/types";
+import type { NumberBillingStatus } from "@/lib/types";
 
 /**
- * Stripe subscription status -> our `billing_status`. `null` means "do not
- * write": `incomplete` (first payment not yet resolved) and anything unknown
- * must leave the stored status untouched rather than write garbage.
+ * Stripe subscription status -> a number's `billing_status`. `null` means "do
+ * not write": anything unknown must leave the stored status untouched rather
+ * than write garbage. `incomplete` (a no-trial restart whose first charge has
+ * not gone through) is stored so it is never subscribed twice; it may not send.
  */
-export function mapStripeSubscriptionStatus(status: string): BillingStatus | null {
+export function mapStripeSubscriptionStatus(status: string): NumberBillingStatus | null {
   switch (status) {
     case "trialing":
       return "trialing";
@@ -13,7 +14,9 @@ export function mapStripeSubscriptionStatus(status: string): BillingStatus | nul
       return "active";
     case "past_due":
       return "past_due";
-    // `paused`: the no-card trial ended without a card. `unpaid`: payment retries ran out.
+    case "incomplete":
+      return "incomplete";
+    // `paused`: the trial ended with no card. `unpaid`: payment retries ran out.
     case "unpaid":
     case "paused":
       return "paused";

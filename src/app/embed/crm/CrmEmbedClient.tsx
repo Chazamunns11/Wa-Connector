@@ -110,6 +110,8 @@ interface EmbedNumber {
   summary: GhlEmbedWhatsappSummary | null;
   /** Setter seats: the number the HighLevel user viewing this page sends their replies from. */
   mine?: boolean;
+  /** Per-number billing: why this number can't send, or null/absent when it can. */
+  billingPaused?: "paused" | "trial_ended" | null;
 }
 
 type Phase = "handshaking" | "handshake_error" | "not_installed" | "disabled" | "unclaimed" | "billing_paused" | "not_activated" | "ready";
@@ -629,6 +631,7 @@ function EmbedNumberCard({
           <h2 className="text-sm font-semibold text-ink">{number.label ?? `Number ${slot}`}</h2>
           {number.isDefault ? <Chip tone="accent">Default</Chip> : null}
           {number.mine ? <Chip tone="accent">Your replies</Chip> : null}
+          {number.billingPaused ? <Chip tone="loss">Sending paused</Chip> : null}
         </div>
         {mode === "idle" ? (
           <div className="flex flex-wrap items-center gap-1">
@@ -670,6 +673,8 @@ function EmbedNumberCard({
           </div>
         ) : null}
       </div>
+
+      {number.billingPaused ? <p className="text-sm text-ink-dim">{embedPausedMessage(number.billingPaused === "trial_ended")}</p> : null}
 
       {mode === "renaming" ? (
         <div className="flex flex-wrap items-center gap-2">

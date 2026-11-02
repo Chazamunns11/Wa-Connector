@@ -1,5 +1,5 @@
 import { SITE_ROUTES } from "@/lib/site/routes";
-import { TRIAL_CAP_MESSAGE } from "@/lib/account-data/derive";
+import { TRIAL_DAYS } from "@/lib/pricing";
 
 export type DashboardFilter = "all" | "attention";
 
@@ -15,7 +15,6 @@ export type DashboardResult =
   | "deactivated_billing_pending"
   | "disconnected"
   | "link"
-  | "trial_cap"
   | "platform_cap"
   | "billing_inactive"
   | "stripe_failed"
@@ -24,14 +23,13 @@ export type DashboardResult =
   | "not_found";
 
 export const DASHBOARD_RESULT_COPY: Record<DashboardResult, string> = {
-  activated: "Number activated. Scan the QR code to connect WhatsApp.",
-  deactivated: "Number deactivated. It will no longer send or be billed.",
+  activated: `Sub-account activated. A number new to billing starts a ${TRIAL_DAYS}-day free trial. Scan the QR code to connect WhatsApp.`,
+  deactivated: "Sub-account deactivated. Its numbers no longer send or get billed.",
   deactivated_billing_pending: "Deactivated. Your bill will update shortly.",
   disconnected: "WhatsApp disconnected from this number.",
   link: "Connect link ready to share.",
-  trial_cap: TRIAL_CAP_MESSAGE,
   platform_cap: "We are at capacity for new numbers right now. Please try again soon.",
-  billing_inactive: "Billing is not active on this account. Update billing to activate numbers.",
+  billing_inactive: "Save a card on the Billing page before you activate numbers.",
   stripe_failed: "We could not update billing just now, so nothing was changed. Please try again.",
   bridge_failed: "We could not reach WhatsApp just now. Please try again.",
   link_unavailable: "Connect links are not available right now. Please try again later.",
@@ -57,7 +55,7 @@ export function dashboardHref(opts: { filter?: DashboardFilter; result?: Dashboa
 }
 
 /** Fixed notices the billing page can show after an action. */
-export type BillingNotice = { result?: "trial_ended" | "card_added"; error?: "no_portal" | "stripe_failed" };
+export type BillingNotice = { result?: "card_added"; error?: "no_portal" | "stripe_failed" };
 
 export function billingHref(notice: BillingNotice = {}): string {
   const q = new URLSearchParams();
@@ -70,7 +68,7 @@ export function billingHref(notice: BillingNotice = {}): string {
 export function parseBillingNotice(params: Record<string, string | string[] | undefined>): BillingNotice {
   const f = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
   const r = f(params.result);
-  const result = r === "trial_ended" || r === "card_added" ? r : undefined;
+  const result = r === "card_added" ? r : undefined;
   const e = f(params.error);
   const error = e === "no_portal" || e === "stripe_failed" ? e : undefined;
   return { result, error };

@@ -8,8 +8,8 @@ test("dashboardHref: bare, filter, result and focus with the row anchor", () => 
   assert.equal(dashboardHref({ filter: "attention" }), "/dashboard?filter=attention");
   assert.equal(dashboardHref({ result: "activated" }), "/dashboard?result=activated");
   assert.equal(
-    dashboardHref({ filter: "attention", result: "trial_cap", focus: "loc_1" }),
-    "/dashboard?filter=attention&result=trial_cap&focus=loc_1#row-loc_1",
+    dashboardHref({ filter: "attention", result: "platform_cap", focus: "loc_1" }),
+    "/dashboard?filter=attention&result=platform_cap&focus=loc_1#row-loc_1",
   );
 });
 
@@ -18,7 +18,7 @@ test("billingHref is the billing page", () => {
 });
 
 test("every result has fixed copy and parseResult rejects unknown values", () => {
-  for (const k of ["activated", "deactivated", "disconnected", "link", "trial_cap", "platform_cap", "billing_inactive", "stripe_failed", "not_found"] as const) {
+  for (const k of ["activated", "deactivated", "disconnected", "link", "platform_cap", "billing_inactive", "stripe_failed", "not_found"] as const) {
     assert.ok(DASHBOARD_RESULT_COPY[k].length > 0, k);
     assert.equal(parseResult(k), k);
   }

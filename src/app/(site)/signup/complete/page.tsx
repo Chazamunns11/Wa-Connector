@@ -22,7 +22,7 @@ export default async function SignupCompletePage({
       title="You're nearly there"
       intro={
         sessionId ? (
-          <p>Your {TRIAL_DAYS}-day free trial has started. Your card is charged automatically when it ends, unless you cancel first.</p>
+          <p>Card saved. Nothing has been charged: each WhatsApp number you add gets its own {TRIAL_DAYS}-day free trial.</p>
         ) : (
           <p>One more step: sign in.</p>
         )

@@ -10,6 +10,8 @@ import type {
   Account,
   AccountAdminRow,
   AccountBillingPatch,
+  NumberBilling,
+  NumberBillingPatch,
   AccountDraft,
   GhlAccount,
   GhlAccountBrandingPatch,
@@ -848,11 +850,25 @@ export interface GhlRepository {
   /**
    * Clears (null) or sets activated_at; returns the rows changed. Setting is conditional
    * (only while activated_at IS NULL, so 0 = already active) and the database enforces the
-   * trial cap and the optional platform cap, throwing ActivationCapError when it refuses.
+   * optional platform cap, throwing ActivationCapError when it refuses.
    */
   setGhlActivated(locationId: string, activatedAt: string | null, opts?: { platformCap?: number | null }): Promise<number>;
-  /** Number of activated locations owned by this account. */
-  countActivatedForAccount(accountId: string): Promise<number>;
+  /** Every number (ghl_location_numbers row) of every location this account owns, with its billing columns (0020). */
+  listNumberBillingForAccount(accountId: string): Promise<NumberBilling[]>;
+  /** One number's billing columns by its tenant id, or null when there is no such number. */
+  getNumberBilling(tenantId: string): Promise<NumberBilling | null>;
+  /** Writes the given billing columns of one number; absent keys are left alone. */
+  updateNumberBilling(tenantId: string, patch: NumberBillingPatch): Promise<void>;
+  /**
+   * Claims one number trial for a sub-account (0020 `claim_number_trial`):
+   * atomically counts it only while the trials already granted there are fewer
+   * than `numbersAtLocation`; true when claimed.
+   */
+  claimNumberTrial(locationId: string, numbersAtLocation: number): Promise<boolean>;
+  /** Gives back a claimed trial whose subscription could not be created. */
+  releaseNumberTrial(locationId: string): Promise<void>;
+  /** Numbers whose subscription was cancelled before `iso` and whose stored session has not been wiped yet. */
+  listNumbersCancelledBefore(iso: string): Promise<NumberBilling[]>;
   /** Number of activated locations across all accounts. */
   countActivatedAll(): Promise<number>;
   /** Session summaries for exactly these tenant ids (no role scope; callers authorise first). */

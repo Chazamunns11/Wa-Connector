@@ -39,9 +39,9 @@ export function PlanHeader({
   billingHref: string;
   summary: FleetSummary;
   /**
-   * The banner's button. A pending account (Checkout abandoned) posts to the
-   * action that opens a fresh Checkout; a trial that has ended (or is about to)
-   * with no card posts to "Add a card".
+   * The banner's button. An account with no card yet posts to the action that
+   * opens the save-a-card Checkout; one whose numbers stopped on billing posts
+   * to "Add a card".
    */
   bannerAction?: { action: () => Promise<void>; label: string };
 }) {

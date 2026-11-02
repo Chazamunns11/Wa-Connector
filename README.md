@@ -152,16 +152,9 @@ example "Setter"), and scan its QR code with the second phone. A sub-account
 can have up to 3. **Make default** picks which number sends when nothing else
 decides. Each number has its own pacing and daily cap.
 
-Billing: £9.99 a month for each of an agency's first 10 WhatsApp numbers on
-activated sub-accounts, then £7.99 for every number after that
-(`src/lib/pricing.ts`; a graduated Stripe price).
-The 7-day free trial covers 3 numbers; a card is taken at sign-up and charged
-automatically on day 7. Stripe's quantity is that count. Every change is
-invoiced at once (`always_invoice`): a number you add is charged straight away
-for the rest of the month, and refused if the card declines
-(`error_if_incomplete`), so nobody reaches month end owing for numbers they
-haven't paid for. A removed number is credited to the next bill. `/admin`
-shows each sub-account's numbers and the extra-number total.
+Billing: each number is its own Stripe subscription with its own 7-day free
+trial, so adding one starts its trial and removing one cancels its billing
+(see "Billing" below). `/admin` shows each account's billed numbers.
 
 ## AI Setter (HighLevel Conversation AI)
 
@@ -270,6 +263,56 @@ closed (no group traffic in or out). Details are in
 [`docs/GO-LIVE-FOUNDATION.md`](docs/GO-LIVE-FOUNDATION.md) and
 [`services/whatsapp-bridge/README.md`](services/whatsapp-bridge/README.md).
 
+## Billing
+
+Billing is per WhatsApp number (a `ghl_location_numbers` row), not per
+sub-account. Code: `src/lib/pricing.ts`, `src/lib/billing/numbers.ts`.
+
+- **Card first.** Sign-up opens a Stripe Checkout in setup mode that only
+  saves a card on the account's Stripe customer. Nothing is charged. Saving it
+  moves the account from `pending` to `active` ("card on file"). With no card,
+  Activate and Add a number are refused.
+- **One subscription per number.** Activating a sub-account starts a
+  subscription for each of its numbers; adding a number to an activated
+  sub-account starts one for that number. Each has its own 7-day trial, then
+  charges the saved card when the trial ends and renews monthly on that day.
+  No trial farming: a number gets a trial only if it has never had a
+  subscription and its sub-account has been granted fewer trials than it now
+  has numbers (`ghl_accounts.number_trials_used`). Deactivating and
+  re-activating, or removing a number and adding it back, gives no new trial;
+  adding a genuinely extra number does. Without a trial it is charged at once.
+- **Graduated price by age.** The account's billed numbers (trialing, active
+  or past due), oldest first, pay £9.99 a month each for the first 10 and
+  £7.99 for every one after that, so the account total is the graduated price
+  and adding a number never lowers it. When numbers come or go, any whose rank
+  changed moves to its new price with no proration, from its next invoice.
+  Prices are inline `price_data` on one Stripe Product (`STRIPE_PRODUCT_ID`);
+  no Price objects are needed.
+- **Stopping.** Removing a number, or deactivating its sub-account, cancels
+  that number's subscription at once, with the unused part of the month
+  credited to the customer's balance. Disconnecting (logging the phone out)
+  keeps the number and its billing.
+- **Cleanup.** 14 days after a number's subscription ends (cancelled in the
+  app, in the portal, or by Stripe), the hourly `/api/cron/drain` logs it out
+  of the bridge, wiping its stored WhatsApp session. Re-subscribing within
+  the 14 days stops that.
+- **Sending gate.** A number sends only while its own subscription is
+  trialing, active or past due. Comped accounts never touch Stripe and always
+  send. The in-HighLevel page marks each paused number, and shows the
+  "billing paused" screen only when none of the sub-account's numbers can
+  send.
+- **Card and address.** The save-a-card Checkout always collects a billing
+  address and the webhook copies it onto the Stripe customer, so number
+  subscriptions can be created with `STRIPE_AUTOMATIC_TAX=true`.
+- **Webhooks.** Every number subscription carries `account_id`, `location_id`
+  and `tenant_id` metadata; `/api/webhooks/billing` maps each event to its
+  number by `tenant_id` and re-prices the account when a status changes.
+
+Migration `0020_number_billing.sql` adds the billing and cleanup columns to
+`ghl_location_numbers`, the trial counter to `ghl_accounts` with its
+`claim_number_trial` / `release_number_trial` functions, and drops the old
+trial cap from `activate_ghl_location`. Apply it before deploying the build that reads it.
+
 ## Checking migrations locally
 
 To check that every file in `supabase/migrations/` applies cleanly, use a
@@ -289,7 +332,7 @@ them first.
    then 0002 and on.
 
 Stop the cluster and delete `/var/tmp/pwpg` when done. This was last run for
-0001 to 0019.
+0001 to 0020.
 
 Apply `0017` (agency tokens), `0018` (setter numbers) and `0019` (alerts)
 before deploying the app build that reads them.

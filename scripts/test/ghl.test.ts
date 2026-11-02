@@ -55,6 +55,7 @@ import type {
   GhlOutboundMessage,
   GhlOutboundMessageDraft,
   LocationNumber,
+  NumberBillingStatus,
   Account,
   WhatsappSessionSummary,
 } from "@/lib/types";
@@ -434,8 +435,8 @@ function createFakeRepo(
     sticky?: Record<string, string>;
     /** Opt-in groups (Task 9) — group contacts, keyed `${locationId}:${ghlContactId}`. */
     groups?: Record<string, { tenantId: string; groupJid: string; enabled: boolean; left?: boolean; numberRemoved?: boolean }>;
-    billing?: { status: Account["billingStatus"] } | null | "default";
-  } | { status: Account["billingStatus"] } | null | "default" = {}
+    billing?: { status: Account["billingStatus"]; number?: NumberBillingStatus | null } | null | "default";
+  } | { status: Account["billingStatus"]; number?: NumberBillingStatus | null } | null | "default" = {}
 ) {
   /** Every `markWhatsappGroupLeft` call, in order (Task 9). */
   const groupsLeft: { tenantId: string; groupJid: string }[] = [];
@@ -443,7 +444,8 @@ function createFakeRepo(
   // the owner's billing (`{ status }`, `null` for no owner account, or
   // "default" = active); ours is the numbers/sticky/groups options bag.
   // Both shapes are accepted here.
-  type FakeBilling = { status: Account["billingStatus"] } | null | "default";
+  // Per-number billing (0020): `number` is the sending number's own subscription status (default "active").
+  type FakeBilling = { status: Account["billingStatus"]; number?: NumberBillingStatus | null } | null | "default";
   type FakeOpts = {
     numbers?: Record<string, LocationNumber[]>;
     sticky?: Record<string, string>;
@@ -472,6 +474,10 @@ function createFakeRepo(
   let claimedAt: number | null = null;
 
   const repo: GhlProviderRepo = {
+    async getNumberBilling(tenantId: string) {
+      const status = billing === null || billing === "default" || billing.number === undefined ? "active" : billing.number;
+      return { tenantId, locationId: "loc", stripeSubscriptionId: "sub", billingStatus: status, trialEndsAt: null, pricePence: 999 };
+    },
     async getAccountById(id: string) {
       calls.push({ method: "getAccountById", args: [id] });
       if (billing === null) return null;
@@ -1115,8 +1121,8 @@ test("sending gate: a location that is not activated is refused with the fixed s
   assert.equal([...rows.values()][0].refusalReason, REASON_GATE_NOT_ACTIVATED);
 });
 
-test("sending gate: activated but the account is paused -> refused with the subscription-inactive string", async () => {
-  const { repo } = createFakeRepo([makeAccount()], { status: "paused" });
+test("sending gate: activated but the sending number's subscription is paused -> refused with the subscription-inactive string", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { status: "active", number: "paused" });
   const { deps, sendCalls, statusCalls } = makeDeps();
   const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-gate-paused" }), deps);
   assert.deepEqual(outcome, { kind: "refused", reason: REASON_GATE_INACTIVE });
@@ -1140,9 +1146,27 @@ test("sending gate: an unclaimed location (no account id) is refused as not acti
   assert.equal(sendCalls.length, 0);
 });
 
-for (const status of ["past_due", "comped", "trialing"] as const) {
-  test(`sending gate: activated + ${status} still sends`, async () => {
-    const { repo } = createFakeRepo([makeAccount()], { status });
+for (const status of ["incomplete", "cancelled", null] as const) {
+  test(`sending gate: activated, but the number's subscription is ${status ?? "missing"} -> refused`, async () => {
+    const { repo } = createFakeRepo([makeAccount()], { status: "active", number: status });
+    const { deps, sendCalls } = makeDeps();
+    const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: `msg-gate-n-${status}` }), deps);
+    assert.deepEqual(outcome, { kind: "refused", reason: REASON_GATE_INACTIVE });
+    assert.equal(sendCalls.length, 0);
+  });
+}
+
+test("sending gate: a comped account sends whatever the number's billing says", async () => {
+  const { repo } = createFakeRepo([makeAccount()], { status: "comped", number: null });
+  const { deps, sendCalls } = makeDeps();
+  const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: "msg-gate-comped" }), deps);
+  assert.deepEqual(outcome, { kind: "accepted" });
+  assert.equal(sendCalls.length, 1);
+});
+
+for (const status of ["past_due", "active", "trialing"] as const) {
+  test(`sending gate: activated + number ${status} still sends`, async () => {
+    const { repo } = createFakeRepo([makeAccount()], { status: "active", number: status });
     const { deps, sendCalls } = makeDeps();
     const outcome = await handleProviderOutboundMessage(repo, samplePayloadFor({ messageId: `msg-gate-${status}` }), deps);
     assert.deepEqual(outcome, { kind: "accepted" });
@@ -1482,7 +1506,7 @@ test("drainGhlOutboundStatuses: a pending_send row is retried with the SAME idem
 });
 
 for (const [label, accountOver, billing, reasonMatch] of [
-  ["a paused (cancelled) account", {}, { status: "cancelled" as const }, /subscription inactive/],
+  ["a number whose subscription was cancelled", {}, { status: "active" as const, number: "cancelled" as const }, /subscription inactive/],
   ["a not-activated number", { activatedAt: null }, "default" as const, /isn't activated/],
   ["an unclaimed location", { accountId: null }, "default" as const, /isn't activated/],
 ] as const) {
@@ -1511,7 +1535,7 @@ test("retry gate: a multipart text part retry for a paused account is not sent",
   row.sendState = "pending_send";
   row.pendingText = "retry text";
   row.sendAttempts = 1;
-  const paused = createFakeRepo([makeAccount()], { status: "cancelled" });
+  const paused = createFakeRepo([makeAccount()], { status: "active", number: "cancelled" });
   // Re-use the seeded rows/parts but swap in a repo whose owner is cancelled.
   for (const [k, v] of repoBundle.rows) paused.rows.set(k, v);
   for (const [k, v] of repoBundle.attachments) paused.attachments.set(k, v);
@@ -2464,7 +2488,7 @@ test("retry gate: a pending_send attachment part of a multipart row for a paused
   assert.equal(part.sendState, "pending_send");
   // The text part already went out; billing then lapsed.
   seeded.bridgeLedger.set(`${TENANT_ID}:${row.idempotencyKey}`, { status: "sent", error: null });
-  const paused = createFakeRepo([makeAccount()], { status: "cancelled" });
+  const paused = createFakeRepo([makeAccount()], { status: "active", number: "cancelled" });
   for (const [k, v] of seeded.rows) paused.rows.set(k, v);
   for (const [k, v] of seeded.attachments) paused.attachments.set(k, v);
   for (const [k, v] of seeded.bridgeLedger) paused.bridgeLedger.set(k, v);
@@ -3786,10 +3810,10 @@ test("app-originated: number offline (linked before) -> held", async () => {
 });
 
 test("app-originated: billing gate applies and nothing is PUT to GHL", async () => {
-  const { repo, rows } = createFakeRepo([makeAccount()], { status: "cancelled" });
+  const { repo, rows } = createFakeRepo([makeAccount()], { status: "active", number: "cancelled" });
   const { deps, sendCalls, statusCalls } = makeDeps();
   const outcome = await sendAppOriginatedText(repo, deps, { account: makeAccount(), ...APP_INPUT });
-  assert.deepEqual(outcome, { kind: "refused", reason: sendingGate(makeAccount(), "cancelled", brandConfig().name) });
+  assert.deepEqual(outcome, { kind: "refused", reason: sendingGate(makeAccount(), "active", brandConfig().name, "cancelled") });
   assert.equal(sendCalls.length, 0);
   assert.equal(statusCalls.length, 0);
   assert.equal([...rows.values()][0].reportedStatus, "failed");

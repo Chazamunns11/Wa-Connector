@@ -2,32 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { handleBillingEvent, type WebhookDeps, type WebhookRepo } from "@/lib/billing/webhook-handler";
-import { billableNumbers, countBillableNumbers, syncSubscriptionQuantity, type QuantityDeps } from "@/lib/billing/quantity";
-import { applyCheckoutSession } from "@/lib/billing/onboard";
-import type { Account } from "@/lib/types";
-import { parseSubscription, type StripeCheckoutSession, type StripeSubscription } from "@/lib/stripe/billing";
+import { parseSubscription, type StripeCheckoutSession } from "@/lib/stripe/billing";
+import type { Account, GhlAccount, NumberBilling } from "@/lib/types";
+import { account, number, numbersRepo } from "./billing-fakes";
 
-function account(over: Partial<Account> = {}): Account {
-  return {
-    id: "acc-1",
-    name: "A",
-    kind: "direct",
-    ownerEmail: "o@x.co",
-    stripeCustomerId: "cus",
-    stripeSubscriptionId: "sub",
-    billingStatus: "trialing",
-    trialEndsAt: null,
-    cancelledAt: null,
-    cleanedUpAt: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    ...over,
-  } as Account;
-}
-
-function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Account | null; session?: Partial<StripeCheckoutSession> } = {}) {
+function harness(
+  opts: {
+    fresh?: boolean;
+    numbers?: NumberBilling[];
+    owner?: Account | null;
+    session?: Partial<StripeCheckoutSession>;
+  } = {},
+) {
   const log: string[] = [];
-  const patches: Array<{ id: string; patch: unknown }> = [];
   const notes: string[] = [];
+  const nums = numbersRepo(opts.numbers ?? [number("t1", { stripeSubscriptionId: "sub", billingStatus: "trialing", pricePence: 999 })]);
   const state: { body: Record<string, unknown>; live: Record<string, unknown> | null } = { body: {}, live: null };
   const repo: WebhookRepo = {
     deleteStripeEvent: async () => {
@@ -37,21 +26,17 @@ function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Ac
       log.push("record");
       return opts.fresh ?? true;
     },
-    getAccountById: async () => (opts.byId === undefined ? account() : opts.byId),
-    getAccountByStripeCustomerId: async () => (opts.byCustomer === undefined ? null : opts.byCustomer),
-    updateAccountBilling: async (id, patch) => {
-      patches.push({ id, patch });
-    },
+    getAccountById: async () => (opts.owner === undefined ? account() : opts.owner),
+    getAccountByStripeCustomerId: async (id: string) => (id === "cus_9" ? account() : null),
+    getGhlAccountByLocationId: async (id: string) => ({ locationId: id, accountId: "acc-1" }) as GhlAccount,
+    getNumberBilling: nums.getNumberBilling,
+    updateNumberBilling: nums.updateNumberBilling,
   };
-  const session = { id: "cs_1", status: "complete", customer: "cus", subscription: null, metadata: { account_id: "acc-1" }, ...opts.session } as StripeCheckoutSession;
+  const session = { id: "cs_1", status: "complete", mode: "setup", customer: "cus", setupPaymentMethod: "pm", metadata: { account_id: "acc-1", purpose: "add_card" }, ...opts.session } as StripeCheckoutSession;
   const deps: WebhookDeps = {
-    applyCheckout: async () => {
-      log.push("apply");
-      return { applied: true };
-    },
     applyCardSetup: async () => {
       log.push("card");
-      return { kind: "resumed" };
+      return { kind: "saved", resumed: 0 };
     },
     retrieveCheckoutSession: (async (id: string) => {
       log.push(`retrieve:${id}`);
@@ -59,18 +44,18 @@ function harness(opts: { fresh?: boolean; byId?: Account | null; byCustomer?: Ac
     }) as never,
     retrieveSubscription: (async (id: string) => {
       log.push(`live:${id}`);
-      const raw = { ...(state.live ?? state.body), items: { data: [] } };
-      const data = parseSubscription(raw);
+      const raw = { ...(state.live ?? state.body) };
+      const data = parseSubscription({ items: { data: [{ id: "si", price: { unit_amount: 999 } }] }, ...raw });
       return data ? { ok: true, data } : { ok: false, status: 500, code: null, message: "bad" };
     }) as never,
-    syncQuantity: async () => {
+    syncPrices: async () => {
       log.push("sync");
     },
     notify: (t) => {
       notes.push(t);
     },
   };
-  return { repo, deps, log, patches, notes, state };
+  return { repo, deps, log, nums, notes, state };
 }
 
 type H = ReturnType<typeof harness>;
@@ -83,347 +68,140 @@ const sub = (over: Record<string, unknown> = {}) => ({
   id: "sub",
   status: "active",
   customer: "cus",
-  metadata: { account_id: "acc-1" },
+  metadata: { account_id: "acc-1", location_id: "loc-1", tenant_id: "t1" },
   ...over,
 });
+const ev = (type: string, object: Record<string, unknown>, id = "evt_1") => ({ id, type, data: { object } });
 
 test("duplicate event id does nothing else", async () => {
   const h = harness({ fresh: false });
-  const out = await run(h, { id: "evt_1", type: "checkout.session.completed", data: { object: { id: "cs_1" } } });
-  assert.deepEqual(out, { kind: "duplicate" });
+  assert.deepEqual(await run(h, ev("customer.subscription.updated", sub())), { kind: "duplicate" });
   assert.deepEqual(h.log, ["record"]);
+  assert.equal(h.nums.writes.length, 0);
 });
 
-test("checkout.session.completed retrieves fresh, applies, syncs quantity", async () => {
+test("checkout.session.completed (save a card) retrieves the session fresh and applies the card", async () => {
   const h = harness();
-  const out = await run(h, {
-    id: "evt_2",
-    type: "checkout.session.completed",
-    data: { object: { id: "cs_1", subscription: "ignored-body-value" } },
-  });
-  assert.deepEqual(out, { kind: "handled", type: "checkout.session.completed" });
-  assert.deepEqual(h.log, ["record", "retrieve:cs_1", "apply", "sync"]);
+  assert.deepEqual(await run(h, ev("checkout.session.completed", { id: "cs_1" })), { kind: "handled", type: "checkout.session.completed" });
+  assert.deepEqual(h.log, ["record", "retrieve:cs_1", "card"]);
 });
 
-test("subscription.updated past_due writes the mapped status", async () => {
+test("a non-setup Checkout is ignored: number subscriptions are never created by Checkout", async () => {
+  const h = harness({ session: { mode: "subscription" } });
+  assert.deepEqual(await run(h, ev("checkout.session.completed", { id: "cs_1" })), { kind: "ignored", type: "checkout.session.completed" });
+  assert.ok(!h.log.includes("card"));
+});
+
+test("trialing -> active (the trial ended and the card was charged) writes the number's live status and re-prices", async () => {
   const h = harness();
-  const out = await run(h, {
-    id: "evt_3",
-    type: "customer.subscription.updated",
-    data: { object: sub({ status: "past_due" }) },
-  });
-  assert.equal(out.kind, "handled");
-  assert.deepEqual(h.patches, [
-    { id: "acc-1", patch: { billingStatus: "past_due", trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, stripeSubscriptionId: "sub" } },
-  ]);
+  assert.deepEqual(await run(h, ev("customer.subscription.updated", sub())), { kind: "handled", type: "customer.subscription.updated" });
+  assert.deepEqual(h.nums.writes, [{ tenantId: "t1", patch: { billingStatus: "active", trialEndsAt: null, pricePence: 999 } }]);
+  assert.deepEqual(h.log, ["record", "live:sub", "sync"]);
 });
 
-test("subscription.deleted writes cancelled with cancelledAt", async () => {
+test("a trialing number carries its own trial end", async () => {
+  const h = harness({ numbers: [number("t1", { stripeSubscriptionId: "sub", billingStatus: "trialing" })] });
+  await run(h, ev("customer.subscription.updated", sub({ status: "trialing", trial_end: 1_800_000_000 })));
+  assert.equal(h.nums.rows.get("t1")!.trialEndsAt, new Date(1_800_000_000 * 1000).toISOString());
+  assert.ok(!h.log.includes("sync"), "no status change, nothing to re-price");
+});
+
+test("past_due is written (the number keeps sending) and a deletion writes cancelled", async () => {
   const h = harness();
-  await run(h, {
-    id: "evt_4",
-    type: "customer.subscription.deleted",
-    data: { object: sub({ status: "canceled", canceled_at: 1_700_000_000, ended_at: 1_800_000_000 }) },
-  });
-  assert.deepEqual(h.patches[0].patch, {
-    billingStatus: "cancelled",
-    trialEndsAt: null,
-    cancelledAt: "2027-01-15T08:00:00.000Z",
-    stripeSubscriptionId: "sub",
-  });
+  await run(h, ev("customer.subscription.updated", sub({ status: "past_due" })));
+  assert.equal(h.nums.rows.get("t1")!.billingStatus, "past_due");
+  await run(h, ev("customer.subscription.deleted", sub({ status: "canceled", ended_at: 1_800_000_000 }), "evt_2"));
+  assert.equal(h.nums.rows.get("t1")!.billingStatus, "cancelled");
+  // Starts the 14-day credential cleanup grace from when it actually ended.
+  assert.equal(h.nums.rows.get("t1")!.cancelledAt, new Date(1_800_000_000 * 1000).toISOString());
+  assert.equal(h.log.filter((l) => l === "sync").length, 2);
 });
 
-test("cancel-at-period-end: cancelledAt is ended_at, not the request date", async () => {
+test("events are applied from the live subscription, not the event body (out-of-order delivery)", async () => {
   const h = harness();
-  h.state.live = sub({ status: "canceled", canceled_at: 1_800_000_000 - 30 * 86400, ended_at: 1_800_000_000 });
-  await run(h, { id: "evt_e", type: "customer.subscription.deleted", data: { object: sub({ status: "canceled" }) } });
-  assert.equal((h.patches[0].patch as { cancelledAt: string }).cancelledAt, "2027-01-15T08:00:00.000Z");
+  h.state.live = sub({ status: "canceled" });
+  const event = ev("customer.subscription.updated", sub({ status: "active" }));
+  await handleBillingEvent(h.repo, h.deps, event);
+  assert.equal(h.nums.rows.get("t1")!.billingStatus, "cancelled");
 });
 
-test("reactivation clears cancelledAt and cleanedUpAt", async () => {
-  const h = harness({ byId: account({ billingStatus: "cancelled", cancelledAt: "2026-01-01T00:00:00.000Z", cleanedUpAt: "2026-02-01T00:00:00.000Z" }) });
-  await run(h, { id: "evt_r", type: "customer.subscription.updated", data: { object: sub({ status: "active" }) } });
-  assert.deepEqual(h.patches[0].patch, {
-    billingStatus: "active",
-    trialEndsAt: null,
-    cancelledAt: null,
-    cleanedUpAt: null,
-    stripeSubscriptionId: "sub",
-  });
-});
-
-test("trialing carries trialEndsAt", async () => {
+test("trial ended with no card: paused keeps the trial end date; unpaid also maps to paused", async () => {
   const h = harness();
-  await run(h, {
-    id: "evt_t",
-    type: "customer.subscription.updated",
-    data: { object: sub({ status: "trialing", trial_end: 1_800_000_000 }) },
-  });
-  assert.equal((h.patches[0].patch as { trialEndsAt: string }).trialEndsAt, "2027-01-15T08:00:00.000Z");
+  await run(h, ev("customer.subscription.paused", sub({ status: "paused", trial_end: 1_800_000_000 })));
+  assert.equal(h.nums.rows.get("t1")!.billingStatus, "paused");
+  assert.equal(h.nums.rows.get("t1")!.trialEndsAt, new Date(1_800_000_000 * 1000).toISOString());
+  await run(h, ev("customer.subscription.updated", sub({ status: "unpaid", trial_end: 1_800_000_000 }), "evt_2"));
+  assert.equal(h.nums.rows.get("t1")!.trialEndsAt, null);
 });
 
-test("no metadata falls back to customer lookup", async () => {
-  const h = harness({ byCustomer: account({ id: "acc-9" }) });
-  const out = await run(h, {
-    id: "evt_5",
-    type: "customer.subscription.updated",
-    data: { object: sub({ metadata: {} }) },
-  });
-  assert.equal(out.kind, "handled");
-  assert.equal(h.patches[0].id, "acc-9");
+test("an unmapped status leaves the number untouched", async () => {
+  const h = harness();
+  assert.deepEqual(await run(h, ev("customer.subscription.updated", sub({ status: "mystery" }))), { kind: "handled", type: "customer.subscription.updated" });
+  assert.equal(h.nums.writes.length, 0);
 });
 
-test("unknown account notifies once and reports unknown_account", async () => {
-  const h = harness({ byCustomer: null });
-  const out = await run(h, {
-    id: "evt_6",
-    type: "customer.subscription.updated",
-    data: { object: sub({ metadata: {} }) },
-  });
-  assert.deepEqual(out, { kind: "unknown_account", type: "customer.subscription.updated" });
+test("a subscription with no tenant in its metadata is not a number's and is ignored", async () => {
+  const h = harness();
+  assert.deepEqual(await run(h, ev("customer.subscription.updated", sub({ metadata: { account_id: "acc-1" } }))), { kind: "ignored", type: "customer.subscription.updated" });
+  assert.equal(h.nums.writes.length, 0);
+});
+
+test("a removed number: a cancelled subscription is quietly ignored, a live one tells the operator", async () => {
+  const h = harness({ numbers: [] });
+  assert.equal((await run(h, ev("customer.subscription.deleted", sub({ status: "canceled" })))).kind, "ignored");
+  assert.equal(h.notes.length, 0);
+  assert.equal((await run(h, ev("customer.subscription.updated", sub({ status: "active" }), "evt_2"))).kind, "ignored");
   assert.equal(h.notes.length, 1);
-  assert.equal(h.patches.length, 0);
+  assert.match(h.notes[0], /no longer exists/);
+});
+
+test("an older, replaced subscription never overwrites the number's current one", async () => {
+  const h = harness({ numbers: [number("t1", { stripeSubscriptionId: "sub_new", billingStatus: "active" })] });
+  assert.equal((await run(h, ev("customer.subscription.deleted", sub({ status: "canceled" })))).kind, "ignored");
+  assert.equal(h.nums.rows.get("t1")!.billingStatus, "active");
+  assert.equal(h.notes.length, 0);
+  await run(h, ev("customer.subscription.updated", sub({ status: "active" }), "evt_2"));
+  assert.equal(h.notes.length, 1, "a live stray subscription is flagged");
+});
+
+test("a subscription event that beats its own row write is retried; one cancelled after a failed write is ignored", async () => {
+  const h = harness({ numbers: [number("t1")] });
+  await assert.rejects(run(h, ev("customer.subscription.created", sub({ status: "trialing" }))), /before its number recorded it/);
+  assert.deepEqual(h.log.slice(-1), ["unrecord"]);
+  assert.equal((await run(h, ev("customer.subscription.deleted", sub({ status: "canceled" }), "evt_2"))).kind, "ignored");
+});
+
+test("a number with no owning account is reported as unknown_account after its status is recorded", async () => {
+  const h = harness({ owner: null });
+  assert.deepEqual(await run(h, ev("customer.subscription.updated", sub())), { kind: "unknown_account", type: "customer.subscription.updated" });
+  assert.equal(h.nums.rows.get("t1")!.billingStatus, "active");
+  assert.equal(h.notes.length, 1);
 });
 
 test("a failing handler releases the event id so Stripe's retry is processed", async () => {
   const h = harness();
-  let fail = true;
-  const original = h.deps.applyCheckout;
-  h.deps.applyCheckout = async (s) => {
-    if (fail) throw new Error("db down");
-    return original(s);
-  };
-  const seen = new Set<string>();
-  h.repo.recordStripeEvent = async (id) => {
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  };
-  h.repo.deleteStripeEvent = async (id) => {
-    seen.delete(id);
-    h.log.push("unrecord");
-  };
-  const ev = { id: "evt_r", type: "checkout.session.completed", data: { object: { id: "cs_1" } } };
-  await assert.rejects(run(h, ev), /db down/);
-  assert.ok(h.log.includes("unrecord"));
-  fail = false;
-  const out = await run(h, ev);
-  assert.deepEqual(out, { kind: "handled", type: "checkout.session.completed" });
-});
-
-test("a stale updated(active) after deleted(canceled) leaves the account cancelled", async () => {
-  const h = harness();
-  h.state.live = { ...sub({ status: "canceled", canceled_at: 1_800_000_000 }) };
-  await run(h, { id: "evt_s1", type: "customer.subscription.updated", data: { object: sub({ status: "active" }) } });
-  assert.equal((h.patches[0].patch as { billingStatus: string }).billingStatus, "cancelled");
-  assert.ok(h.log.includes("live:sub"));
-});
-
-test("events for a different subscription than the account's are ignored", async () => {
-  const h = harness();
-  const out = await run(h, { id: "evt_o", type: "customer.subscription.updated", data: { object: sub({ id: "sub_old", status: "canceled" }) } });
-  assert.deepEqual(out, { kind: "ignored", type: "customer.subscription.updated" });
-  assert.equal(h.patches.length, 0);
-});
-
-test("incomplete status leaves billing untouched", async () => {
-  const h = harness();
-  const out = await run(h, {
-    id: "evt_7",
-    type: "customer.subscription.updated",
-    data: { object: sub({ status: "incomplete" }) },
-  });
-  assert.equal(out.kind, "handled");
-  assert.equal(h.patches.length, 0);
+  h.deps.retrieveSubscription = (async () => ({ ok: false, status: 500, code: null, message: "down" })) as never;
+  await assert.rejects(run(h, ev("customer.subscription.updated", sub())));
+  assert.deepEqual(h.log, ["record", "unrecord"]);
 });
 
 test("invoice.payment_failed notifies with the customer id, no billing write", async () => {
   const h = harness();
-  const out = await run(h, {
-    id: "evt_8",
-    type: "invoice.payment_failed",
-    data: { object: { customer: "cus_42" } },
-  });
-  assert.equal(out.kind, "handled");
-  assert.equal(h.notes.length, 1);
-  assert.match(h.notes[0], /cus_42/);
-  assert.equal(h.patches.length, 0);
+  assert.deepEqual(await run(h, ev("invoice.payment_failed", { customer: "cus_9" })), { kind: "handled", type: "invoice.payment_failed" });
+  assert.match(h.notes[0], /cus_9/);
+  assert.equal(h.nums.writes.length, 0);
 });
 
-test("other event types are ignored", async () => {
+test("invoice.payment_failed for a customer this app doesn't know (shared Stripe account) is ignored, no alert", async () => {
   const h = harness();
-  const out = await run(h, { id: "evt_9", type: "customer.created", data: { object: {} } });
-  assert.deepEqual(out, { kind: "ignored", type: "customer.created" });
+  assert.deepEqual(await run(h, ev("invoice.payment_failed", { customer: "cus_coach" })), { kind: "ignored", type: "invoice.payment_failed" });
+  assert.equal(h.notes.length, 0);
 });
 
-function qdeps(over: Partial<QuantityDeps> = {}) {
-  const sets: Array<[string, number]> = [];
-  const notes: string[] = [];
-  const subscription = { id: "sub", itemId: "si_1", quantity: 0 } as StripeSubscription;
-  const deps: QuantityDeps = {
-    retrieveSubscription: (async () => ({ ok: true, data: subscription })) as never,
-    setQuantity: (async (item: string, q: number) => {
-      sets.push([item, q]);
-      return { ok: true, data: { id: item, quantity: q } };
-    }) as never,
-    notify: (t) => {
-      notes.push(t);
-    },
-    ...over,
-  };
-  return { deps, sets, notes };
-}
-/** `n` activated sub-accounts with one number each (per-number billing). */
-const qrepo = (n: number) => ({
-  listGhlAccountsForAccount: async () =>
-    Array.from({ length: n }, (_, i) => ({ locationId: `loc-${i}`, tenantId: `t-${i}`, activatedAt: "2026-10-01T00:00:00.000Z" })) as never,
-  countNumbersByLocation: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 1])),
-});
-
-test("quantity sync: comped and missing subscription are no_subscription", async () => {
-  const { deps } = qdeps();
-  assert.deepEqual(await syncSubscriptionQuantity(qrepo(1), deps, account({ billingStatus: "comped" })), { ok: false, reason: "no_subscription" });
-  assert.deepEqual(await syncSubscriptionQuantity(qrepo(1), deps, account({ stripeSubscriptionId: null })), { ok: false, reason: "no_subscription" });
-});
-
-test("quantity sync sets the activated count", async () => {
-  const { deps, sets } = qdeps();
-  assert.deepEqual(await syncSubscriptionQuantity(qrepo(2), deps, account()), { ok: true, quantity: 2 });
-  assert.deepEqual(sets, [["si_1", 2]]);
-});
-
-test("quantity sync: Stripe failure notifies", async () => {
-  const { deps, notes } = qdeps({
-    setQuantity: (async () => ({ ok: false, status: 500, code: null, message: "boom" })) as never,
-  });
-  assert.deepEqual(await syncSubscriptionQuantity(qrepo(2), deps, account()), { ok: false, reason: "stripe_failed" });
-  assert.deepEqual(notes, ["Billing quantity sync failed for account acc-1: boom"]);
-});
-
-test("subscription.updated re-syncs the Stripe quantity so a failed deactivation sync is healed", async () => {
-  const h = harness();
-  await run(h, { id: "evt_q", type: "customer.subscription.updated", data: { object: sub({ status: "active" }) } });
-  assert.ok(h.log.includes("sync"));
-});
-
-test("subscription.deleted does not re-sync the quantity", async () => {
-  const h = harness();
-  h.state.live = { ...sub({ status: "canceled", canceled_at: 1_800_000_000 }) };
-  await run(h, { id: "evt_q2", type: "customer.subscription.deleted", data: { object: sub({ status: "canceled" }) } });
-  assert.equal(h.log.includes("sync"), false);
-});
-
-test("quantity sync skips the Stripe write when the live quantity already equals the count", async () => {
-  const subscription = { id: "sub", itemId: "si_1", quantity: 2 } as StripeSubscription;
-  const { deps, sets, notes } = qdeps({ retrieveSubscription: (async () => ({ ok: true, data: subscription })) as never });
-  assert.deepEqual(await syncSubscriptionQuantity(qrepo(2), deps, account()), { ok: true, quantity: 2 });
-  assert.deepEqual(sets, []);
-  assert.deepEqual(notes, []);
-});
-
-test("a cancelled account that restarts via Checkout is repointed and its new subscription's events are handled", async () => {
-  const stored = account({ billingStatus: "cancelled", stripeSubscriptionId: "sub_old", cancelledAt: "2026-02-01T00:00:00.000Z", cleanedUpAt: "2026-02-15T00:00:00.000Z" });
-  const h = harness({ byId: stored });
-  const newSub = { id: "sub_new", status: "trialing", customer: "cus", metadata: { account_id: "acc-1" }, trial_end: 1800000000, items: { data: [] } };
-  // Before the checkout is applied, the new subscription is foreign and ignored.
-  const early = await run(h, { id: "evt_e", type: "customer.subscription.created", data: { object: newSub } });
-  assert.deepEqual(early, { kind: "ignored", type: "customer.subscription.created" });
-  // applyCheckoutSession repoints the account (and clears the cancel markers) ...
-  const patches: unknown[] = [];
-  const parsed = parseSubscription(newSub)!;
-  await applyCheckoutSession(
-    { getAccountById: async () => stored, updateAccountBilling: async (_id, patch) => void patches.push(patch) },
-    { id: "cs_2", status: "complete", customer: "cus", subscription: parsed, metadata: { account_id: "acc-1" } } as StripeCheckoutSession,
-  );
-  assert.deepEqual(patches, [
-    { stripeCustomerId: "cus", stripeSubscriptionId: "sub_new", billingStatus: "trialing", trialEndsAt: new Date(1800000000 * 1000).toISOString(), cancelledAt: null, cleanedUpAt: null },
-  ]);
-  // ... after which the new subscription's events pass the foreign-subscription guard.
-  const repointed = harness({ byId: account({ billingStatus: "trialing", stripeSubscriptionId: "sub_new" }) });
-  const out = await run(repointed, { id: "evt_n", type: "customer.subscription.updated", data: { object: { ...newSub, status: "active" } } });
-  assert.deepEqual(out, { kind: "handled", type: "customer.subscription.updated" });
-  assert.equal(repointed.patches.length, 1);
-});
-
-test("trial ended with no card: subscription.paused writes paused and keeps the trial end date", async () => {
-  const h = harness();
-  const out = await run(h, {
-    id: "evt_p",
-    type: "customer.subscription.paused",
-    data: { object: sub({ status: "paused", trial_end: 1_800_000_000 }) },
-  });
-  assert.deepEqual(out, { kind: "handled", type: "customer.subscription.paused" });
-  assert.deepEqual(h.patches, [
-    {
-      id: "acc-1",
-      patch: { billingStatus: "paused", trialEndsAt: "2027-01-15T08:00:00.000Z", cancelledAt: null, cleanedUpAt: null, stripeSubscriptionId: "sub" },
-    },
-  ]);
-});
-
-test("unpaid also maps to paused but carries no trial end date", async () => {
-  const h = harness();
-  await run(h, { id: "evt_u", type: "customer.subscription.updated", data: { object: sub({ status: "unpaid", trial_end: 1_800_000_000 }) } });
-  assert.deepEqual(h.patches[0].patch, { billingStatus: "paused", trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, stripeSubscriptionId: "sub" });
-});
-
-test("adding a card: subscription.resumed writes active from the live subscription and re-syncs quantity", async () => {
-  const h = harness({ byId: account({ billingStatus: "paused", trialEndsAt: "2027-01-15T08:00:00.000Z" }) });
-  h.state.live = sub({ status: "active" });
-  const out = await run(h, { id: "evt_res", type: "customer.subscription.resumed", data: { object: sub({ status: "paused" }) } });
-  assert.deepEqual(out, { kind: "handled", type: "customer.subscription.resumed" });
-  assert.deepEqual(h.patches[0].patch, { billingStatus: "active", trialEndsAt: null, cancelledAt: null, cleanedUpAt: null, stripeSubscriptionId: "sub" });
-  assert.ok(h.log.includes("sync"));
-});
-
-test("a setup-mode checkout (add a card) goes to applyCardSetup, not the signup apply", async () => {
-  const h = harness({ session: { mode: "setup", setupPaymentMethod: "pm_1", metadata: { account_id: "acc-1", purpose: "add_card" } } });
-  const out = await run(h, { id: "evt_s", type: "checkout.session.completed", data: { object: { id: "cs_1" } } });
-  assert.deepEqual(out, { kind: "handled", type: "checkout.session.completed" });
-  assert.deepEqual(h.log, ["record", "retrieve:cs_1", "card"]);
-  assert.deepEqual(h.patches, []);
-});
-
-test("trial_will_end is ignored: there is no email to send yet", async () => {
-  const h = harness();
-  const out = await run(h, { id: "evt_w", type: "customer.subscription.trial_will_end", data: { object: sub({ status: "trialing" }) } });
-  assert.deepEqual(out, { kind: "ignored", type: "customer.subscription.trial_will_end" });
-});
-
-// ---------------------------------------------------------------------------
-// Per-number billing (Nov 2026, £7.99 per WhatsApp number)
-// ---------------------------------------------------------------------------
-
-test("billableNumbers: every number on an activated sub-account counts; inactive sub-accounts count nothing", () => {
-  assert.equal(
-    billableNumbers([
-      { activated: true, numbers: 3 },
-      { activated: true, numbers: 1 },
-      { activated: false, numbers: 3 },
-    ]),
-    4
-  );
-});
-
-test("billableNumbers: an activated sub-account always counts at least 1 (its default number)", () => {
-  assert.equal(billableNumbers([{ activated: true, numbers: 0 }]), 1);
-  assert.equal(billableNumbers([]), 0);
-});
-
-test("countBillableNumbers: reads only activated sub-accounts, then counts their numbers", async () => {
-  const asked: string[][] = [];
-  const repo = {
-    listGhlAccountsForAccount: async () =>
-      [
-        { locationId: "on-1", activatedAt: "2026-10-01T00:00:00.000Z" },
-        { locationId: "off", activatedAt: null },
-        { locationId: "on-2", activatedAt: "2026-10-02T00:00:00.000Z" },
-      ] as never,
-    countNumbersByLocation: async (ids: string[]) => {
-      asked.push(ids);
-      return { "on-1": 3, "on-2": 2, off: 3 };
-    },
-  };
-  assert.equal(await countBillableNumbers(repo, "acc-1"), 5);
-  assert.deepEqual(asked, [["on-1", "on-2"]]);
+test("other event types (trial_will_end included) are ignored", async () => {
+  for (const type of ["customer.subscription.trial_will_end", "invoice.paid", "charge.refunded"]) {
+    const h = harness();
+    assert.deepEqual(await run(h, ev(type, sub())), { kind: "ignored", type });
+    assert.equal(h.nums.writes.length, 0);
+  }
 });

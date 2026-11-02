@@ -11,13 +11,13 @@ export function pricingCopy(): PricingCopy {
   return {
     // One paragraph (Task 13C). Kept as an array because /docs/billing renders it.
     trialTerms: [
-      `${trialSentence()} After that it's ${priceSentence(pricingConfig().currency)} Billed monthly in advance. A number you add is charged straight away for the rest of the month, and one you remove is credited to your next bill.`,
+      `${trialSentence()} After that it's ${priceSentence(pricingConfig().currency)} Each number is billed as its own monthly payment, on the day its trial ended.`,
     ],
     failedPayment: [
-      "If a payment fails, Stripe retries it for about 7 days. Sending continues while that happens, and a banner on your dashboard asks you to update the card.",
-      "If the subscription still ends unpaid, sending pauses until you pay.",
+      "If a payment fails, Stripe retries it for about 7 days. That number keeps sending while that happens, and a banner on your dashboard asks you to update the card.",
+      "If it still ends unpaid, that number stops sending until you pay.",
     ],
     cancel:
-      "You can cancel any time from the billing portal. It takes effect at the end of the period you've paid for, and your numbers keep sending until then.",
+      "You can cancel any time. Removing a number, or deactivating its sub-account, stops its billing straight away, and any unused part of the month is credited to your next bill.",
   };
 }

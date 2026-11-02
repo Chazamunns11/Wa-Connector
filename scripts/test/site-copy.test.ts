@@ -215,7 +215,7 @@ test("Nov 2026 pricing: the trial paragraph and our comparison column state £9.
   }
 });
 
-test("trial copy (Nov 2026): a card is taken at the start and charged automatically on day 7; never 'no card needed'", () => {
+test("trial copy: a card is saved at the start and each number has its own trial; never 'no card needed'", () => {
   const signup = readFileSync(join(process.cwd(), "src/app/(site)/signup/page.tsx"), "utf8");
   const sources = {
     sales: strings(salesCopy(brand)).join(" "),
@@ -227,6 +227,6 @@ test("trial copy (Nov 2026): a card is taken at the start and charged automatica
     assert.doesNotMatch(v, /no card needed|needs no card|without a card/i, k);
     // The signup page renders the shared sentence; the rest contain it as text.
     if (k === "signup") assert.match(v, /trialSentence\(\)/, k);
-    else assert.match(v, /charged automatically unless you cancel first/, k);
+    else assert.match(v, /7-day free trial on every WhatsApp number\. Save your card when you start: nothing is charged until a number's trial ends/, k);
   }
 });

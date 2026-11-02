@@ -99,7 +99,7 @@ export interface HealthReport {
     status: string;
     numbers: { slot: number; label: string | null; status: WhatsappSessionStatus; down: boolean }[];
   }[];
-  /** Numbers beyond each location's first — the extra-number bolt-on count. */
+  /** Numbers beyond each location's first (a count only; Stripe bills every number itself, 0020). */
   extraNumbers: number;
   alertsSent: number;
   recovered: number;

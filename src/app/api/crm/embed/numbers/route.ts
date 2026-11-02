@@ -29,10 +29,10 @@
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { logoutWhatsappSession } from "@/lib/whatsapp-bridge";
+import { numberBillingDeps } from "@/lib/billing/live-deps";
 import { readSmallJsonBody } from "@/lib/bridge-panel-guard";
 import { authorizeGhlEmbedLocationRequest, guardFailureResponseBody } from "@/app/api/crm/embed/guard";
 import { decideAddNumber, decideRemoveNumber, decideUpdateNumber, type NumbersRouteResult } from "./logic";
-import { chargeBeforeAddingNumber, syncQuantityForLocation } from "@/lib/billing/sync-for-location";
 
 export const dynamic = "force-dynamic";
 
@@ -45,14 +45,7 @@ async function handle(request: Request, method: string, decide: Decide): Promise
       return NextResponse.json(guardFailureResponseBody(auth), { status: auth.status });
     }
     const body = await readSmallJsonBody(request);
-    // Per-number billing: a new number is paid for first; a declined card adds nothing.
-    if (method === "POST") {
-      const charge = await chargeBeforeAddingNumber(auth.location.locationId);
-      if (!charge.ok) return NextResponse.json({ ok: false, code: "payment_declined", message: charge.message }, { status: 402 });
-    }
     const result = await decide(auth.location.locationId, body, auth.location.ghlUserId ?? null);
-    // A number added or removed changes the Stripe quantity (and credits back an add that then failed).
-    if (method === "POST" || (result.status === 200 && method === "DELETE")) await syncQuantityForLocation(auth.location.locationId);
     return NextResponse.json(result.body, { status: result.status });
   } catch (err) {
     // Never echoes `err` into the response.
@@ -62,12 +55,12 @@ async function handle(request: Request, method: string, decide: Decide): Promise
 }
 
 export async function POST(request: Request) {
-  return handle(request, "POST", (locationId, body) => decideAddNumber(repo, locationId, body));
+  return handle(request, "POST", (locationId, body) => decideAddNumber(repo, numberBillingDeps(), locationId, body));
 }
 
 export async function DELETE(request: Request) {
   return handle(request, "DELETE", (locationId, body) =>
-    decideRemoveNumber(repo, { logout: logoutWhatsappSession }, locationId, body)
+    decideRemoveNumber(repo, { logout: logoutWhatsappSession, billing: numberBillingDeps() }, locationId, body)
   );
 }
 

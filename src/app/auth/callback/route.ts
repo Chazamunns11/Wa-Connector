@@ -24,7 +24,7 @@ import { completeSignup, decideCallback, pendingFromSignupToken, SIGNUP_COOKIE }
 import { repo } from "@/lib/data";
 import { verifyClaimToken } from "@/lib/ghl-claim";
 import { isStripeConfigured } from "@/lib/stripe/client";
-import { createCheckoutSession } from "@/lib/stripe/billing";
+import { createCardSetupSession, createCustomer } from "@/lib/stripe/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
         try {
           outcome = await completeSignup(
             repo,
-            { checkout: createCheckoutSession, appUrl: brandConfig().appUrl, verifyClaim: verifyClaimToken },
+            { createCustomer, setup: createCardSetupSession, appUrl: brandConfig().appUrl, verifyClaim: verifyClaimToken },
             { userId: user.id, email: user.email, pending },
           );
         } catch {
@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
           return NextResponse.redirect(`${origin}/signup?error=failed`);
         }
         if (outcome.kind === "checkout") return NextResponse.redirect(outcome.url);
-        // The account exists but Checkout failed: the dashboard offers "Start your free trial".
+        // The account exists but Checkout failed: the dashboard offers "Save a card" again.
         return NextResponse.redirect(`${origin}/dashboard`);
       }
 

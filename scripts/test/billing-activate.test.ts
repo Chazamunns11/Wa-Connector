@@ -3,121 +3,123 @@ import assert from "node:assert/strict";
 
 import { ActivationCapError } from "@/lib/billing/activation";
 import { activateLocation, deactivateLocation, type ActivateDeps, type ActivateRepo } from "@/lib/billing/activate";
-import { parseSubscription } from "@/lib/stripe/billing";
-import type { Account, BillingStatus, GhlAccount } from "@/lib/types";
-
-/** Per-number billing fakes: `n` activated sub-accounts with one number each. */
-const activatedLocations = (n: number) =>
-  Array.from({ length: n }, (_, i) => ({ locationId: `active-${i}`, tenantId: `t-${i}`, activatedAt: "2026-10-01T00:00:00.000Z" })) as never;
-const oneNumberEach = async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, 1]));
-
-function account(over: Partial<Account> = {}): Account {
-  return {
-    id: "acc-1",
-    name: "A",
-    kind: "direct",
-    ownerEmail: "o@x.co",
-    stripeCustomerId: "cus",
-    stripeSubscriptionId: "sub",
-    billingStatus: "active",
-    trialEndsAt: null,
-    cancelledAt: null,
-    cleanedUpAt: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    ...over,
-  } as Account;
-}
+import type { Account, BillingStatus, GhlAccount, NumberBilling } from "@/lib/types";
+import { account, fakeStripe, number, numbersRepo } from "./billing-fakes";
 
 function harness(
   opts: {
-    liveQty?: number;
     status?: BillingStatus;
-    active?: number;
-    all?: number;
-    cap?: number | null;
+    customer?: string | null;
     owner?: string | null;
     activatedAt?: string | null;
-    stripeFails?: boolean;
+    numbers?: NumberBilling[];
+    all?: number;
+    cap?: number | null;
+    failOn?: string[];
+    failCreateAfter?: number;
     dbFails?: boolean;
-    noSub?: boolean;
     matched?: number;
   } = {},
 ) {
   const log: string[] = [];
-  const notes: string[] = [];
   const location = { locationId: "loc-1", accountId: opts.owner === undefined ? "acc-1" : opts.owner, activatedAt: opts.activatedAt ?? null } as GhlAccount;
-  const acct = account({ billingStatus: opts.status ?? "active", stripeSubscriptionId: opts.noSub ? null : "sub" });
+  const acct: Account = account({ billingStatus: opts.status ?? "active", stripeCustomerId: opts.customer === undefined ? "cus" : opts.customer });
+  const nums = numbersRepo(opts.numbers ?? [number("t1"), number("t2"), number("other", { locationId: "loc-2" })]);
+  const stripe = fakeStripe({ failOn: opts.failOn, failCreateAfter: opts.failCreateAfter });
   const repo: ActivateRepo = {
     getGhlAccountByLocationId: async () => location,
     getAccountById: async () => acct,
-    countActivatedForAccount: async () => opts.active ?? 0,
-    countActivatedAll: async () => opts.all ?? opts.active ?? 0,
-    listGhlAccountsForAccount: async () => activatedLocations(opts.active ?? 0),
-    countNumbersByLocation: oneNumberEach,
+    countActivatedAll: async () => opts.all ?? 0,
     setGhlActivated: async (loc, at) => {
       log.push(`db:${loc}:${at}`);
       if (opts.dbFails && at !== null) throw new Error("db down");
-      if (at === null) opts.active = Math.max(0, (opts.active ?? 0) - 1);
-      else if (opts.matched === 0) return 0;
-      else opts.active = (opts.active ?? 0) + 1;
+      if (at !== null && opts.matched === 0) return 0;
+      if (at !== null && opts.cap !== undefined && opts.cap !== null && (opts.all ?? 0) >= opts.cap) throw new ActivationCapError("platform_cap");
       return 1;
     },
+    listNumberBillingForAccount: nums.listNumberBillingForAccount,
+    updateNumberBilling: nums.updateNumberBilling,
+    claimNumberTrial: nums.claimNumberTrial,
+    releaseNumberTrial: nums.releaseNumberTrial,
   };
   const deps: ActivateDeps = {
-    retrieveSubscription: (async () => {
-      log.push("retrieve");
-      return opts.stripeFails
-        ? { ok: false, status: 500, code: null, message: "boom" }
-        : { ok: true, data: parseSubscription({ id: "sub", status: "active", customer: "cus", items: { data: [{ id: "si_1", quantity: opts.liveQty ?? 1 }] } })! };
-    }) as never,
-    setQuantity: (async (item: string, q: number) => {
-      log.push(`qty:${item}:${q}`);
-      return opts.stripeFails ? { ok: false, status: 500, code: null, message: "boom" } : { ok: true, data: { id: item, quantity: q } };
-    }) as never,
-    notify: (t) => notes.push(t),
+    ...stripe.deps,
     now: () => new Date("2026-10-16T10:00:00.000Z"),
     platformCap: () => (opts.cap === undefined ? null : opts.cap),
   };
-  return { repo, deps, log, notes };
+  return { repo, deps, log, nums, stripe };
 }
 
-test("a trial account at the cap is refused before Stripe or the database is touched", async () => {
-  const h = harness({ status: "trialing", active: 3 });
-  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "trial_cap" });
-  assert.deepEqual(h.log, []);
-});
-
-test("activation updates the Stripe quantity first, then writes activated_at", async () => {
-  const h = harness({ active: 2 });
-  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true });
-  assert.deepEqual(h.log, ["retrieve", "qty:si_1:3", "db:loc-1:2026-10-16T10:00:00.000Z"]);
-});
-
-test("a Stripe failure writes nothing", async () => {
-  const h = harness({ active: 2, stripeFails: true });
-  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "stripe_failed" });
-  assert.equal(h.log.some((l) => l.startsWith("db:")), false);
-});
-
-test("a database failure after Stripe re-syncs the quantity and rethrows", async () => {
-  const h = harness({ active: 2, dbFails: true });
-  await assert.rejects(() => activateLocation(h.repo, h.deps, "acc-1", "loc-1"), /db down/);
-  assert.deepEqual(h.log.filter((l) => l.startsWith("qty:")), ["qty:si_1:3", "qty:si_1:2"]);
-});
-
-test("a comped account activates without calling Stripe", async () => {
-  const h = harness({ status: "comped", active: 5 });
+test("activation writes activated_at, then starts one trialing subscription per number of THAT location only", async () => {
+  const h = harness();
   assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true });
   assert.deepEqual(h.log, ["db:loc-1:2026-10-16T10:00:00.000Z"]);
+  assert.deepEqual(h.stripe.log.filter((l) => l.startsWith("create")), ["create:t1:999:trial", "create:t2:999:trial"]);
+  assert.equal(h.nums.rows.get("t1")!.billingStatus, "trialing");
+  assert.equal(h.nums.rows.get("t2")!.billingStatus, "trialing");
+  assert.equal(h.nums.rows.get("other")!.stripeSubscriptionId, null);
 });
 
-test("a billable account with no subscription is refused rather than activated unbilled", async () => {
-  const h = harness({ noSub: true });
+test("an account with no card on file is refused before Stripe or the database is touched", async () => {
+  for (const status of ["pending", "trialing", "paused", "cancelled"] as const) {
+    const h = harness({ status });
+    assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "billing_inactive" }, status);
+    assert.deepEqual(h.log, []);
+    assert.deepEqual(h.stripe.log, []);
+  }
+});
+
+test("a comped account activates with no Stripe call", async () => {
+  const h = harness({ status: "comped", customer: null });
+  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true });
+  assert.equal(h.log.length, 1);
+  assert.deepEqual(h.stripe.log, []);
+});
+
+test("a card-on-file account with no Stripe customer is refused rather than activated unbilled", async () => {
+  const h = harness({ customer: null });
   assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "stripe_failed" });
   assert.deepEqual(h.log, []);
 });
 
-test("a location owned by another account (or nobody) is not found", async () => {
+test("a Stripe failure part-way cancels what this activation created and undoes the activation", async () => {
+  const h = harness({ failCreateAfter: 1 });
+  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "stripe_failed" });
+  assert.deepEqual(h.log, ["db:loc-1:2026-10-16T10:00:00.000Z", "db:loc-1:null"]);
+  const first = h.nums.rows.get("t1")!;
+  assert.equal(first.billingStatus, "cancelled");
+  assert.ok(h.stripe.log.includes(`cancel:${first.stripeSubscriptionId}`));
+  assert.equal(h.nums.rows.get("t2")!.stripeSubscriptionId, null);
+});
+
+test("a database failure on the activation write rethrows and touches no Stripe", async () => {
+  const h = harness({ dbFails: true });
+  await assert.rejects(activateLocation(h.repo, h.deps, "acc-1", "loc-1"), /db down/);
+  assert.deepEqual(h.stripe.log, []);
+});
+
+test("platform cap: refused by the app check, or by the database race backstop", async () => {
+  const pre = harness({ cap: 5, all: 5 });
+  assert.deepEqual(await activateLocation(pre.repo, pre.deps, "acc-1", "loc-1"), { ok: false, reason: "platform_cap" });
+  assert.deepEqual(pre.log, []);
+  const race = harness({ cap: 5, all: 4 });
+  race.repo.countActivatedAll = async () => 4;
+  race.repo.setGhlActivated = async () => {
+    throw new ActivationCapError("platform_cap");
+  };
+  assert.deepEqual(await activateLocation(race.repo, race.deps, "acc-1", "loc-1"), { ok: false, reason: "platform_cap" });
+  assert.deepEqual(race.stripe.log, []);
+});
+
+test("already active (read or conditional write) is refused with no Stripe call", async () => {
+  const read = harness({ activatedAt: "2026-10-01T00:00:00.000Z" });
+  assert.deepEqual(await activateLocation(read.repo, read.deps, "acc-1", "loc-1"), { ok: false, reason: "already_active" });
+  const write = harness({ matched: 0 });
+  assert.deepEqual(await activateLocation(write.repo, write.deps, "acc-1", "loc-1"), { ok: false, reason: "already_active" });
+  assert.deepEqual(write.stripe.log, []);
+});
+
+test("another account's location, or a missing account, is not_found for both actions", async () => {
   for (const owner of ["acc-2", null]) {
     const h = harness({ owner });
     assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "not_found" });
@@ -126,108 +128,45 @@ test("a location owned by another account (or nobody) is not found", async () =>
   }
 });
 
-test("the platform cap refuses when the platform is full", async () => {
-  const h = harness({ active: 0, all: 2, cap: 2 });
-  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "platform_cap" });
-  assert.deepEqual(h.log, []);
+test("re-activating a location whose numbers were billed before restarts them with no trial", async () => {
+  const h = harness({ numbers: [number("t1", { stripeSubscriptionId: "sub_old", billingStatus: "cancelled" })] });
+  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true });
+  assert.deepEqual(h.stripe.log.filter((l) => l.startsWith("create")), ["create:t1:999:now"]);
 });
 
-test("an already active number is refused", async () => {
-  const h = harness({ activatedAt: "2026-10-01T00:00:00.000Z", active: 1 });
-  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "already_active" });
+test("activation that takes the account to 11 numbers prices only the new one at £7.99; the first 10 keep £9.99", async () => {
+  const h = harness({ numbers: [number("new", { locationId: "loc-1", createdAt: "2026-10-20T00:00:00.000Z" })] });
+  for (let i = 0; i < 10; i++) {
+    const r = await h.stripe.deps.createSubscription({ customerId: "cus", accountId: "acc-1", locationId: "loc-9", tenantId: `b${i}`, unitAmountPence: 999, trial: true });
+    if (!r.ok) throw new Error("setup");
+    h.nums.rows.set(`b${i}`, number(`b${i}`, { locationId: "loc-9", stripeSubscriptionId: r.data.id, billingStatus: "active", pricePence: 999 }));
+  }
+  h.stripe.log.length = 0;
+  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true });
+  assert.deepEqual(h.stripe.log.filter((l) => l.startsWith("create")), ["create:new:799:trial"]);
+  assert.equal(h.stripe.log.filter((l) => l.startsWith("price:")).length, 0);
+  assert.equal(h.nums.rows.get("new")!.pricePence, 799);
 });
 
-test("deactivation clears activated_at first, then syncs the quantity", async () => {
-  const h = harness({ active: 2, liveQty: 2, activatedAt: "2026-10-01T00:00:00.000Z" });
-  assert.deepEqual(await deactivateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true, quantitySynced: true });
-  assert.deepEqual(h.log, ["db:loc-1:null", "retrieve", "qty:si_1:1"]);
+test("deactivation clears activated_at first, then cancels that location's numbers now", async () => {
+  const h = harness({
+    numbers: [
+      number("t1", { stripeSubscriptionId: "sub_a", billingStatus: "trialing" }),
+      number("other", { locationId: "loc-2", stripeSubscriptionId: "sub_b", billingStatus: "active", pricePence: 999 }),
+    ],
+  });
+  h.stripe.subs.set("sub_a", { status: "trialing", unitAmount: 999, metadata: {}, trial: true });
+  h.stripe.subs.set("sub_b", { status: "active", unitAmount: 999, metadata: {}, trial: true });
+  assert.deepEqual(await deactivateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true, billingSynced: true });
+  assert.deepEqual(h.log, ["db:loc-1:null"]);
+  assert.deepEqual(h.stripe.log, ["cancel:sub_a"]);
+  assert.equal(h.nums.rows.get("t1")!.billingStatus, "cancelled");
+  assert.equal(h.nums.rows.get("other")!.billingStatus, "active");
 });
 
-test("deactivation still succeeds when Stripe is down, and says so to Slack", async () => {
-  const h = harness({ active: 2, stripeFails: true, activatedAt: "2026-10-01T00:00:00.000Z" });
-  assert.deepEqual(await deactivateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true, quantitySynced: false });
-  assert.equal(h.log[0], "db:loc-1:null");
-  assert.equal(h.notes.length, 1);
-  assert.match(h.notes[0], /acc-1/);
-});
-
-test("a conditional write that matches nothing rolls Stripe back and reports already_active", async () => {
-  const h = harness({ active: 2, matched: 0 });
-  assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: false, reason: "already_active" });
-  assert.deepEqual(h.log.filter((l) => l.startsWith("qty:")), ["qty:si_1:3", "qty:si_1:2"]);
-});
-
-test("second concurrent activation at the cap is refused and quantity ends at 3", async () => {
-  // Both callers read 2 active, so both pass the app-side check; the database refuses the second write.
-  let active = 2;
-  let quantity = 1;
-  const acct = account({ billingStatus: "trialing" });
-  const repo: ActivateRepo = {
-    getGhlAccountByLocationId: async (id: string) => ({ locationId: id, accountId: "acc-1", activatedAt: null }) as GhlAccount,
-    getAccountById: async () => acct,
-    countActivatedForAccount: async () => active,
-    countActivatedAll: async () => active,
-    listGhlAccountsForAccount: async () => activatedLocations(active),
-    countNumbersByLocation: oneNumberEach,
-    setGhlActivated: async (_loc, at) => {
-      await new Promise((r) => setImmediate(r));
-      if (at !== null) {
-        if (active >= 3) throw new ActivationCapError("trial_cap");
-        active += 1;
-      }
-      return 1;
-    },
-  };
-  const staleRead = { n: 0 };
-  const realCount = repo.countActivatedForAccount;
-  repo.countActivatedForAccount = async () => (staleRead.n++ < 2 ? 2 : realCount("acc-1"));
-  repo.countActivatedAll = async () => 2;
-  const deps: ActivateDeps = {
-    retrieveSubscription: (async () => ({
-      ok: true,
-      data: parseSubscription({ id: "sub", status: "trialing", customer: "cus", items: { data: [{ id: "si_1", quantity: 2 }] } })!,
-    })) as never,
-    setQuantity: (async (_i: string, q: number) => {
-      quantity = q;
-      return { ok: true, data: { id: "si_1", quantity: q } };
-    }) as never,
-    notify: () => {},
-    now: () => new Date("2026-10-16T10:00:00.000Z"),
-    platformCap: () => null,
-  };
-  const results = await Promise.all([
-    activateLocation(repo, deps, "acc-1", "loc-a"),
-    activateLocation(repo, deps, "acc-1", "loc-b"),
-  ]);
-  assert.deepEqual(results.map((r) => r.ok).sort(), [false, true]);
-  assert.deepEqual(results.find((r) => !r.ok), { ok: false, reason: "trial_cap" });
-  assert.equal(active, 3);
-  assert.equal(quantity, 3);
-});
-
-test("a failed database write does not re-POST a quantity Stripe already holds", async () => {
-  const h = harness({ active: 0, dbFails: true });
-  await assert.rejects(activateLocation(h.repo, h.deps, "acc-1", "loc-1"));
-  // raised to 1, then the true count (0) differs, so exactly one restore is written
-  assert.deepEqual(h.log.filter((l) => l.startsWith("qty:")), ["qty:si_1:1", "qty:si_1:0"]);
-});
-
-test("re-sync is skipped when the true count equals what was just written", async () => {
-  const h = harness({ active: 0, matched: 0 });
-  let reads = 0;
-  // The billable count is read twice: before raising Stripe (0 active) and on re-sync (1 active).
-  h.repo.listGhlAccountsForAccount = async () => activatedLocations(reads++ === 0 ? 0 : 1);
-  await activateLocation(h.repo, h.deps, "acc-1", "loc-1");
-  assert.deepEqual(h.log.filter((l) => l.startsWith("qty:")), ["qty:si_1:1"]);
-});
-
-// ---------------------------------------------------------------------------
-// Per-number billing (Nov 2026, £7.99 per WhatsApp number)
-// ---------------------------------------------------------------------------
-
-test("per-number billing: activating a sub-account with 2 numbers raises Stripe by 2, on top of what is billed", async () => {
-  const h = harness({ active: 3 });
-  h.repo.countNumbersByLocation = async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === "loc-1" ? 2 : 1]));
-  await activateLocation(h.repo, h.deps, "acc-1", "loc-1");
-  assert.equal(h.log.filter((l) => l.startsWith("qty:"))[0], "qty:si_1:5");
+test("deactivation still succeeds when Stripe is down, and says billing is not synced", async () => {
+  const h = harness({ failOn: ["cancel"], numbers: [number("t1", { stripeSubscriptionId: "sub_a", billingStatus: "active", pricePence: 999 })] });
+  assert.deepEqual(await deactivateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true, billingSynced: false });
+  assert.deepEqual(h.log, ["db:loc-1:null"]);
+  assert.equal(h.stripe.notes.length, 1);
 });

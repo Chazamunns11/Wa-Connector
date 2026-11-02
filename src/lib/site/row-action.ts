@@ -16,7 +16,6 @@ export interface RowActionDeps {
 const REFUSAL_RESULT: Record<ActivateRefusal | "not_found" | "stripe_failed", DashboardResult> = {
   already_active: "activated",
   billing_inactive: "billing_inactive",
-  trial_cap: "trial_cap",
   platform_cap: "platform_cap",
   not_found: "not_found",
   stripe_failed: "stripe_failed",
@@ -50,7 +49,7 @@ export async function runRowAction(
     case "deactivate": {
       const outcome = await deactivateLocation(repo, deps.activate, session.accountId, locationId);
       if (!outcome.ok) return back("not_found");
-      return back(outcome.quantitySynced ? "deactivated" : "deactivated_billing_pending");
+      return back(outcome.billingSynced ? "deactivated" : "deactivated_billing_pending");
     }
     case "disconnect": {
       const outcome = await deps.logout(owned.tenantId);

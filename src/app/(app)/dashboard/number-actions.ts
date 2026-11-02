@@ -12,9 +12,9 @@
 import { requireAccountSession } from "@/lib/account-session";
 import { redactBridgeSessionResult, type PanelBridgeSessionResult } from "@/lib/bridge-panel-guard";
 import { repo } from "@/lib/data";
+import { numberBillingDeps } from "@/lib/billing/live-deps";
 import { NOT_FOUND, ownsLocation, runOwnedNumberAction } from "@/lib/site/owned-whatsapp";
 import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
-import { chargeBeforeAddingNumber, syncQuantityForLocation } from "@/lib/billing/sync-for-location";
 import { parseSlotParam } from "@/lib/location-numbers";
 import { connectWhatsappSession, getWhatsappBridgeSession, logoutWhatsappSession, type BridgeOkResult } from "@/lib/whatsapp-bridge";
 import {
@@ -43,13 +43,7 @@ export async function listNumbersAction(locationId: string): Promise<NumbersResu
 export async function addNumberAction(locationId: string, label: string): Promise<NumbersResult> {
   const session = await requireAccountSession();
   if (!(await ownsLocation(repo, session.accountId, locationId))) return NOT_YOURS;
-  // Per-number billing: pay for the number first; a declined card adds nothing.
-  const charge = await chargeBeforeAddingNumber(locationId);
-  if (!charge.ok) return { ok: false, message: charge.message };
-  const result = toResult(await decideAddNumber(repo, locationId, label.trim() ? { label } : {}));
-  // Always re-sync: a no-op when the add worked, a credit back if it didn't.
-  await syncQuantityForLocation(locationId);
-  return result;
+  return toResult(await decideAddNumber(repo, numberBillingDeps(), locationId, label.trim() ? { label } : {}));
 }
 
 export async function updateNumberAction(
@@ -67,9 +61,7 @@ export async function updateNumberAction(
 export async function removeNumberAction(locationId: string, slot: number): Promise<NumbersResult> {
   const session = await requireAccountSession();
   if (!(await ownsLocation(repo, session.accountId, locationId))) return NOT_YOURS;
-  const result = toResult(await decideRemoveNumber(repo, { logout: logoutWhatsappSession }, locationId, { slot }));
-  if (result.ok) await syncQuantityForLocation(locationId); // per-number billing
-  return result;
+  return toResult(await decideRemoveNumber(repo, { logout: logoutWhatsappSession, billing: numberBillingDeps() }, locationId, { slot }));
 }
 
 export async function connectNumberAction(locationId: string, slot: number): Promise<PanelBridgeSessionResult> {

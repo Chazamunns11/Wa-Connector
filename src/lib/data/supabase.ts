@@ -12,6 +12,9 @@ import { DEFAULT_PHONE_REGION, normalisePhoneE164 } from "@/lib/phone";
 import type {
   Account,
   AccountBillingPatch,
+  NumberBilling,
+  NumberBillingPatch,
+  NumberBillingStatus,
   AccountDraft,
   AccountKind,
   BillingStatus,
@@ -566,6 +569,36 @@ interface LocationNumberRow {
 }
 
 const LOCATION_NUMBER_COLUMNS = "tenant_id, slot, is_default, label";
+
+interface NumberBillingRow {
+  tenant_id: string;
+  location_id: string;
+  stripe_subscription_id: string | null;
+  billing_status: string | null;
+  trial_ends_at: string | null;
+  price_pence: number | null;
+  created_at: string;
+  cancelled_at: string | null;
+  cleaned_up_at: string | null;
+}
+
+const NUMBER_BILLING_COLUMNS =
+  "tenant_id, location_id, stripe_subscription_id, billing_status, trial_ends_at, price_pence, created_at, cancelled_at, cleaned_up_at";
+
+function mapNumberBilling(row: NumberBillingRow): NumberBilling {
+  return {
+    tenantId: row.tenant_id,
+    locationId: row.location_id,
+    stripeSubscriptionId: row.stripe_subscription_id,
+    // CHECK-constrained in 0020.
+    billingStatus: row.billing_status as NumberBillingStatus | null,
+    trialEndsAt: row.trial_ends_at,
+    pricePence: row.price_pence,
+    createdAt: row.created_at,
+    cancelledAt: row.cancelled_at,
+    cleanedUpAt: row.cleaned_up_at,
+  };
+}
 
 function mapLocationNumber(row: LocationNumberRow): LocationNumber {
   return { tenantId: row.tenant_id, slot: row.slot as LocationNumber["slot"], isDefault: row.is_default, label: row.label };
@@ -2000,19 +2033,38 @@ export class SupabaseGhlRepository implements GhlRepository {
     const accounts = ((data ?? []) as unknown as AccountRow[]).map(mapAccount);
     const locations = new Map<string, number>();
     const active = new Map<string, number>();
+    const owner = new Map<string, string>();
+    const billed = new Map<string, number>();
     const PAGE_SIZE = 1000;
     for (let from = 0; ; from += PAGE_SIZE) {
       const { data: page, error: pageError } = await supabase
         .from("ghl_accounts")
-        .select("account_id, activated_at")
+        .select("location_id, account_id, activated_at")
         .not("account_id", "is", null)
         .order("location_id", { ascending: true })
         .range(from, from + PAGE_SIZE - 1);
       if (pageError) throw pageError;
-      const rows = (page ?? []) as { account_id: string; activated_at: string | null }[];
+      const rows = (page ?? []) as { location_id: string; account_id: string; activated_at: string | null }[];
       for (const r of rows) {
+        owner.set(r.location_id, r.account_id);
         locations.set(r.account_id, (locations.get(r.account_id) ?? 0) + 1);
         if (r.activated_at) active.set(r.account_id, (active.get(r.account_id) ?? 0) + 1);
+      }
+      if (rows.length < PAGE_SIZE) break;
+    }
+    // Per-number billing (0020): numbers whose subscription counts toward the tier.
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data: page, error: pageError } = await supabase
+        .from("ghl_location_numbers")
+        .select("tenant_id, location_id")
+        .in("billing_status", ["trialing", "active", "past_due"])
+        .order("tenant_id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (pageError) throw pageError;
+      const rows = (page ?? []) as { location_id: string }[];
+      for (const r of rows) {
+        const accountId = owner.get(r.location_id);
+        if (accountId) billed.set(accountId, (billed.get(accountId) ?? 0) + 1);
       }
       if (rows.length < PAGE_SIZE) break;
     }
@@ -2020,6 +2072,7 @@ export class SupabaseGhlRepository implements GhlRepository {
       account,
       locations: locations.get(account.id) ?? 0,
       activeNumbers: active.get(account.id) ?? 0,
+      billedNumbers: billed.get(account.id) ?? 0,
     }));
   }
 
@@ -2096,22 +2149,74 @@ export class SupabaseGhlRepository implements GhlRepository {
       p_platform_cap: opts.platformCap ?? null,
     });
     if (error) {
-      if (/trial_cap/.test(error.message)) throw new ActivationCapError("trial_cap");
       if (/platform_cap/.test(error.message)) throw new ActivationCapError("platform_cap");
       throw error;
     }
     return typeof data === "number" ? data : 0;
   }
 
-  async countActivatedForAccount(accountId: string) {
+  async listNumberBillingForAccount(accountId: string) {
     const supabase = getServiceClient();
-    const { count, error } = await supabase
-      .from("ghl_accounts")
-      .select("location_id", { count: "exact", head: true })
-      .eq("account_id", accountId)
-      .not("activated_at", "is", null);
+    const { data: locations, error: locError } = await supabase.from("ghl_accounts").select("location_id").eq("account_id", accountId);
+    if (locError) throw locError;
+    const ids = ((locations ?? []) as { location_id: string }[]).map((l) => l.location_id);
+    if (ids.length === 0) return [];
+    const { data, error } = await supabase
+      .from("ghl_location_numbers")
+      .select(NUMBER_BILLING_COLUMNS)
+      .in("location_id", ids)
+      .order("location_id", { ascending: true })
+      .order("slot", { ascending: true });
     if (error) throw error;
-    return count ?? 0;
+    return ((data ?? []) as NumberBillingRow[]).map(mapNumberBilling);
+  }
+
+  async getNumberBilling(tenantId: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ghl_location_numbers").select(NUMBER_BILLING_COLUMNS).eq("tenant_id", tenantId).maybeSingle();
+    if (error) throw error;
+    return data ? mapNumberBilling(data as NumberBillingRow) : null;
+  }
+
+  async claimNumberTrial(locationId: string, numbersAtLocation: number) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.rpc("claim_number_trial", { p_location_id: locationId, p_numbers: numbersAtLocation });
+    if (error) throw error;
+    return data === true;
+  }
+
+  async releaseNumberTrial(locationId: string) {
+    const supabase = getServiceClient();
+    const { error } = await supabase.rpc("release_number_trial", { p_location_id: locationId });
+    if (error) throw error;
+  }
+
+  async listNumbersCancelledBefore(iso: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ghl_location_numbers")
+      .select(NUMBER_BILLING_COLUMNS)
+      .eq("billing_status", "cancelled")
+      .lt("cancelled_at", iso)
+      .is("cleaned_up_at", null)
+      .order("cancelled_at", { ascending: true })
+      .limit(500);
+    if (error) throw error;
+    return ((data ?? []) as NumberBillingRow[]).map(mapNumberBilling);
+  }
+
+  async updateNumberBilling(tenantId: string, patch: NumberBillingPatch) {
+    const update: Record<string, unknown> = {};
+    if (patch.stripeSubscriptionId !== undefined) update.stripe_subscription_id = patch.stripeSubscriptionId;
+    if (patch.billingStatus !== undefined) update.billing_status = patch.billingStatus;
+    if (patch.trialEndsAt !== undefined) update.trial_ends_at = patch.trialEndsAt;
+    if (patch.pricePence !== undefined) update.price_pence = patch.pricePence;
+    if (patch.cancelledAt !== undefined) update.cancelled_at = patch.cancelledAt;
+    if (patch.cleanedUpAt !== undefined) update.cleaned_up_at = patch.cleanedUpAt;
+    if (Object.keys(update).length === 0) return;
+    const supabase = getServiceClient();
+    const { error } = await supabase.from("ghl_location_numbers").update(update).eq("tenant_id", tenantId);
+    if (error) throw error;
   }
 
   async countActivatedAll() {

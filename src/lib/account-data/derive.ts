@@ -1,16 +1,5 @@
-import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
-import type { AccountSummary, LocationRow } from "./types";
-import { billableNumbers } from "@/lib/billing/quantity";
-
-const DAY_MS = 86_400_000;
-
-/** Whole days left (rounded up), never negative; null or unparseable → 0. */
-export function trialDaysLeft(trialEndsAt: string | null, now: Date): number {
-  if (!trialEndsAt) return 0;
-  const end = Date.parse(trialEndsAt);
-  if (!Number.isFinite(end)) return 0;
-  return Math.max(0, Math.ceil((end - now.getTime()) / DAY_MS));
-}
+import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS } from "@/lib/pricing";
+import type { AccountSummary, BillingSummary, LocationRow } from "./types";
 
 export interface PlanStatus {
   label: string;
@@ -18,54 +7,52 @@ export interface PlanStatus {
   banner: string | null;
 }
 
-/** Shown on the dashboard and billing page once a trial has ended with no card. */
-export const TRIAL_ENDED_NO_CARD = "Your trial has ended. Add a card to keep sending.";
+const numbers = (n: number) => `${n} ${n === 1 ? "number" : "numbers"}`;
 
-/** Days before the trial ends when a trial with no card starts showing the reminder. */
-export const TRIAL_REMINDER_DAYS = 2;
+/** Shown on the dashboard and billing page while no card is on file. */
+export const NO_CARD_BANNER = `Save a card to start. Nothing is charged then: each WhatsApp number you add gets its own ${TRIAL_DAYS}-day free trial.`;
 
 /**
- * `hasCard` is only known where the page has read the Stripe subscription;
- * when it is false, a trial in its last days gets an "add a card" reminder.
+ * The account's plan, from its status (is a card on file?) and, when known,
+ * its numbers' billing. Billing is per number, so a payment problem names how
+ * many numbers it affects.
  */
-export function planStatus(account: AccountSummary, now: Date, opts: { hasCard?: boolean } = {}): PlanStatus {
+export function planStatus(account: AccountSummary, billing?: Pick<BillingSummary, "pastDueNumbers" | "stoppedNumbers">): PlanStatus {
   switch (account.billingStatus) {
-    case "pending":
-      // Checkout abandoned: the dashboard offers a working "start your trial" button.
-      return { label: "Trial not started", tone: "warn", banner: `Finish signing up to start your ${TRIAL_DAYS}-day free trial.` };
-    case "trialing": {
-      const n = trialDaysLeft(account.trialEndsAt, now);
-      if (n === 0) return { label: "Trial ended", tone: "warn", banner: null };
-      const banner =
-        opts.hasCard === false && n <= TRIAL_REMINDER_DAYS
-          ? `Your trial ends in ${n} ${n === 1 ? "day" : "days"}. Add a card to keep sending.`
-          : null;
-      return { label: `Trial: ${n} ${n === 1 ? "day" : "days"} left`, tone: "warn", banner };
-    }
-    case "active":
     case "comped":
       return { label: "Active", tone: "win", banner: null };
-    case "past_due":
-      return {
-        label: "Payment failed",
-        tone: "loss",
-        banner: "Payment failed — update your card. Sending continues while we retry.",
-      };
-    case "paused":
-      // Stripe `paused` (trial ended, no card) keeps trialEndsAt; `unpaid` (retries ran out) does not.
-      if (account.trialEndsAt) return { label: "Trial ended", tone: "loss", banner: TRIAL_ENDED_NO_CARD };
-      return { label: "Paused", tone: "loss", banner: "Sending is paused — update billing to resume" };
     case "cancelled":
       return { label: "Cancelled", tone: "muted", banner: null };
+    case "active": {
+      if (billing && billing.stoppedNumbers > 0) {
+        return {
+          label: "Billing stopped",
+          tone: "loss",
+          banner: `${numbers(billing.stoppedNumbers)} stopped sending because a payment could not be taken. Add a card to restart.`,
+        };
+      }
+      if (billing && billing.pastDueNumbers > 0) {
+        return {
+          label: "Payment failed",
+          tone: "loss",
+          banner: `Payment failed for ${numbers(billing.pastDueNumbers)} — update your card. Sending continues while we retry.`,
+        };
+      }
+      return { label: "Active", tone: "win", banner: null };
+    }
+    // `pending`: signup Checkout abandoned. The rest are statuses from the old
+    // one-subscription-per-account model; none of them has a card on file now.
+    case "pending":
+    case "trialing":
+    case "past_due":
+    case "paused":
+      return { label: "No card yet", tone: "warn", banner: NO_CARD_BANNER };
   }
 }
 
-/** True when the dashboard should offer "Add a card": a trial ended with no card, or a trial with none in its last days. */
-export function needsCard(account: AccountSummary, now: Date, hasCard: boolean | undefined): boolean {
-  if (account.billingStatus === "paused") return !!account.trialEndsAt;
-  if (account.billingStatus !== "trialing" || hasCard !== false) return false;
-  const n = trialDaysLeft(account.trialEndsAt, now);
-  return n > 0 && n <= TRIAL_REMINDER_DAYS;
+/** True when the page should offer "Add a card": a card is on file but some numbers stopped on billing. */
+export function needsCard(account: AccountSummary, billing: Pick<BillingSummary, "stoppedNumbers">): boolean {
+  return account.billingStatus === "active" && billing.stoppedNumbers > 0;
 }
 
 /** The single most important reason a row needs attention, or null. */
@@ -118,16 +105,10 @@ export function fleetSummary(rows: LocationRow[]): FleetSummary {
   return sum;
 }
 
-export function activeCount(rows: LocationRow[]): number {
-  return rows.filter((r) => r.activated).length;
-}
-
-/** e.g. "2 sub-accounts active · 3 numbers · £23.97/month". Per-number pricing over activated sub-accounts. */
-export function headline(rows: LocationRow[]): string {
-  const n = activeCount(rows);
-  const numbers = billableNumbers(rows);
-  const cost = formatMoney(monthlyCostPence(numbers) / 100, pricingConfig().currency);
-  return `${n} ${n === 1 ? "sub-account" : "sub-accounts"} active · ${numbers} ${numbers === 1 ? "number" : "numbers"} · ${cost}/month`;
+/** e.g. "2 numbers billed · £19.98/month". Volume pricing over the account's billed numbers. */
+export function headline(billedNumbers: number): string {
+  const cost = formatMoney(monthlyCostPence(billedNumbers) / 100, pricingConfig().currency);
+  return `${numbers(billedNumbers)} billed · ${cost}/month`;
 }
 
 export interface RowActions {
@@ -163,6 +144,3 @@ export function primaryActionFor(row: LocationRow): PrimaryAction | null {
   if (a.sendLink) return { key: "show-qr", label: "Reconnect" };
   return null;
 }
-
-/** Shown when a trialing account tries to activate past the trial cap. */
-export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_NUMBERS} WhatsApp numbers. Start your paid plan now to add more.`;

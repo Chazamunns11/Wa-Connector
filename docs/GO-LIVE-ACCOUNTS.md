@@ -97,28 +97,24 @@ same organisation**.
 
 ## Part 2 — Stripe, test mode first
 
-1. Open a Stripe account for PingWren. Leave **Test mode** on (switch at top
-   right). Do everything in this part in test mode.
+1. Live billing uses the existing CJMunns Consulting Stripe account
+   (`acct_1NNaNrDnnucN6pwS`), shared with the CRM business. The product
+   `prod_VYM9Jw1Slk16BQ` ("PingWren WhatsApp number") has statement descriptor
+   `PINGWREN WHATSAPP`, so card statements say PingWren; Checkout, receipts and
+   invoices still show the account's public name. Number subscriptions carry
+   `pingwren_mrr=0` so the CRM's mrr-sync skips them, and the webhook only
+   alerts on failed payments for this app's own customers. Use a sandbox for
+   test mode.
 2. **Product catalogue → Add product.** Name: `PingWren WhatsApp number`.
-3. Add **one** price on that product. Not two. The code reads a single price id
-   and sets the quantity to the number of WhatsApp numbers on the account's
-   activated sub-accounts (Nov 2026: per-number billing, see `src/lib/pricing.ts`).
-   - Recurring, monthly, currency GBP.
-   - Pricing model: **Graduated pricing** (`billing_scheme = tiered`,
-     `tiers_mode = graduated`).
-   - Tier 1: first unit 1, last unit 10, **£9.99** per unit (999 pence).
-   - Tier 2: first unit 11, last unit and above, **£7.99** per unit (799 pence).
-   - No flat fee on either tier.
-
-   That matches `stripeNumberPrice()` in `src/lib/stripe/billing.ts`.
-   Graduated means each number is priced by its own position: 3 numbers cost
-   3 x £9.99 = £29.97; 12 numbers cost 10 x £9.99 + 2 x £7.99 = £115.88. Adding
-   a number never lowers the bill. If the prices in `src/lib/pricing.ts` ever
-   change, the Stripe price must change with them.
-
-   Already made an older price (the per-sub-account tiers, or a flat £7.99)?
-   Create this one, put its id in `STRIPE_PRICE_ID`, and archive the old one.
-4. Copy the price id (starts `price_`). It becomes `STRIPE_PRICE_ID`.
+   Do **not** add any prices to it by hand. Billing is per WhatsApp number:
+   the app creates one subscription per number and prices it inline
+   (`price_data`) from `src/lib/pricing.ts`: the account's first 10 billed
+   numbers (oldest first) at £9.99 a month each, every later one at £7.99.
+   Stripe makes the inline prices itself. If the pence in `src/lib/pricing.ts` ever change, nothing in Stripe
+   needs changing; numbers move to the new price at their next invoice the
+   next time their account is re-priced.
+3. (No step: there is no Price object to create.)
+4. Copy the product id (starts `prod_`). It becomes `STRIPE_PRODUCT_ID`.
 5. **Developers → API keys.** Copy the secret key (starts `sk_test_`). It
    becomes `STRIPE_SECRET_KEY`. Do not use the publishable key. The app never
    uses it.
@@ -126,17 +122,17 @@ same organisation**.
    - Update payment method
    - View invoice history
 
-   The trial TAKES a card at checkout and Stripe charges it on day 7 (Nov
-   2026). "Add a card" stays for changing the card, and for the rare trial
-   whose card was removed. It does not use the
-   portal: it opens a Stripe Checkout in setup mode, and the webhook then makes
-   the card the default and resumes the subscription if the trial had already
-   ended. (Adding a card in the portal does not resume a paused subscription.)
-   - Cancel subscription, set to **cancel at end of billing period**
+   Sign-up saves a card with a Stripe Checkout in setup mode (no charge), and
+   "Add a card" on the billing page does the same; the webhook makes it the
+   customer's default and resumes any number that paused because its trial
+   ended with no usable card. (Adding a card in the portal does not resume a
+   paused subscription.)
+   - Cancel subscription, set to **cancel at end of billing period**. The
+     portal lists one subscription per number. Removing a number or
+     deactivating a sub-account in the app cancels at once instead.
 
-   Leave "update quantity" and plan switching off. Quantity follows the
-   activated numbers, not what the customer types. Set the portal's return
-   link to `<app>/dashboard/billing`.
+   Leave "update quantity" and plan switching off. The app owns each number's
+   price. Set the portal's return link to `<app>/dashboard/billing`.
 7. **Settings → Billing → Subscriptions and emails → Manage failed payments.**
    Use smart retries and set the last step to mark the subscription
    **unpaid** after about 7 days. The app turns `past_due` into the "payment
@@ -144,27 +140,33 @@ same organisation**.
 8. **Developers → Webhooks → Add endpoint.**
    - URL: `<app>/api/webhooks/billing`
    - Events, exactly these seven (the handler ignores anything else):
-     - `checkout.session.completed` (signup, restarts, and "Add a card")
+     - `checkout.session.completed` (saving a card, at sign-up or "Add a card")
      - `customer.subscription.created`
      - `customer.subscription.updated`
      - `customer.subscription.deleted`
-     - `customer.subscription.paused` (the trial ended with no card)
+     - `customer.subscription.paused` (a number's trial ended with no usable card)
      - `customer.subscription.resumed` (a card was added after that)
+
+     Each number's subscription carries `account_id`, `location_id` and
+     `tenant_id` metadata; the handler maps events to the number by
+     `tenant_id`.
      - `invoice.payment_failed`
 
      `customer.subscription.trial_will_end` is not needed: there is no
      trial-ending email yet (the app has no email sending of its own). The
-     dashboard shows an "add a card" reminder in the trial's last 2 days
-     instead.
+     card is saved before any number's trial starts.
    - Copy the **signing secret** (starts `whsec_`). It becomes
      `STRIPE_WEBHOOK_SECRET`. Test mode and live mode have different ones.
 9. **Stripe Tax decision.** Pick one before launch:
    - Off: Stripe adds no tax. Leave `STRIPE_AUTOMATIC_TAX` unset. Fine if you
      are under the VAT threshold and take advice.
    - On: turn on Stripe Tax, add your registration and set a head-office
-     address, then set `STRIPE_AUTOMATIC_TAX=true`. Checkout then collects the
-     address it needs. Prices are then treated as tax-exclusive unless you set
-     the price to tax-inclusive in Stripe. Check what the checkout page shows.
+     address, then set `STRIPE_AUTOMATIC_TAX=true`. Every number subscription
+     is then created with automatic tax on. The save-a-card Checkout always
+     collects a billing address (`billing_address_collection: required`) and
+     the webhook copies it onto the customer, which is what Stripe Tax uses.
+     Inline prices are tax-exclusive. Customers who saved a card before this
+     need an address added in the portal.
 
    Ask your accountant. This is not something the app can decide.
 
@@ -178,14 +180,14 @@ web app is in the table in Part 10.
 | Variable | Required | Example shape | Used in |
 | --- | --- | --- | --- |
 | `STRIPE_SECRET_KEY` | Yes | `sk_test_...` | `src/lib/stripe/client.ts` |
-| `STRIPE_PRICE_ID` | Yes | `price_...` | `src/lib/stripe/client.ts` |
+| `STRIPE_PRODUCT_ID` | Yes | `prod_...` | `src/lib/stripe/client.ts` |
 | `STRIPE_WEBHOOK_SECRET` | Yes | `whsec_...` | `src/app/api/webhooks/billing/route.ts`, `client.ts` |
 | `STRIPE_AUTOMATIC_TAX` | No | `true` (only the exact word `true` turns it on) | `src/lib/stripe/client.ts` |
 | `BRAND_MAX_ACTIVE_NUMBERS` | No | `40` (a whole number above zero) | `src/lib/billing/activation.ts` |
 
 What happens if they are missing:
 
-- No `STRIPE_SECRET_KEY` or `STRIPE_PRICE_ID`: Stripe counts as not
+- No `STRIPE_SECRET_KEY` or `STRIPE_PRODUCT_ID`: Stripe counts as not
   configured. Sign-up and the billing page will not work.
 - No `STRIPE_WEBHOOK_SECRET`: the webhook answers 503 to everything. Stripe
   retries, but accounts never update.
@@ -248,120 +250,86 @@ Use a spare GHL sub-account and your own number. Use Stripe test cards.
 2. Open the emailed link in the same browser (it comes from the SMTP you set
    up). Check which template it used: a new address gets "Confirm signup",
    a returning one "Magic Link", and both should be customised. It confirms the address, creates the account and sends you straight to
-   Stripe Checkout. Checkout should **not** ask for a card (the trial is 7
-   days, no card needed); it only confirms the email (and the address if
-   Stripe Tax is on). Start the trial.
-   You then land on "You're nearly there"; the button takes you to the
-   dashboard. Try the form again with the same address: it should say you
-   already have an account and point you to log in.
-3. In Stripe (test mode) the customer should show a subscription that is
-   **trialing**. The dashboard should say you are on a trial.
+   Stripe Checkout. Checkout asks for a card and **charges nothing** (it is
+   in setup mode). Save `4242 4242 4242 4242`.
+   You then land on "You're nearly there" ("Card saved. Nothing has been
+   charged"); the button takes you to the dashboard. Try the form again with
+   the same address: it should say you already have an account and point you
+   to log in.
+3. In Stripe (test mode) the customer should exist with that card as its
+   default and **no subscription**. The account's `billing_status` is
+   `active` (card on file).
 4. **Connect GoHighLevel** and approve the spare sub-account. The location
    should appear on the dashboard.
-5. **Activate** one number, scan the QR, then send a workflow SMS. It should
-   reach WhatsApp.
-6. In Stripe, the subscription item quantity should now be **1**.
-7. **Deactivate** the number. Quantity goes to **0**. (See Part 7 for why this
-   needs checking.) If the dashboard says "Deactivated. Your bill will update
-   shortly.", the number is off and has stopped sending, but the call to
-   Stripe to lower the quantity failed. Slack gets "Billing quantity sync
-   failed for account ...". Nothing else to do: the next subscription update
-   from Stripe, or the next activation, puts the quantity right. Check the
-   subscription item in Stripe if the Slack note keeps repeating.
-8. Activate up to the trial cap (three numbers). A fourth should be refused
-   with the cap message.
-9. Open **Billing** on the dashboard. The card row says "No card on file"
-   and there is an **Add a card** button. **Manage billing** should open the
-   Stripe Customer Portal. **Start my paid plan now** with no card first
-   opens a Stripe page to add one (use `4242 4242 4242 4242`); once it is
-   saved the trial ends and the account moves to active. With a card already
-   on file it moves straight to active.
+5. **Activate** it, scan the QR, then send a workflow SMS. It should reach
+   WhatsApp. In Stripe the customer now has **one subscription per number** of
+   that sub-account, each **trialing** for 7 days at £9.99, with metadata
+   `account_id`, `location_id`, `tenant_id`.
+6. **Add a number** on the PingWren page (or the dashboard). A second
+   trialing subscription appears for it. **Remove** it: that subscription is
+   cancelled straight away.
+7. **Deactivate** the sub-account. Its numbers' subscriptions are cancelled
+   at once (any unused paid time goes to the customer's credit balance). If
+   the dashboard says "Deactivated. Your bill will update shortly.", sending
+   has stopped but a Stripe cancel failed; Slack names the subscription.
+   Cancel it by hand in Stripe if it is still live.
+8. **Activate** again. The numbers had subscriptions before, so they restart
+   with **no trial** and are charged at once.
+9. Open **Billing** on the dashboard. It shows the card, the billed numbers,
+   the monthly total and how many are still in trial. **Manage billing**
+   opens the Stripe Customer Portal.
+
+An account that abandoned the card Checkout shows "No card yet" with a **Save
+a card** button, and Activate is refused until it has one.
 
 ---
 
 ## Part 7 — Prove the whole life of an account, with test clocks
 
 Do this once, in test mode, before any real customer. A test clock lets Stripe
-fast-forward time. The trial in code is **7 days**.
+fast-forward time. Each number's trial is **7 days**.
 
-**First, one open question.** When every number is deactivated, the app sets
-the subscription item quantity to **0**. We have not confirmed that Stripe
-accepts quantity 0 on your account and price. In step 7 above, check that the
-update did not fail and that Slack has no "Billing quantity sync failed"
-message. If Stripe refuses, stop and tell the developer. The fix is small, but
-better found now than with a paying customer.
-
-Then walk this journey:
-
-1. **Stripe → Billing → Test clocks → New simulation.** Create a customer on
-   a clock. Easiest route: start a new sign-up (Part 6: form, emailed link, Checkout) with a fresh email,
-   then in the Stripe dashboard attach that customer to a test clock. If the
-   dashboard will not let you attach an existing customer, create the
-   customer and subscription from the dashboard on a clock, and use the
-   Stripe CLI or dashboard to replay the events at the webhook.
-2. **Signup and trial.** Checkout asks for a card (`4242 4242 4242 4242`) and
-   says nothing is charged today. Status trialing; the trial end date and the
-   card's last four digits show on the billing page.
-2b. **Day 7 charges the card.** Advance the clock past day 7: Stripe charges
-   the first invoice (£9.99 per active number, £7.99 from the 11th) and the status becomes
-   **active**. Never paused.
-3. **Card removed during the trial, sending pauses** (safety net only).
-   Detach the card in Stripe, then activate one sub-account and
-   check it sends. Advance the clock to 2 days before the trial ends: the
-   dashboard shows "Your trial ends in 2 days. Add a card to keep sending."
-   with an **Add a card** button. Advance past day 7 without adding a card.
-   In Stripe the subscription is **Paused** and no invoice was charged. The
-   webhook gets `customer.subscription.paused`; the account's
-   `billing_status` becomes `paused` and `trial_ends_at` stays set. The
-   dashboard and billing page say "Your trial has ended. Add a card to keep
-   sending." Send a workflow SMS: GoHighLevel shows it failed with
-   "PingWren subscription inactive — the account owner needs to update
-   billing". Nothing goes out on WhatsApp.
-4. **Add a card, sending resumes.** Click **Add a card**, save
-   `4242 4242 4242 4242` on the Stripe page, and land back on Billing ("Card
-   saved..."). In Stripe the card is the customer's and the subscription's
-   default, the subscription is **Active**, its billing period starts today,
-   and the first invoice (1 x £7.99, plus tax if on) is paid. The webhook
-   gets `checkout.session.completed` (setup mode), then
-   `customer.subscription.resumed`; `billing_status` becomes `active`. Send
-   the workflow SMS again: it reaches WhatsApp. If the subscription stays
-   Paused, check the webhook log for "card setup: ... failed" and that
-   Stripe retried the event.
-5. **Trial ends with a card.** On a second test-clock customer, add a card
-   during the trial and advance past day 7. The first invoice is paid and
-   status goes straight from trialing to **active**, never paused.
-6. **Per-number billing, charged as you go.** On one active (paid, not
-   trialing) sub-account, add a second number (dashboard → Show QR → Add a
-   number). The quantity goes from 1 to 2 and Stripe creates and charges a
-   **separate invoice at once** for the rest of the month (about £9.99 x days
-   left / days in month). Now attach `4000 0000 0000 0341` (declines) and add a
-   third number: it is refused with "Your card was declined…", the quantity
-   stays at 2 and no number is added. Remove a number: the quantity drops and
-   a credit appears on the customer's balance. Deactivate the sub-account:
-   quantity 0, whatever numbers it still has.
+1. **Stripe → Billing → Test clocks → New simulation.** Start a new sign-up
+   (Part 6) with a fresh email, save a card, then attach that customer to a
+   test clock in the Stripe dashboard before activating anything.
+2. **Number trial, then the first charge.** Activate one sub-account. Its
+   number is trialing; nothing is charged. Advance past day 7. That number's
+   first invoice (1 x £9.99, plus tax if on) is charged to the saved card, the
+   subscription is **active**, and it renews monthly on that day. The webhook
+   writes `active` on the number's row.
+3. **A second number has its own dates.** Advance 3 days and add a second
+   number. Its trial ends 7 days after it was added, and it is charged
+   separately on that day, as its own invoice.
+4. **Trial ends with no usable card.** On a second customer, save a card,
+   activate a number, then remove the card in the portal. Advance past the
+   number's trial. That subscription is **Paused** and nothing was charged;
+   the number's `billing_status` is `paused`. A workflow SMS from it fails in
+   GoHighLevel with "PingWren subscription inactive — the account owner needs
+   to update billing". The dashboard shows "Billing stopped" with **Add a
+   card**. Save a card: the webhook gets `checkout.session.completed` (setup
+   mode), resumes the number (charging it now) and it sends again.
+5. **Graduated price.** Add numbers until the account has eleven billed. The
+   eleventh is created at £7.99; the first ten stay at £9.99. Remove one of
+   the first ten: the oldest £7.99 number moves to £9.99 with no proration
+   (check the subscription item price, and that no proration line appears).
+6. **No trial farming.** Remove a number and add it back on the same
+   sub-account: the new subscription has **no trial** and is charged at once.
+   Add a number the sub-account has never had (a second one): it gets a trial.
 7. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
-   attaches, then declines). Advance one billing cycle. Status becomes
+   attaches, then declines). Advance to a number's renewal. That number is
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the
-   "Stripe payment failed" note, and **sending keeps working** while Stripe
-   retries. Advance until the retries run out. Status becomes **paused** and
-   sending stops.
-8. **Cancel.** In the Customer Portal, cancel. The billing page should say
-   "Cancels at the end of this period". Advance past the period end. Status
-   becomes **cancelled**.
-9. **14-day cleanup.** Advance the clock a further 14 days. The hourly cron
-   job (`/api/cron/drain`) logs each of the account's numbers out of the
-   bridge, which deletes the stored WhatsApp session, and clears activation.
-   Check the Vercel log line `cancelled cleanup: 1 account(s)...` with
-   `0 failure(s)`. Stripe's clock moves Stripe time, not your server's. To
-   test cleanup properly, move the account's `cancelled_at` back in the
-   database instead (`update accounts set cancelled_at = now() - interval
-   '15 days' where ...`) and run the cron by hand.
-10. **Resubscribe.** Sign in to the cancelled account and open **Billing**.
-   Click **Restart your subscription — billing starts today** and complete
-   Checkout with a test card. There is no second trial: Checkout shows no
-   trial and charges straight away, on the same Stripe customer. The account
-   gets the new subscription, returns to active, and its cancelled and cleanup markers clear. (Signing up again
-   with the same email does not work; it says the email already exists.)
+   "Stripe payment failed" note, and **that number keeps sending** while Stripe
+   retries. When the retries run out it is **paused** (Stripe `unpaid`) and
+   stops sending; pay the invoice in the portal.
+8. **Cancel in the portal.** Cancel one number's subscription in the Customer
+   Portal. At the period end it becomes **cancelled** on that number's row and
+   the number stops sending. The rest of the account is untouched. The
+   PingWren page in HighLevel marks that number "Sending paused".
+9. **Number cleanup.** Move that number's `cancelled_at` back 15 days in the
+   database (`update ghl_location_numbers set cancelled_at = now() - interval
+   '15 days' where ...`) and run `/api/cron/drain` by hand. The log line says
+   `1 number(s)`, the number is logged out of the bridge and `cleaned_up_at`
+   is set.
 
 Tick each step off. A failure at any step is a launch blocker.
 
@@ -394,9 +362,9 @@ afterwards. It is run by hand and is not part of `npm test`.
 Only after Parts 1 to 8 pass in test mode.
 
 1. In Stripe, switch to **live mode** and repeat Part 2 steps 2 to 9: product,
-   the same £7.99 per-unit price, portal settings, retry settings, webhook endpoint.
-   Live mode has its own price id, key and signing secret.
-2. In Vercel, replace `STRIPE_SECRET_KEY` (`sk_live_...`), `STRIPE_PRICE_ID`
+   portal settings, retry settings, webhook endpoint. Live mode has its own
+   product id, key and signing secret.
+2. In Vercel, replace `STRIPE_SECRET_KEY` (`sk_live_...`), `STRIPE_PRODUCT_ID`
    and `STRIPE_WEBHOOK_SECRET` with the live values. Redeploy.
 3. Re-run Part 6 with a real card, then refund it and cancel.
 4. Confirm the go-live gates at the end of the foundation doc (held messages,
@@ -419,7 +387,7 @@ Railway. Never put a real value in this file.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | long `eyJ...` token | sign-up, login, callback, proxy, `src/lib/auth.ts` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | long `eyJ...` token | sign-up, `src/lib/auth.ts`, `src/lib/data/supabase.ts` |
 | `STRIPE_SECRET_KEY` | Yes | `sk_test_...` | `src/lib/stripe/client.ts` |
-| `STRIPE_PRICE_ID` | Yes | `price_...` | `src/lib/stripe/client.ts` |
+| `STRIPE_PRODUCT_ID` | Yes | `prod_...` | `src/lib/stripe/client.ts` |
 | `STRIPE_WEBHOOK_SECRET` | Yes | `whsec_...` | billing webhook route |
 | `STRIPE_AUTOMATIC_TAX` | No | `true` | `src/lib/stripe/client.ts` |
 | `BRAND_MAX_ACTIVE_NUMBERS` | No | `40` | `src/lib/billing/activation.ts` |
@@ -484,6 +452,5 @@ line for that one run. Do not add them to Vercel.
   location is saved with no owner. It sits in `/admin` until its real owner
   claims it from the dashboard. Nothing sends for it until an account owns it
   and is in good standing. Check for unclaimed rows now and then.
-- **Quantity 0 is unconfirmed** until you do the check in Part 7.
 - **Cleanup runs hourly, not exactly at day 14.** It can land up to an hour
   after the 14-day mark. If the bridge is down it retries on the next run.

@@ -35,7 +35,7 @@ export default async function SignupPage({
         <>
           <p>
             Tell us who the account is for. We&apos;ll email you a link to confirm your address, then take you to
-            checkout to start your trial. {trialSentence()}
+            checkout to save your card. {trialSentence()}
           </p>
           {claim ? (
             <p className="mt-3">You arrived from GoHighLevel. Create your account here to carry on.</p>

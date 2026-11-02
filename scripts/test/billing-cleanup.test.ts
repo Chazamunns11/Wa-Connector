@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { CANCELLED_CLEANUP_AFTER_MS, purgeCancelledAccounts, type CleanupRepo } from "@/lib/billing/cleanup";
-import type { Account, GhlAccountSummary } from "@/lib/types";
+import type { Account, GhlAccountSummary, NumberBilling } from "@/lib/types";
+import { number, numbersRepo } from "./billing-fakes";
 
 const NOW = new Date("2026-10-30T12:00:00.000Z");
 
@@ -26,7 +27,8 @@ function loc(locationId: string): GhlAccountSummary {
   return { locationId, tenantId: `t-${locationId}` } as GhlAccountSummary;
 }
 
-function harness(accounts: Account[], locs: Record<string, string[]>, extraNumbers: Record<string, string[]> = {}) {
+function harness(accounts: Account[], locs: Record<string, string[]>, extraNumbers: Record<string, string[]> = {}, cancelled: NumberBilling[] = []) {
+  const nums = numbersRepo(cancelled);
   const cutoffs: string[] = [];
   const activated: Array<[string, string | null]> = [];
   const billing: Array<[string, unknown]> = [];
@@ -48,8 +50,10 @@ function harness(accounts: Account[], locs: Record<string, string[]>, extraNumbe
       { tenantId: `t-${locationId}`, slot: 1, isDefault: true, label: null },
       ...(extraNumbers[locationId] ?? []).map((tenantId, i) => ({ tenantId, slot: (i + 2) as 2 | 3, isDefault: false, label: null })),
     ],
+    listNumbersCancelledBefore: nums.listNumbersCancelledBefore,
+    updateNumberBilling: nums.updateNumberBilling,
   };
-  return { repo, cutoffs, activated, billing };
+  return { repo, cutoffs, activated, billing, nums };
 }
 
 test("cleans every location, marks only fully-clean accounts, counts failures", async () => {
@@ -62,7 +66,7 @@ test("cleans every location, marks only fully-clean accounts, counts failures", 
       return tenantId === "t-l3" ? { ok: false, error: "bridge down" } as never : { ok: true };
     },
   });
-  assert.deepEqual(result, { accounts: 2, locations: 3, failures: 1 });
+  assert.deepEqual(result, { accounts: 2, locations: 3, numbers: 0, failures: 1 });
   assert.equal(h.cutoffs[0], new Date(NOW.getTime() - CANCELLED_CLEANUP_AFTER_MS).toISOString());
   assert.equal(CANCELLED_CLEANUP_AFTER_MS, 14 * 24 * 60 * 60 * 1000);
   assert.deepEqual(h.billing, [["a", { cleanedUpAt: NOW.toISOString() }]]);
@@ -79,17 +83,17 @@ test("a throwing logout counts as a failure and never marks the account clean", 
       throw new Error("boom");
     },
   });
-  assert.deepEqual(result, { accounts: 1, locations: 1, failures: 1 });
+  assert.deepEqual(result, { accounts: 1, locations: 1, numbers: 0, failures: 1 });
   assert.deepEqual(h.billing, []);
 });
 
 test("an account with no locations is marked clean; empty list gives zeros", async () => {
   const h = harness([acct("a")], {});
   const logout = async () => ({ ok: true }) as const;
-  assert.deepEqual(await purgeCancelledAccounts(h.repo, { now: () => NOW, logout }), { accounts: 1, locations: 0, failures: 0 });
+  assert.deepEqual(await purgeCancelledAccounts(h.repo, { now: () => NOW, logout }), { accounts: 1, locations: 0, numbers: 0, failures: 0 });
   assert.equal(h.billing.length, 1);
   const e = harness([], {});
-  assert.deepEqual(await purgeCancelledAccounts(e.repo, { now: () => NOW, logout }), { accounts: 0, locations: 0, failures: 0 });
+  assert.deepEqual(await purgeCancelledAccounts(e.repo, { now: () => NOW, logout }), { accounts: 0, locations: 0, numbers: 0, failures: 0 });
 });
 
 test("is idempotent and logs no secrets", async () => {
@@ -119,7 +123,33 @@ test("multiple numbers: every number of a location is logged out, not only the d
       return { ok: true };
     },
   });
-  assert.deepEqual(result, { accounts: 1, locations: 1, failures: 0 });
+  assert.deepEqual(result, { accounts: 1, locations: 1, numbers: 0, failures: 0 });
   assert.deepEqual(logged.sort(), ["t-l1", "t-l1-slot2", "t-l1-slot3"]);
   assert.deepEqual(h.billing, [["a", { cleanedUpAt: NOW.toISOString() }]]);
+});
+
+// Per-number billing (0020): a number whose own subscription ended 14+ days ago loses its stored session.
+test("numbers: a number cancelled 14+ days ago is logged out once and marked clean; a recent one, a re-subscribed one or a failed logout is left", async () => {
+  const old = new Date(NOW.getTime() - CANCELLED_CLEANUP_AFTER_MS - 1000).toISOString();
+  const recent = new Date(NOW.getTime() - 1000).toISOString();
+  const h = harness([], {}, {}, [
+    number("t-old", { stripeSubscriptionId: "sub_o", billingStatus: "cancelled", cancelledAt: old }),
+    number("t-recent", { stripeSubscriptionId: "sub_r", billingStatus: "cancelled", cancelledAt: recent }),
+    // Re-subscribed inside the grace: subscribeNumbers cleared cancelled_at.
+    number("t-back", { stripeSubscriptionId: "sub_b", billingStatus: "trialing", cancelledAt: null }),
+    number("t-down", { stripeSubscriptionId: "sub_d", billingStatus: "cancelled", cancelledAt: old }),
+  ]);
+  const logged: string[] = [];
+  const logout = async (tenantId: string) => {
+    logged.push(tenantId);
+    return tenantId === "t-down" ? ({ ok: false, error: "bridge down" } as never) : { ok: true as const };
+  };
+  assert.deepEqual(await purgeCancelledAccounts(h.repo, { now: () => NOW, logout }), { accounts: 0, locations: 0, numbers: 2, failures: 1 });
+  assert.deepEqual(logged.sort(), ["t-down", "t-old"]);
+  assert.equal(h.nums.rows.get("t-old")!.cleanedUpAt, NOW.toISOString());
+  assert.equal(h.nums.rows.get("t-down")!.cleanedUpAt, null, "retried next pass");
+  // Next pass: only the failed one is tried again.
+  logged.length = 0;
+  await purgeCancelledAccounts(h.repo, { now: () => NOW, logout });
+  assert.deepEqual(logged, ["t-down"]);
 });

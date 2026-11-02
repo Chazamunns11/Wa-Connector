@@ -97,21 +97,21 @@ test("BRAND_PRICE_PER_NUMBER is retired everywhere outside history docs", () => 
   }
 });
 
-test("pricingCopy trial terms mention 7 days, card and 3 WhatsApp numbers", () => {
+test("pricingCopy trial terms mention 7 days, card and a trial per number", () => {
   const c = pricingCopy();
   const terms = c.trialTerms.join(" ");
   assert.match(terms, /7-day/);
   assert.match(terms, /card/i);
-  assert.match(terms, /3 WhatsApp numbers/);
-  assert.doesNotMatch(terms, /3 sub-accounts/);
+  assert.match(terms, /every WhatsApp number/);
+  assert.doesNotMatch(terms, /3 sub-accounts|for up to 3 WhatsApp numbers/);
   assert.match(c.cancel, /any time/i);
-  assert.match(c.cancel, /end of/i);
-  assert.match(c.cancel, /billing portal/i);
+  assert.match(c.cancel, /straight away/i);
+  assert.match(c.cancel, /credited/i);
   const failed = c.failedPayment.join(" ");
   assert.match(failed, /retr/i);
-  assert.match(failed, /continues/i);
+  assert.match(failed, /keeps sending/i);
   assert.match(failed, /banner/i);
-  assert.match(failed, /pauses/i);
+  assert.match(failed, /stops sending/i);
 });
 
 test("calculator fallback table lists 1, 3, 5, 10 and 25 numbers", () => {
@@ -188,8 +188,8 @@ test("pricing copy: one trial paragraph that bills per WhatsApp number", () => {
   assert.equal(c.trialTerms.length, 1);
   assert.match(c.trialTerms[0], /for each of your first 10 WhatsApp numbers, then £7\.99 for every number after that/);
   assert.doesNotMatch(c.trialTerms[0], /per activated sub-account|tier you reach/);
-  assert.match(c.trialTerms[0], /7-day free trial for up to 3 WhatsApp numbers/);
-  assert.match(c.trialTerms[0], /charged automatically unless you cancel first/);
+  assert.match(c.trialTerms[0], /7-day free trial on every WhatsApp number/);
+  assert.match(c.trialTerms[0], /its own monthly payment, on the day its trial ended/);
   assert.doesNotMatch(c.trialTerms[0], /no card needed/);
   assert.doesNotMatch(c.trialTerms[0], /take a card/);
   assert.equal(c.failedPayment.length, 2);
