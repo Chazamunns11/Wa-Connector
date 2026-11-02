@@ -1,5 +1,5 @@
 import type { BrandConfig } from "@/lib/brand-config";
-import { TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS, pricingConfig, priceSentence } from "@/lib/pricing";
+import { TRIAL_DAYS, TRIAL_MAX_NUMBERS, pricingConfig, priceSentence } from "@/lib/pricing";
 
 export interface FaqEntry {
   id: string;
@@ -72,7 +72,7 @@ export function faqEntries(brand: BrandConfig): FaqEntry[] {
     },
     trial: {
       question: "How does the free trial work?",
-      answer: `${TRIAL_DAYS}-day free trial, no card needed, with up to ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. If the trial ends before you add a card, sending pauses until you do. After that it's ${tiers}`,
+      answer: `${TRIAL_DAYS}-day free trial, no card needed, with up to ${TRIAL_MAX_NUMBERS} WhatsApp numbers. If the trial ends before you add a card, sending pauses until you do. After that it's ${tiers}`,
     },
     cancel: {
       question: "Can I cancel, and what happens if a payment fails?",

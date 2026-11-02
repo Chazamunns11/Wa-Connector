@@ -10,6 +10,7 @@ import { repo } from "@/lib/data";
 import { notifyText } from "@/lib/slack";
 import { retrieveSubscription, setSubscriptionItemQuantity } from "@/lib/stripe/billing";
 import { chargeForNewNumber, syncSubscriptionQuantity } from "./quantity";
+import { TRIAL_CAP_MESSAGE } from "@/lib/account-data/derive";
 
 export async function syncQuantityForLocation(locationId: string): Promise<void> {
   try {
@@ -40,7 +41,10 @@ export async function chargeBeforeAddingNumber(locationId: string): Promise<{ ok
   try {
     const r = await chargeForNewNumber(repo, { retrieveSubscription, setQuantity: setSubscriptionItemQuantity }, locationId);
     if (r.ok) return { ok: true };
-    return { ok: false, message: r.reason === "declined" ? NUMBER_PAYMENT_DECLINED : NUMBER_PAYMENT_FAILED };
+    return {
+      ok: false,
+      message: r.reason === "declined" ? NUMBER_PAYMENT_DECLINED : r.reason === "trial_cap" ? TRIAL_CAP_MESSAGE : NUMBER_PAYMENT_FAILED,
+    };
   } catch (err) {
     console.error("[billing] charge for a new number failed:", err);
     return { ok: false, message: NUMBER_PAYMENT_FAILED };

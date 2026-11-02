@@ -1,6 +1,6 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import type { Account } from "@/lib/types";
-import { MAX_NUMBERS_PER_SUB_ACCOUNT } from "@/lib/pricing";
+import { MAX_NUMBERS_PER_SUB_ACCOUNT, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
 import type { retrieveSubscription, setSubscriptionItemQuantity } from "@/lib/stripe/billing";
 
 export type QuantityRepo = Pick<GhlRepository, "listGhlAccountsForAccount" | "countNumbersByLocation">;
@@ -61,7 +61,7 @@ export async function syncSubscriptionQuantity(
 
 export type ChargeRepo = QuantityRepo & Pick<GhlRepository, "getGhlAccountByLocationId" | "getAccountById">;
 
-export type ChargeOutcome = { ok: true; charged: boolean } | { ok: false; reason: "declined" | "stripe_failed" };
+export type ChargeOutcome = { ok: true; charged: boolean } | { ok: false; reason: "declined" | "stripe_failed" | "trial_cap" };
 
 /**
  * Before a number is added: raise Stripe by one and take the payment NOW
@@ -82,7 +82,12 @@ export async function chargeForNewNumber(
   const counts = await repo.countNumbersByLocation([locationId]);
   if ((counts[locationId] ?? 1) >= MAX_NUMBERS_PER_SUB_ACCOUNT) return { ok: true, charged: false };
   const account = await repo.getAccountById(location.accountId);
-  if (!account || account.billingStatus === "comped" || !account.stripeSubscriptionId) return { ok: true, charged: false };
+  if (!account || account.billingStatus === "comped") return { ok: true, charged: false };
+  // The free trial covers TRIAL_MAX_NUMBERS numbers in total (Nov 2026).
+  if (account.billingStatus === "trialing" && (await countBillableNumbers(repo, account.id)) >= TRIAL_MAX_NUMBERS) {
+    return { ok: false, reason: "trial_cap" };
+  }
+  if (!account.stripeSubscriptionId) return { ok: true, charged: false };
   const subscription = await deps.retrieveSubscription(account.stripeSubscriptionId);
   if (!subscription.ok || !subscription.data.itemId) return { ok: false, reason: "stripe_failed" };
   const target = (await countBillableNumbers(repo, account.id)) + 1;

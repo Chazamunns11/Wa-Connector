@@ -26,7 +26,8 @@ export function pricingConfig(): PricingConfig {
 
 export const TRIAL_DAYS = 7;
 /** The trial covers up to this many activated sub-accounts. */
-export const TRIAL_MAX_SUB_ACCOUNTS = 3;
+/** Nov 2026: the free trial covers this many WhatsApp NUMBERS (it used to count sub-accounts), matching per-number pricing. */
+export const TRIAL_MAX_NUMBERS = 3;
 export const CALCULATOR_PRESETS = [1, 3, 10, 25] as const;
 
 /** What `numbers` WhatsApp numbers cost a month, in pence. Same price for every number. */

@@ -43,30 +43,30 @@ test("sendingGate: activated with trialing, active, past_due or comped sends", (
   for (const s of ["trialing", "active", "past_due", "comped"] as const) assert.equal(sendingGate(loc, s, "PingWren"), null);
 });
 
-const base = { billingStatus: "active" as BillingStatus, alreadyActive: false, accountActive: 0, platformActive: 0, platformCap: null };
+const base = { billingStatus: "active" as BillingStatus, alreadyActive: false, numbersAfter: 0, platformActive: 0, platformCap: null };
 
 test("canActivate: refusals and precedence", () => {
   assert.deepEqual(canActivate({ ...base, alreadyActive: true }), { ok: false, reason: "already_active" });
   for (const s of ["pending", "paused", "cancelled"] as const) {
     assert.deepEqual(canActivate({ ...base, billingStatus: s }), { ok: false, reason: "billing_inactive" });
   }
-  assert.deepEqual(canActivate({ ...base, billingStatus: "trialing", accountActive: 3 }), { ok: false, reason: "trial_cap" });
-  assert.deepEqual(canActivate({ ...base, billingStatus: "trialing", accountActive: 2 }), { ok: true });
-  assert.deepEqual(canActivate({ ...base, accountActive: 40 }), { ok: true });
+  assert.deepEqual(canActivate({ ...base, billingStatus: "trialing", numbersAfter: 4 }), { ok: false, reason: "trial_cap" });
+  assert.deepEqual(canActivate({ ...base, billingStatus: "trialing", numbersAfter: 3 }), { ok: true });
+  assert.deepEqual(canActivate({ ...base, numbersAfter: 40 }), { ok: true });
   assert.deepEqual(canActivate({ ...base, platformCap: 50, platformActive: 50 }), { ok: false, reason: "platform_cap" });
   assert.deepEqual(canActivate({ ...base, platformCap: 50, platformActive: 49 }), { ok: true });
   assert.deepEqual(canActivate({ ...base, platformCap: null, platformActive: 9999 }), { ok: true });
   // precedence
   assert.deepEqual(
-    canActivate({ billingStatus: "pending", alreadyActive: true, accountActive: 9, platformActive: 99, platformCap: 1 }),
+    canActivate({ billingStatus: "pending", alreadyActive: true, numbersAfter: 9, platformActive: 99, platformCap: 1 }),
     { ok: false, reason: "already_active" },
   );
   assert.deepEqual(
-    canActivate({ billingStatus: "paused", alreadyActive: false, accountActive: 9, platformActive: 99, platformCap: 1 }),
+    canActivate({ billingStatus: "paused", alreadyActive: false, numbersAfter: 9, platformActive: 99, platformCap: 1 }),
     { ok: false, reason: "billing_inactive" },
   );
   assert.deepEqual(
-    canActivate({ billingStatus: "trialing", alreadyActive: false, accountActive: 3, platformActive: 99, platformCap: 1 }),
+    canActivate({ billingStatus: "trialing", alreadyActive: false, numbersAfter: 4, platformActive: 99, platformCap: 1 }),
     { ok: false, reason: "trial_cap" },
   );
 });

@@ -29,7 +29,9 @@ function harness(
   const owned = [{ locationId: "loc-1", tenantId: "tenant-1" }];
   const acct = { id: "acc-1", billingStatus: opts.status ?? "active", stripeSubscriptionId: "sub" } as Account;
   const repo: RowActionRepo = {
-    listGhlAccountsForAccount: async () => owned as never,
+    // Owned rows plus `active` activated sub-accounts (one number each) for the per-number trial count.
+    listGhlAccountsForAccount: async () =>
+      [...owned, ...Array.from({ length: opts.active ?? 0 }, (_, i) => ({ locationId: `active-${i}`, tenantId: `t-${i}`, activatedAt: "2026-10-01T00:00:00.000Z" }))] as never,
     getGhlAccountByLocationId: async (id: string) =>
       ({ locationId: id, accountId: id === "loc-1" ? "acc-1" : "acc-2", activatedAt: opts.activated ? "2026-10-01T00:00:00.000Z" : null }) as GhlAccount,
     getAccountById: async () => acct,

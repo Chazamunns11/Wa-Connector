@@ -44,14 +44,18 @@ export async function activateLocation(
   const account = await repo.getAccountById(accountId);
   if (!account) return { ok: false, reason: "not_found" };
 
-  const [accountActive, platformActive] = await Promise.all([
-    repo.countActivatedForAccount(accountId),
+  // Per-number billing and trial: what is billed now, and what this
+  // sub-account adds (its numbers, at least 1).
+  const [platformActive, billedNow, counts] = await Promise.all([
     repo.countActivatedAll(),
+    countBillableNumbers(repo, accountId),
+    repo.countNumbersByLocation([locationId]),
   ]);
+  const adding = Math.max(1, counts[locationId] ?? 1);
   const verdict = canActivate({
     billingStatus: account.billingStatus,
     alreadyActive: location.activatedAt !== null,
-    accountActive,
+    numbersAfter: billedNow + adding,
     platformActive,
     platformCap: deps.platformCap(),
   });
@@ -67,8 +71,7 @@ export async function activateLocation(
     itemId = subscription.data.itemId;
     // Per-number billing (Nov 2026): Stripe goes up by THIS sub-account's
     // numbers (at least 1), on top of what is already billed.
-    const [billedNow, counts] = await Promise.all([countBillableNumbers(repo, accountId), repo.countNumbersByLocation([locationId])]);
-    const target = billedNow + Math.max(1, counts[locationId] ?? 1);
+    const target = billedNow + adding;
     // Charged now; if the card can't pay, Stripe refuses and nothing is activated.
     const raised = await deps.setQuantity(itemId, target, undefined, { refuseIfUnpaid: true });
     if (!raised.ok) return { ok: false, reason: "stripe_failed" };

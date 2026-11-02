@@ -168,6 +168,6 @@ test("IncludedList: features, no fee, trial, billing and cancel terms", async ()
   assert.match(src, /No setup fee and no charge per message/);
   assert.match(src, /7-day|TRIAL_DAYS/);
   assert.match(src, /billing portal/);
-  assert.match(src, /active sub-account/);
+  assert.match(src, /Billed monthly per WhatsApp number/);
   assert.ok(!/[£$€]\s?\d/.test(src));
 });

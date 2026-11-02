@@ -1,5 +1,5 @@
 import type { BillingStatus } from "@/lib/types";
-import { TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
+import { TRIAL_MAX_NUMBERS } from "@/lib/pricing";
 
 export type ActivateRefusal = "already_active" | "billing_inactive" | "trial_cap" | "platform_cap";
 
@@ -19,13 +19,14 @@ const BILLABLE: ReadonlySet<BillingStatus> = new Set(["trialing", "active", "pas
 export function canActivate(input: {
   billingStatus: BillingStatus;
   alreadyActive: boolean;
-  accountActive: number;
+  /** Per-number trial (Nov 2026): the account's billable WhatsApp numbers AFTER this activation. */
+  numbersAfter: number;
   platformActive: number;
   platformCap: number | null;
 }): { ok: true } | { ok: false; reason: ActivateRefusal } {
   if (input.alreadyActive) return { ok: false, reason: "already_active" };
   if (!BILLABLE.has(input.billingStatus)) return { ok: false, reason: "billing_inactive" };
-  if (input.billingStatus === "trialing" && input.accountActive >= TRIAL_MAX_SUB_ACCOUNTS) {
+  if (input.billingStatus === "trialing" && input.numbersAfter > TRIAL_MAX_NUMBERS) {
     return { ok: false, reason: "trial_cap" };
   }
   if (input.platformCap !== null && input.platformActive >= input.platformCap) {

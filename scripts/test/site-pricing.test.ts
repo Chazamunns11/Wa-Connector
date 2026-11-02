@@ -89,12 +89,13 @@ test("BRAND_PRICE_PER_NUMBER is retired everywhere outside history docs", () => 
   }
 });
 
-test("pricingCopy trial terms mention 7 days, card and 3 sub-accounts", () => {
+test("pricingCopy trial terms mention 7 days, card and 3 WhatsApp numbers", () => {
   const c = pricingCopy();
   const terms = c.trialTerms.join(" ");
   assert.match(terms, /7-day/);
   assert.match(terms, /card/i);
-  assert.match(terms, /3 sub-accounts/);
+  assert.match(terms, /3 WhatsApp numbers/);
+  assert.doesNotMatch(terms, /3 sub-accounts/);
   assert.match(c.cancel, /any time/i);
   assert.match(c.cancel, /end of/i);
   assert.match(c.cancel, /billing portal/i);
@@ -205,7 +206,7 @@ test("the price lives in code: BRAND_PRICE_PER_NUMBER / BRAND_PRICE are not read
 test("no page still advertises the old tiers or per-sub-account pricing", () => {
   for (const f of [...walk("src/app"), ...walk("src/components"), ...walk("src/lib/site")].filter((f) => /\.tsx?$/.test(f))) {
     const text = readFileSync(f, "utf8");
-    assert.ok(!/£9\.99|£5\.99|tier you reach|numbers included|per activated sub-account/.test(text), f);
+    assert.ok(!/£9\.99|£5\.99|tier you reach|numbers included|per activ(e|ated) sub-account/.test(text), f);
   }
 });
 

@@ -59,3 +59,13 @@ test("nothing to charge never blocks: comped, no subscription, inactive sub-acco
     assert.equal(h.sets.length, 0, JSON.stringify(o));
   }
 });
+
+test("free trial: up to 3 WhatsApp numbers in total; the 4th is refused with trial_cap, nothing charged", async () => {
+  // 2 other active sub-accounts (1 number each) + this one (1) = 3 already.
+  const full = harness({ status: "trialing", otherActive: 2, numbersHere: 1 });
+  assert.deepEqual(await chargeForNewNumber(full.repo, full.deps, "loc-1"), { ok: false, reason: "trial_cap" });
+  assert.equal(full.sets.length, 0);
+  // 2 numbers so far: a 3rd is allowed (a £0 trial proration).
+  const room = harness({ status: "trialing", otherActive: 1, numbersHere: 1 });
+  assert.deepEqual(await chargeForNewNumber(room.repo, room.deps, "loc-1"), { ok: true, charged: true });
+});

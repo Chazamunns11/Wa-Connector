@@ -1,3 +1,4 @@
+import { TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
 import type { BrandConfig } from "@/lib/brand-config";
 import { OWN_RESULTS_AVERAGE } from "@/lib/site/proof";
 
@@ -30,7 +31,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     heroH1: "Two-way WhatsApp chat in GoHighLevel, from your own number.",
     heroSub: `Set ${name} as the Telephony Provider and the Send SMS steps you already have go out on WhatsApp. When the customer writes back, the reply lands in Conversations.`,
     ctaNote:
-      "7-day free trial, no card needed. The trial covers up to 3 sub-accounts, and if it ends before you add a card, sending pauses until you do.",
+      `${TRIAL_DAYS}-day free trial, no card needed. The trial covers up to ${TRIAL_MAX_NUMBERS} WhatsApp numbers, and if it ends before you add a card, sending pauses until you do.`,
     setup: {
       heading: "How you set it up",
       lead: "About ten minutes. The setup guide walks through every screen.",
@@ -105,7 +106,7 @@ export function salesCopy(brand: BrandConfig): SalesCopy {
     faqAllLink: "All the questions, on one page",
     priceStrip: {
       terms:
-        "7-day free trial, no card needed. The trial covers up to 3 sub-accounts, and you can cancel any time from the billing portal.",
+        `${TRIAL_DAYS}-day free trial, no card needed. The trial covers up to ${TRIAL_MAX_NUMBERS} WhatsApp numbers, and you can cancel any time from the billing portal.`,
     },
     ctaLabel: "Start 7-day free trial",
   };

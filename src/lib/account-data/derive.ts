@@ -1,4 +1,4 @@
-import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_SUB_ACCOUNTS } from "@/lib/pricing";
+import { formatMoney, monthlyCostPence, pricingConfig, TRIAL_DAYS, TRIAL_MAX_NUMBERS } from "@/lib/pricing";
 import type { AccountSummary, LocationRow } from "./types";
 import { billableNumbers } from "@/lib/billing/quantity";
 
@@ -165,4 +165,4 @@ export function primaryActionFor(row: LocationRow): PrimaryAction | null {
 }
 
 /** Shown when a trialing account tries to activate past the trial cap. */
-export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_SUB_ACCOUNTS} sub-accounts. Start your paid plan now to add more.`;
+export const TRIAL_CAP_MESSAGE = `Your trial includes ${TRIAL_MAX_NUMBERS} WhatsApp numbers. Start your paid plan now to add more.`;
