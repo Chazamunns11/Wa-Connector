@@ -105,15 +105,20 @@ const SCOPES = [
   "contacts.readonly",
   "contacts.write",
   "conversations/message.readonly",
-  // Agency (bulk) installs — HighLevel's spec (apps/oauth.json) marks
-  // GET /oauth/installedLocations `Agency-Access-Only: oauth.readonly` and
-  // POST /oauth/locationToken `Agency-Access-Only: oauth.write`. Without
-  // oauth.write an agency install cannot get a single location token.
-  // Both must ALSO be ticked on the app in the developer portal first:
-  // asking for a scope the app hasn't enabled breaks the install.
-  "oauth.readonly",
-  "oauth.write",
 ];
+
+/**
+ * Agency (bulk) installs — HighLevel's spec (apps/oauth.json) marks
+ * GET /oauth/installedLocations `Agency-Access-Only: oauth.readonly` and
+ * POST /oauth/locationToken `Agency-Access-Only: oauth.write`. Without
+ * oauth.write an agency install cannot get a single location token (the Nov
+ * 2026 `bulk_failed&installed=0&failed=1` bug). Requested only once
+ * `GHL_REQUEST_AGENCY_SCOPES` is "true", for the same reason as
+ * `workflows.readonly` below: asking for a scope the app hasn't enabled in
+ * the developer portal breaks EVERY install, and these are agency-only
+ * scopes. Order: tick both in the portal, then set the flag.
+ */
+const AGENCY_SCOPES = ["oauth.readonly", "oauth.write"];
 
 /**
  * `workflows.readonly` lets GHL show PingWren's workflow triggers. It is only
@@ -126,7 +131,11 @@ const SCOPES = [
  * (docs/GHL-WORKFLOW-TRIGGERS-SETUP.md).
  */
 export function ghlOAuthScopes(): string[] {
-  return process.env.GHL_REQUEST_WORKFLOWS_SCOPE === "true" ? [...SCOPES, "workflows.readonly"] : [...SCOPES];
+  return [
+    ...SCOPES,
+    ...(process.env.GHL_REQUEST_AGENCY_SCOPES === "true" ? AGENCY_SCOPES : []),
+    ...(process.env.GHL_REQUEST_WORKFLOWS_SCOPE === "true" ? ["workflows.readonly"] : []),
+  ];
 }
 
 /** GHL is a hard dependency of nothing here — bound every call so a hung request can't hold an OAuth route or a status report open. Matches `whatsapp-bridge.ts`'s own `BRIDGE_TIMEOUT_MS`. */

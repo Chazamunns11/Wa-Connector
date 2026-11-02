@@ -56,7 +56,7 @@ coach's other numbers.
    or rising "not on WhatsApp" / failed sends, is an early warning. Pause that
    coach's bulk sends before WhatsApp escalates to a ban.
 8. **If a number is banned**: it cannot be reconnected. Connect a different
-   number (Add number in the PingWren page), make it the default, and remove
+   number (Add a number on the PingWren page), make it the default, and remove
    the banned one. Held messages for the banned number fail into HighLevel so
    they are visible; nothing is silently dropped.
 

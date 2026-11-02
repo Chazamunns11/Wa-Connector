@@ -321,8 +321,20 @@ contacts.readonly
 contacts.write
 ```
 
-A banner saying agency-only scopes are unavailable is expected and correct.
-**Save**, then reload to confirm.
+**Agency installs** also need these two (HighLevel's spec marks them
+`Agency-Access-Only`: `oauth.readonly` lists the sub-accounts an agency install
+covers, `oauth.write` gets each sub-account's token):
+
+```
+oauth.readonly
+oauth.write
+```
+
+Tick them, **Save**, reload to confirm they stayed ticked, and only then set
+`GHL_REQUEST_AGENCY_SCOPES=true` in Vercel. Requesting a scope the app has not
+enabled breaks every install. If the portal will not let you tick them (an
+"agency-only scopes are unavailable" banner), leave the flag off and install
+per sub-account instead.
 
 ### 4e. MANAGE → Secrets (client keys)
 
