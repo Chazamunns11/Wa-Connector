@@ -736,6 +736,12 @@ export interface NumberBilling {
   trialEndsAt: string | null;
   /** The unit price (pence) Stripe last reported for this number's subscription. */
   pricePence: number | null;
+  /** When the number row was created: its age decides its graduated price rank. */
+  createdAt: string;
+  /** When its subscription ended (`cancelled`); starts the credential cleanup grace. */
+  cancelledAt: string | null;
+  /** When the cleanup logged it out of the bridge (wiping its stored session). */
+  cleanedUpAt: string | null;
 }
 
 export interface NumberBillingPatch {
@@ -743,6 +749,8 @@ export interface NumberBillingPatch {
   billingStatus?: NumberBillingStatus | null;
   trialEndsAt?: string | null;
   pricePence?: number | null;
+  cancelledAt?: string | null;
+  cleanedUpAt?: string | null;
 }
 
 export interface AccountAdminRow {

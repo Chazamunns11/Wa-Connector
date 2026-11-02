@@ -102,10 +102,9 @@ same organisation**.
 2. **Product catalogue → Add product.** Name: `PingWren WhatsApp number`.
    Do **not** add any prices to it by hand. Billing is per WhatsApp number:
    the app creates one subscription per number and prices it inline
-   (`price_data`) at the account's current tier from `src/lib/pricing.ts`
-   (1 to 10 numbers £9.99, 11 to 24 £7.99, 25 or more £5.99, per number per
-   month, the tier applying to every number). Stripe makes the inline prices
-   itself. If the pence in `src/lib/pricing.ts` ever change, nothing in Stripe
+   (`price_data`) from `src/lib/pricing.ts`: the account's first 10 billed
+   numbers (oldest first) at £9.99 a month each, every later one at £7.99.
+   Stripe makes the inline prices itself. If the pence in `src/lib/pricing.ts` ever change, nothing in Stripe
    needs changing; numbers move to the new price at their next invoice the
    next time their account is re-priced.
 3. (No step: there is no Price object to create.)
@@ -156,9 +155,12 @@ same organisation**.
    - Off: Stripe adds no tax. Leave `STRIPE_AUTOMATIC_TAX` unset. Fine if you
      are under the VAT threshold and take advice.
    - On: turn on Stripe Tax, add your registration and set a head-office
-     address, then set `STRIPE_AUTOMATIC_TAX=true`. Checkout then collects the
-     address it needs. Prices are then treated as tax-exclusive unless you set
-     the price to tax-inclusive in Stripe. Check what the checkout page shows.
+     address, then set `STRIPE_AUTOMATIC_TAX=true`. Every number subscription
+     is then created with automatic tax on. The save-a-card Checkout always
+     collects a billing address (`billing_address_collection: required`) and
+     the webhook copies it onto the customer, which is what Stripe Tax uses.
+     Inline prices are tax-exclusive. Customers who saved a card before this
+     need an address added in the portal.
 
    Ask your accountant. This is not something the app can decide.
 
@@ -300,27 +302,30 @@ fast-forward time. Each number's trial is **7 days**.
    to update billing". The dashboard shows "Billing stopped" with **Add a
    card**. Save a card: the webhook gets `checkout.session.completed` (setup
    mode), resumes the number (charging it now) and it sends again.
-5. **Volume tiers.** Add numbers until the account has eleven billed. Every
-   number's subscription moves to £7.99 with no proration (check the
-   subscription item price, and that no proration line appears). Their next
-   invoices are 1 x £7.99 each. At 25 they all move to £5.99. Remove numbers
-   to go back under 25 and under 11: they move back up.
-6. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
+5. **Graduated price.** Add numbers until the account has eleven billed. The
+   eleventh is created at £7.99; the first ten stay at £9.99. Remove one of
+   the first ten: the oldest £7.99 number moves to £9.99 with no proration
+   (check the subscription item price, and that no proration line appears).
+6. **No trial farming.** Remove a number and add it back on the same
+   sub-account: the new subscription has **no trial** and is charged at once.
+   Add a number the sub-account has never had (a second one): it gets a trial.
+7. **Payment failed.** Replace the card with `4000 0000 0000 0341` (it
    attaches, then declines). Advance to a number's renewal. That number is
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the
    "Stripe payment failed" note, and **that number keeps sending** while Stripe
    retries. When the retries run out it is **paused** (Stripe `unpaid`) and
    stops sending; pay the invoice in the portal.
-7. **Cancel in the portal.** Cancel one number's subscription in the Customer
+8. **Cancel in the portal.** Cancel one number's subscription in the Customer
    Portal. At the period end it becomes **cancelled** on that number's row and
-   the number stops sending. The rest of the account is untouched.
+   the number stops sending. The rest of the account is untouched. The
+   PingWren page in HighLevel marks that number "Sending paused".
+9. **Number cleanup.** Move that number's `cancelled_at` back 15 days in the
+   database (`update ghl_location_numbers set cancelled_at = now() - interval
+   '15 days' where ...`) and run `/api/cron/drain` by hand. The log line says
+   `1 number(s)`, the number is logged out of the bridge and `cleaned_up_at`
+   is set.
 
 Tick each step off. A failure at any step is a launch blocker.
-
-Not covered by per-number billing yet: the 14-day credential cleanup still
-runs only for an account whose own `cancelled_at` is set, which per-number
-billing never sets. A number cancelled by Stripe keeps its stored WhatsApp
-session until its sub-account is deactivated or the number is removed.
 
 ---
 
@@ -441,11 +446,5 @@ line for that one run. Do not add them to Vercel.
   location is saved with no owner. It sits in `/admin` until its real owner
   claims it from the dashboard. Nothing sends for it until an account owns it
   and is in good standing. Check for unclaimed rows now and then.
-- **Per-number trials can be farmed.** Removing a number and adding it again
-  makes a new number with a new 7-day trial. Deactivating and re-activating a
-  sub-account does not (those numbers restart with no trial).
-- **Automatic tax needs a customer address.** With `STRIPE_AUTOMATIC_TAX=true`
-  a number's subscription cannot be created until the customer has an
-  address in Stripe (see Part 2 step 9).
 - **Cleanup runs hourly, not exactly at day 14.** It can land up to an hour
   after the 14-day mark. If the bridge is down it retries on the next run.

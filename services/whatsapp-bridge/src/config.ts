@@ -25,8 +25,14 @@ export interface BridgeConfig {
   sendMinGapMs: number;
   /** Uniform random jitter added on top of the gap (ms). */
   sendJitterMs: number;
-  /** Max sends per coach per UTC day. */
+  /** Max sends per coach per UTC day. Conversation replies don't count (src/pacing.ts). */
   dailyCap: number;
+  /** A 1:1 send is a conversation reply when the contact messaged this number within this many hours. 0 turns the exemption off. */
+  replyWindowHours: number;
+  /** Minimum gap before a conversation reply (ms). */
+  replyMinGapMs: number;
+  /** Uniform random jitter added to the reply gap (ms). */
+  replyJitterMs: number;
   /** Ramp a newly linked number's daily cap up over 14 days (src/pacing.ts WARMUP_SCHEDULE). Off by default. */
   warmupEnabled: boolean;
   /** Max groups one number may create per UTC day (src/group-limits.ts). Mass group creation is a ban trigger. */
@@ -219,6 +225,9 @@ export function loadConfig(): BridgeConfig {
     sendMinGapMs: intWithDefault("WA_SEND_MIN_GAP_MS", 45_000),
     sendJitterMs: intWithDefault("WA_SEND_JITTER_MS", 30_000),
     dailyCap: intWithDefault("WA_DAILY_CAP", 150),
+    replyWindowHours: intWithDefault("WA_REPLY_WINDOW_HOURS", 24),
+    replyMinGapMs: intWithDefault("WA_REPLY_MIN_GAP_MS", 3_000),
+    replyJitterMs: intWithDefault("WA_REPLY_JITTER_MS", 2_000),
     warmupEnabled: boolWithDefault("WA_WARMUP_ENABLED", false),
     groupCreateDaily: intWithDefault("WA_GROUP_CREATE_DAILY", 3),
     groupAddDaily: intWithDefault("WA_GROUP_ADD_DAILY", 50),
@@ -276,6 +285,11 @@ export function loadConfig(): BridgeConfig {
         "close to the default (5000ms, already sized with a healthy margin) rather than eating most of the 10s " +
         "budget: at the old 8000ms ceiling, a fully-timed-out flush left only ~2s for releases to complete before " +
         "the hard stop, which meant all leases waiting out the full WA_LOCK_TTL_MS instead."
+    );
+  }
+  if (config.replyWindowHours > 168) {
+    throw new Error(
+      `[config] WA_REPLY_WINDOW_HOURS (${config.replyWindowHours}) must be 168 or less — a reply is to someone who messaged recently; a longer window turns old contacts into uncapped sends.`
     );
   }
   if (config.bridgeSecret.length < 32) {

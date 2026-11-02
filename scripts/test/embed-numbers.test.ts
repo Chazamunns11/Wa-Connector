@@ -285,6 +285,8 @@ interface FakeNumbersRepo extends EmbedNumbersRepo {
   billingStatus: Account["billingStatus"];
   /** Per-number billing (0020): each number's billing columns by tenant id. */
   billing: Map<string, NumberBilling>;
+  /** Trials granted on this sub-account (ghl_accounts.number_trials_used). */
+  trialsUsed: number;
   /** Setter seats (0018): ghlUserId -> tenantId. */
   userNumbers: Map<string, string>;
 }
@@ -302,6 +304,15 @@ function fakeNumbersRepo(initial: LocationNumber[]): FakeNumbersRepo {
     },
     async listNumberBillingForAccount() {
       return repo.numbers.map((n) => repo.billing.get(n.tenantId) ?? number(n.tenantId, { locationId: LOCATION_ID }));
+    },
+    trialsUsed: 0,
+    async claimNumberTrial(_locationId: string, numbersAtLocation: number) {
+      if (repo.trialsUsed >= numbersAtLocation) return false;
+      repo.trialsUsed += 1;
+      return true;
+    },
+    async releaseNumberTrial() {
+      repo.trialsUsed = Math.max(0, repo.trialsUsed - 1);
     },
     async updateNumberBilling(tenantId: string, patch: Partial<NumberBilling>) {
       repo.calls.push(`billing:${patch.billingStatus ?? "price"}`);
@@ -380,7 +391,7 @@ test("listEmbedNumbers: slot, label, isDefault and a redacted summary per number
       { slot: 2, label: "Sales line", isDefault: false },
     ]
   );
-  assert.deepEqual(Object.keys(numbers[0]).sort(), ["isDefault", "key", "label", "mine", "slot", "summary"]);
+  assert.deepEqual(Object.keys(numbers[0]).sort(), ["billingPaused", "isDefault", "key", "label", "mine", "slot", "summary"]);
   assert.equal(numbers[0].summary?.phoneNumber, "+447700900123");
   assert.equal(repo.calls.filter((c) => c.startsWith("summary:")).length, 2);
   assertNoTenantId(numbers, "listEmbedNumbers");
@@ -606,6 +617,15 @@ test("decideRemoveNumber: logout, then the number's subscription is cancelled, t
   assert.equal(failed.status, 502);
   assert.equal((failed.body as { code: string }).code, "billing_failed");
   assert.ok(!stuck.calls.includes("remove:2"));
+});
+
+test("listEmbedNumbers: each number carries its own billing pause; a comped owner never pauses", async () => {
+  const repo = fakeNumbersRepo(SLOTS_1_2);
+  repo.billing.set(TENANT_1, number(TENANT_1, { locationId: LOCATION_ID, stripeSubscriptionId: "s1", billingStatus: "active" }));
+  repo.billing.set(TENANT_2, number(TENANT_2, { locationId: LOCATION_ID, stripeSubscriptionId: "s2", billingStatus: "paused", trialEndsAt: "2026-11-01T00:00:00Z" }));
+  assert.deepEqual((await listEmbedNumbers(repo, LOCATION_ID)).map((n) => n.billingPaused), [null, "trial_ended"]);
+  repo.billingStatus = "comped";
+  assert.deepEqual((await listEmbedNumbers(repo, LOCATION_ID)).map((n) => n.billingPaused), [null, null]);
 });
 
 // ---------------------------------------------------------------------------

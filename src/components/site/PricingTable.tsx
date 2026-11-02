@@ -1,6 +1,6 @@
 import { CALCULATOR_PRESETS, formatMoney, monthlyCost, type PricingConfig } from "@/lib/pricing";
 
-/** "1 number is £9.99 a month, 3 numbers £29.97 ..." as one sentence built from the presets. */
+/** "1 number is £7.99 a month, 3 numbers £23.97 ..." as one sentence built from the presets. */
 function fallbackSentence(pricing: PricingConfig): string {
   const parts = CALCULATOR_PRESETS.map((n) => {
     const cost = formatMoney(monthlyCost(n), pricing.currency);
@@ -20,7 +20,7 @@ export function PricingTable({ pricing }: { pricing: PricingConfig }) {
       <p className="max-w-[62ch] text-ink-dim [font-variant-numeric:tabular-nums]">{fallbackSentence(pricing)}</p>
       <noscript>
         <p className="mt-2 max-w-[62ch] text-ink-dim">
-          The calculator needs JavaScript. For any other count, the tiers above give the price per number, and the tier you reach applies to every number.
+          The calculator needs JavaScript. For any other count, multiply the price above by the number of WhatsApp numbers.
         </p>
       </noscript>
     </div>

@@ -26,6 +26,8 @@ export interface StripeCheckoutSession {
   customer: string | null;
   /** The payment method a setup-mode session saved (from the expanded setup_intent). */
   setupPaymentMethod: string | null;
+  /** The billing address entered on that card (`billing_address_collection: required`), in Stripe's shape. */
+  setupBillingAddress: Record<string, string> | null;
   metadata: Record<string, string>;
 }
 
@@ -82,12 +84,15 @@ function parseCheckoutSession(raw: unknown): StripeCheckoutSession | null {
   const id = str(o.id);
   if (!id) return null;
   const setupIntent = o.setup_intent as { payment_method?: unknown } | null | undefined;
+  const pm = setupIntent && typeof setupIntent === "object" ? (setupIntent.payment_method as { billing_details?: { address?: unknown } } | null) : null;
+  const address = pm && typeof pm === "object" ? stringMap(pm.billing_details?.address) : {};
   return {
     id,
     status: str(o.status),
     mode: str(o.mode),
     customer: idOf(o.customer),
     setupPaymentMethod: setupIntent && typeof setupIntent === "object" ? idOf(setupIntent.payment_method) : null,
+    setupBillingAddress: address.country ? address : null,
     metadata: stringMap(o.metadata),
   };
 }
@@ -125,6 +130,12 @@ export async function createCardSetupSession(
     mode: "setup",
     customer: input.customerId,
     payment_method_types: ["card"],
+    // Always collect the billing address. It lands on the card's billing
+    // details and applyCardSetup copies it onto the customer, which is what
+    // Stripe Tax reads when a number subscription is created
+    // (STRIPE_AUTOMATIC_TAX). customer_update[address] is not used: Stripe
+    // documents it for tax in payment/subscription Checkout, not setup mode.
+    billing_address_collection: "required",
     client_reference_id: input.accountId,
     metadata,
     setup_intent_data: { metadata },
@@ -136,7 +147,7 @@ export async function createCardSetupSession(
 
 export async function retrieveCheckoutSession(id: string, deps?: BillingDeps): Promise<StripeResult<StripeCheckoutSession>> {
   const r = await req(deps)<unknown>("GET", `/checkout/sessions/${id}`, {
-    expand: ["setup_intent"],
+    expand: ["setup_intent", "setup_intent.payment_method"],
   });
   return mapData(r, parseCheckoutSession);
 }
@@ -229,14 +240,20 @@ export async function retrieveCustomerCard(customerId: string, deps?: BillingDep
   });
 }
 
-/** Makes a saved card the customer's default for invoices (what a resume charges). */
+/**
+ * Makes a saved card the customer's default for invoices (what every number
+ * subscription charges) and, when given, saves its billing address on the
+ * customer (what Stripe Tax uses).
+ */
 export async function setCustomerDefaultPaymentMethod(
   customerId: string,
   paymentMethodId: string,
   deps?: BillingDeps,
+  address?: Record<string, string> | null,
 ): Promise<StripeResult<{ id: string }>> {
   const r = await req(deps)<{ id?: unknown }>("POST", `/customers/${customerId}`, {
     invoice_settings: { default_payment_method: paymentMethodId },
+    ...(address ? { address } : {}),
   });
   return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id } : null));
 }

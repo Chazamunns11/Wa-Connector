@@ -486,7 +486,7 @@ test("store.getDailyActivity: a dispatched group row seeds 5 units on restart; u
     { status: "sent", dispatch_attempted: true, sent_at: "2026-10-17T08:00:00.000Z", created_at: "2026-10-17T08:00:00.000Z", to_phone: "+447700900124" },
   ];
   (store as unknown as { supabase: unknown }).supabase = {
-    from: () => ({ select: () => ({ eq: () => ({ gte: async () => ({ data: rows, error: null }) }) }) }),
+    from: () => ({ select: () => ({ eq: () => ({ gte: () => ({ order: () => ({ range: async () => ({ data: rows, error: null }) }) }) }) }) }),
   };
   assert.deepEqual(await store.getDailyActivity(TENANT), { attemptCount: 1 + 5 + 5 + 1, lastAttemptAt: "2026-10-17T09:10:00.000Z" });
 });

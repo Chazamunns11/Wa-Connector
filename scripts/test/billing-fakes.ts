@@ -21,16 +21,45 @@ export function account(over: Partial<Account> = {}): Account {
 }
 
 export function number(tenantId: string, over: Partial<NumberBilling> = {}): NumberBilling {
-  return { tenantId, locationId: "loc-1", stripeSubscriptionId: null, billingStatus: null, trialEndsAt: null, pricePence: null, ...over };
+  return {
+    tenantId,
+    locationId: "loc-1",
+    stripeSubscriptionId: null,
+    billingStatus: null,
+    trialEndsAt: null,
+    pricePence: null,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    cancelledAt: null,
+    cleanedUpAt: null,
+    ...over,
+  };
 }
 
-/** Numbers by tenant id, with the repo methods per-number billing reads and writes. */
-export function numbersRepo(initial: NumberBilling[]) {
+/**
+ * Numbers by tenant id, with the repo methods per-number billing reads and
+ * writes. `trialsUsed` is each sub-account's granted-trial counter
+ * (ghl_accounts.number_trials_used), claimed the way claim_number_trial does.
+ */
+export function numbersRepo(initial: NumberBilling[], trialsUsed: Record<string, number> = {}) {
   const rows = new Map(initial.map((n) => [n.tenantId, { ...n }]));
   const writes: Array<{ tenantId: string; patch: Partial<NumberBilling> }> = [];
+  const trials = new Map(Object.entries(trialsUsed));
   return {
     rows,
     writes,
+    trials,
+    claimNumberTrial: async (locationId: string, numbersAtLocation: number) => {
+      const used = trials.get(locationId) ?? 0;
+      if (used >= numbersAtLocation) return false;
+      trials.set(locationId, used + 1);
+      return true;
+    },
+    releaseNumberTrial: async (locationId: string) => {
+      const used = trials.get(locationId) ?? 0;
+      if (used > 0) trials.set(locationId, used - 1);
+    },
+    listNumbersCancelledBefore: async (iso: string) =>
+      [...rows.values()].filter((n) => n.billingStatus === "cancelled" && n.cancelledAt !== null && n.cancelledAt < iso && n.cleanedUpAt === null).map((n) => ({ ...n })),
     listNumberBillingForAccount: async () => [...rows.values()].map((n) => ({ ...n })),
     getNumberBilling: async (tenantId: string) => {
       const n = rows.get(tenantId);

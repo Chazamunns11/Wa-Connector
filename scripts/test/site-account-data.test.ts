@@ -23,8 +23,9 @@ function loc(id: string, label: string, activated: boolean): GhlAccountSummary {
   } as GhlAccountSummary;
 }
 
-function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]; numbers?: NumberBilling[] } = {}) {
+function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]; billing?: NumberBilling[]; numbers?: Record<string, number> } = {}) {
   const calls: { name: string; args: unknown[] }[] = [];
+  const numbers = opts.numbers ?? {};
   const locations = opts.locations ?? [loc("a", "Alpha", true), loc("b", "Bravo", false), loc("c", "Charlie", true)];
   const repo = {
     async getAccountById(id: string) { calls.push({ name: "getAccountById", args: [id] }); return opts.account === undefined ? ACCOUNT : opts.account; },
@@ -33,13 +34,17 @@ function fakes(opts: { account?: Account | null; locations?: GhlAccountSummary[]
       calls.push({ name: "summaries", args: [ids] });
       return [{ coachId: "ten-a", status: "connected", phoneNumber: "+447700900101", lastConnectedAt: "2026-10-10T00:00:00Z", lastDisconnectReason: null, sentToday: 7, heldMessages: 0 }];
     },
+    // Per-number billing: one number per sub-account unless a test says otherwise.
+    async countNumbersByLocation(ids: string[]): Promise<Record<string, number>> {
+      return Object.fromEntries(ids.map((id) => [id, numbers[id] ?? 1]));
+    },
     async countOptOutsByTenant(ids: string[]): Promise<Map<string, number>> {
       calls.push({ name: "optOuts", args: [ids] });
       return new Map([["ten-a", 2]]);
     },
     async listNumberBillingForAccount(id: string) {
       calls.push({ name: "numbers", args: [id] });
-      return opts.numbers ?? [
+      return opts.billing ?? [
         number("n1", { billingStatus: "trialing" }),
         number("n2", { billingStatus: "active" }),
         number("n3", { billingStatus: "past_due" }),
@@ -94,7 +99,7 @@ test("getAccount refuses a missing account", async () => {
   await assert.rejects(make(fakes({ account: null })).getAccount());
 });
 
-test("getBilling counts the account's numbers by their own billing; the month prices every billed number at the tier", async () => {
+test("getBilling counts the account's numbers by their own billing; the month is the graduated price of the billed ones", async () => {
   stripeCalls.length = 0;
   const b = await make(fakes()).getBilling();
   assert.deepEqual(stripeCalls, [], "no Stripe call unless the card is asked for");
@@ -117,16 +122,16 @@ test("getBilling withCard reads the customer's card once", async () => {
   assert.equal(b.cardLast4, "4242");
 });
 
-test("getBilling at 25 billed numbers prices every number at the volume rate", async () => {
+test("getBilling at 25 billed numbers: 10 x £9.99 + 15 x £7.99", async () => {
   const many = Array.from({ length: 25 }, (_, i) => number(`n${i}`, { billingStatus: "active" }));
-  const b = await make(fakes({ numbers: many })).getBilling();
-  assert.equal(b.monthlyAmount, 149.75);
+  const b = await make(fakes({ billing: many })).getBilling();
+  assert.equal(b.monthlyAmount, 219.75);
 });
 
 test("getBilling for an account with no Stripe customer (comped or pending) never calls Stripe and has no portal", async () => {
   stripeCalls.length = 0;
   const comped = { ...ACCOUNT, billingStatus: "comped" as const, stripeCustomerId: null };
-  const b = await make(fakes({ account: comped, numbers: [] })).getBilling({ withCard: true });
+  const b = await make(fakes({ account: comped, billing: [] })).getBilling({ withCard: true });
   assert.deepEqual(stripeCalls, []);
   assert.equal(b.portalAvailable, false);
   assert.equal(b.monthlyAmount, 0);

@@ -42,6 +42,8 @@ function harness(
     },
     listNumberBillingForAccount: nums.listNumberBillingForAccount,
     updateNumberBilling: nums.updateNumberBilling,
+    claimNumberTrial: nums.claimNumberTrial,
+    releaseNumberTrial: nums.releaseNumberTrial,
   };
   const deps: RowActionDeps = {
     activate: {

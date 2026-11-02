@@ -163,14 +163,14 @@ export async function GET(request: NextRequest) {
     console.error("[cron/drain] whatsapp-inbound purge failed (non-fatal):", err);
   }
 
-  // Fourth pass: accounts cancelled 14+ days ago lose their stored WhatsApp
-  // credentials. Idempotent; logs counts only (never ids, emails or Stripe refs).
-  let cancelledCleanup = { accounts: 0, locations: 0, failures: 0 };
+  // Fourth pass: accounts, and numbers whose own subscription ended, cancelled
+  // 14+ days ago lose their stored WhatsApp credentials. Idempotent; logs counts only (never ids, emails or Stripe refs).
+  let cancelledCleanup = { accounts: 0, locations: 0, numbers: 0, failures: 0 };
   try {
     cancelledCleanup = await purgeCancelledAccounts(repo, { logout: logoutWhatsappSession, now: () => new Date(now) });
-    if (cancelledCleanup.accounts > 0) {
+    if (cancelledCleanup.accounts > 0 || cancelledCleanup.numbers > 0) {
       console.log(
-        `[cron/drain] cancelled cleanup: ${cancelledCleanup.accounts} account(s), ${cancelledCleanup.locations} location(s), ${cancelledCleanup.failures} failure(s).`
+        `[cron/drain] cancelled cleanup: ${cancelledCleanup.accounts} account(s), ${cancelledCleanup.locations} location(s), ${cancelledCleanup.numbers} number(s), ${cancelledCleanup.failures} failure(s).`
       );
     }
   } catch (err) {

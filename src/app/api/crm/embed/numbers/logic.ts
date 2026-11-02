@@ -21,7 +21,7 @@
  * a SLOT; every lookup below runs inside the `locationId` the route's guard
  * resolved from the verified token. `LocationNumber` (which carries the
  * tenant id) is server-only, and every response here is built by
- * ENUMERATING `slot`/`key`/`label`/`isDefault`/`summary` (`toEmbedNumberView`),
+ * ENUMERATING `slot`/`key`/`label`/`isDefault`/`summary`/`mine`/`billingPaused` (`toEmbedNumberView`),
  * never by spreading a `LocationNumber`, so a tenant id can never ride along.
  * Bridge failure messages are never forwarded to the client either: a failed
  * logout answers with a fixed sentence.
@@ -37,12 +37,12 @@
  */
 import { createHash } from "node:crypto";
 import type { GhlRepository } from "@/lib/data";
-import type { GhlEmbedWhatsappSummary, LocationNumber, WhatsappSessionSummary } from "@/lib/types";
+import type { BillingStatus, GhlEmbedWhatsappSummary, LocationNumber, WhatsappSessionSummary } from "@/lib/types";
 import type { BridgeOkResult } from "@/lib/whatsapp-bridge";
 import type { GuardFailureBody } from "@/lib/bridge-panel-guard";
 import { parseLabelInput, parseSlotParam, type LocationSlot } from "@/lib/location-numbers";
 import { toEmbedWhatsappSummary } from "@/lib/embed-summary";
-import { embedStateFor } from "@/app/api/crm/embed/session/logic";
+import { embedStateFor, numberBillingPaused, type NumberBillingPaused } from "@/app/api/crm/embed/session/logic";
 import { cancelNumber, subscribeNumbers, syncNumberPrices, type NumberBillingDeps } from "@/lib/billing/numbers";
 import { hasCardOnFile } from "@/lib/billing/activation";
 
@@ -67,6 +67,8 @@ export type EmbedNumbersRepo = Pick<
   | "getNumberBilling"
   | "listNumberBillingForAccount"
   | "updateNumberBilling"
+  | "claimNumberTrial"
+  | "releaseNumberTrial"
 >;
 
 /** What the browser sees for one number. Structurally unable to carry a tenant id. */
@@ -79,6 +81,8 @@ export interface EmbedNumberView {
   summary: GhlEmbedWhatsappSummary | null;
   /** Setter seats (0018): this is the number the HighLevel user looking at the page sends their replies from. */
   mine: boolean;
+  /** Per-number billing (0020): why this number can't send, or null when it can (or billing is unknown to the caller). */
+  billingPaused: NumberBillingPaused;
 }
 
 /**
@@ -105,8 +109,16 @@ export function embedNumberKey(tenantId: string): string {
   return createHash("sha256").update(`embed-number:${tenantId}`).digest("hex").slice(0, 12);
 }
 
-async function toEmbedNumberView(repo: Pick<EmbedNumbersRepo, "getWhatsappSessionSummary">, number: LocationNumber, myTenantId: string | null): Promise<EmbedNumberView> {
+type BillingLookup = { owner: BillingStatus | null; getNumberBilling: EmbedNumbersRepo["getNumberBilling"] } | null;
+
+async function toEmbedNumberView(
+  repo: Pick<EmbedNumbersRepo, "getWhatsappSessionSummary">,
+  number: LocationNumber,
+  myTenantId: string | null,
+  billing: BillingLookup,
+): Promise<EmbedNumberView> {
   const summary = await repo.getWhatsappSessionSummary(number.tenantId);
+  const billingPaused = billing ? numberBillingPaused(billing.owner, await billing.getNumberBilling(number.tenantId)) : null;
   return {
     slot: number.slot,
     key: embedNumberKey(number.tenantId),
@@ -114,18 +126,27 @@ async function toEmbedNumberView(repo: Pick<EmbedNumbersRepo, "getWhatsappSessio
     isDefault: number.isDefault,
     summary: toEmbedSummary(summary),
     mine: myTenantId !== null && number.tenantId === myTenantId,
+    billingPaused,
   };
 }
 
 /** The location's numbers, by slot, each with its redacted session summary (one summary read per number). */
 export async function listEmbedNumbers(
-  repo: Pick<EmbedNumbersRepo, "listLocationNumbers" | "getWhatsappSessionSummary"> & Partial<Pick<EmbedNumbersRepo, "getUserTenant">>,
+  repo: Pick<EmbedNumbersRepo, "listLocationNumbers" | "getWhatsappSessionSummary"> &
+    Partial<Pick<EmbedNumbersRepo, "getUserTenant" | "getGhlAccountByLocationId" | "getAccountById" | "getNumberBilling">>,
   locationId: string,
   ghlUserId: string | null = null
 ): Promise<EmbedNumberView[]> {
   const numbers = await repo.listLocationNumbers(locationId);
   const myTenantId = ghlUserId && repo.getUserTenant ? await repo.getUserTenant(locationId, ghlUserId) : null;
-  return Promise.all(numbers.map((n) => toEmbedNumberView(repo, n, myTenantId)));
+  // Per-number billing state needs the owning account (comped never pauses).
+  let billing: BillingLookup = null;
+  if (repo.getGhlAccountByLocationId && repo.getAccountById && repo.getNumberBilling) {
+    const location = await repo.getGhlAccountByLocationId(locationId);
+    const owner = location?.accountId ? await repo.getAccountById(location.accountId) : null;
+    billing = { owner: owner?.billingStatus ?? null, getNumberBilling: repo.getNumberBilling.bind(repo) };
+  }
+  return Promise.all(numbers.map((n) => toEmbedNumberView(repo, n, myTenantId, billing)));
 }
 
 export type NumbersRouteResult =

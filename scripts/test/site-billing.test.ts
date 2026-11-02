@@ -81,7 +81,7 @@ test("billingHref carries a fixed notice", () => {
   assert.equal(billingHref({ error: "no_portal" }), "/dashboard/billing?error=no_portal");
 });
 
-test("billing page is real: no sample markers, wired to the actions, tier sentence", () => {
+test("billing page is real: no sample markers, wired to the actions, price sentence", () => {
   const src = read("src/app/(app)/dashboard/billing/page.tsx");
   assert.doesNotMatch(src, /\(sample\)|PreviewBadge|disabled aria-describedby="portal-hint"/);
   assert.match(src, /openBillingPortalAction/);
@@ -90,7 +90,7 @@ test("billing page is real: no sample markers, wired to the actions, tier senten
   assert.match(src, /addCardAction/);
   assert.match(src, /Save a card/);
   assert.match(src, /Add a card/);
-  assert.match(src, /tierSentence\(/);
+  assert.match(src, /priceSentence\(/);
   assert.match(src, /Each number is charged separately, every month on the day its trial ended\./);
 });
 

@@ -80,3 +80,10 @@ test("providerNudge: false before 24h, when received, or when not connected", ()
   assert.equal(toLocationRow(loc(), summary(), stats({ everReceived: true }), NOW, 150, 0).providerNudge, false);
   assert.equal(toLocationRow(loc(), summary({ status: "waiting_qr" }), stats({ everReceived: false }), NOW, 150, 0).providerNudge, false);
 });
+
+test("awaitingFirstMessage: activated + connected + GoHighLevel never sent a message; false once one arrives or when not live", () => {
+  assert.equal(toLocationRow(loc(), summary(), stats({ everReceived: false }), NOW, 150, 0).awaitingFirstMessage, true);
+  assert.equal(toLocationRow(loc(), summary(), stats({ everReceived: true }), NOW, 150, 0).awaitingFirstMessage, false);
+  assert.equal(toLocationRow(loc({ activatedAt: null }), summary(), stats({ everReceived: false }), NOW, 150, 0).awaitingFirstMessage, false);
+  assert.equal(toLocationRow(loc(), null, stats({ everReceived: false }), NOW, 150, 0).awaitingFirstMessage, false);
+});

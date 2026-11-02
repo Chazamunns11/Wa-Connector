@@ -12,6 +12,7 @@ const session = (over: Partial<StripeCheckoutSession> = {}): StripeCheckoutSessi
   mode: "setup",
   customer: "cus",
   setupPaymentMethod: "pm_1",
+  setupBillingAddress: null,
   metadata: { account_id: "acc-1", purpose: "add_card" },
   ...over,
 });
@@ -24,7 +25,8 @@ function harness(opts: { acct?: Account | null; numbers?: NumberBilling[]; live?
     return what.startsWith(opts.fail ?? "\0") ? { ok: false as const, status: 500, code: null, message: "x" } : { ok: true as const, data };
   };
   const deps: CardSetupDeps = {
-    setCustomerDefault: (async (c: string, pm: string) => ok(`customer:${c}:${pm}`, { id: c })) as never,
+    setCustomerDefault: (async (c: string, pm: string, _d: unknown, address?: Record<string, string> | null) =>
+      ok(`customer:${c}:${pm}${address ? `:${address.country}` : ""}`, { id: c })) as never,
     retrieveSubscription: (async (id: string) => ok(`live:${id}`, { id, status: opts.live?.[id] ?? "paused" })) as never,
     resume: (async (id: string) => ok(`resume:${id}`, { id, status: "active" })) as never,
   };
@@ -44,6 +46,12 @@ test("signup: the card becomes the customer's default and a pending account beco
   assert.deepEqual(await applyCardSetup(h.repo, h.deps, session()), { kind: "saved", resumed: 0 });
   assert.deepEqual(h.log, ["customer:cus:pm_1"]);
   assert.deepEqual(h.patches, [{ billingStatus: "active" }]);
+});
+
+test("the card's billing address is saved on the customer (so automatic tax can price number subscriptions)", async () => {
+  const h = harness();
+  await applyCardSetup(h.repo, h.deps, session({ setupBillingAddress: { line1: "1 High St", postal_code: "S40 1AA", country: "GB" } }));
+  assert.deepEqual(h.log, ["customer:cus:pm_1:GB"]);
 });
 
 test("a returning cancelled account is reset so it is not cleaned up again", async () => {

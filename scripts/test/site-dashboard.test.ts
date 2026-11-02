@@ -139,10 +139,10 @@ test("every dashboard number action re-checks the session and the account's owne
   const src = read("src/app/(app)/dashboard/number-actions.ts");
   assert.match(src, /^"use server"/m);
   const exported = src.match(/export async function \w+/g) ?? [];
-  assert.equal(exported.length, 7);
-  assert.equal((src.match(/await requireAccountSession\(\)/g) ?? []).length, 7);
-  // 4 list/change actions check ownsLocation; 3 QR actions go through runOwnedNumberAction (which checks it too).
-  assert.equal((src.match(/ownsLocation\(repo, session\.accountId, locationId\)/g) ?? []).length, 4);
+  assert.equal(exported.length, 8);
+  assert.equal((src.match(/await requireAccountSession\(\)/g) ?? []).length, 8);
+  // 4 list/change actions and the link action check ownsLocation; 3 QR actions go through runOwnedNumberAction (which checks it too).
+  assert.equal((src.match(/ownsLocation\(repo, session\.accountId, locationId\)/g) ?? []).length, 5);
   assert.equal((src.match(/runOwnedNumberAction\(repo, session\.accountId, locationId, slot,/g) ?? []).length, 3);
   assert.doesNotMatch(src, /tenantId/);
 });

@@ -10,7 +10,7 @@
  * allowed to contain a literal currency amount (see site-copy.test.ts).
  */
 
-import { tierSentence } from "@/lib/pricing";
+import { priceSentence } from "@/lib/pricing";
 
 export interface GhlSource {
   title: string;
@@ -75,7 +75,7 @@ export const COMPARISON = {
 /** Our column. Prices come from src/lib/pricing.ts. */
 export function ourColumn(currency: string): string[] {
   return [
-    tierSentence(currency),
+    priceSentence(currency),
     "No charge per message.",
     "Your own number, connected as a linked device.",
     "No verified badge and no template approval, because it isn't the official API.",

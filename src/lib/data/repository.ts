@@ -123,6 +123,9 @@ export interface GhlRepository {
   /** The tenant a contact most recently messaged on, or null (fall back to the default number). */
   getStickyTenant(locationId: string, ghlContactId: string): Promise<string | null>;
 
+  /** Per-number billing (Nov 2026): how many WhatsApp numbers each of these sub-accounts has (ghl_location_numbers rows). Locations with none are absent. */
+  countNumbersByLocation(locationIds: string[]): Promise<Record<string, number>>;
+
   /** Setter seats (0018): the number (tenant) a HighLevel user's replies go out from in this location, or null (sticky/default routing). */
   getUserTenant(locationId: string, ghlUserId: string): Promise<string | null>;
 
@@ -856,6 +859,16 @@ export interface GhlRepository {
   getNumberBilling(tenantId: string): Promise<NumberBilling | null>;
   /** Writes the given billing columns of one number; absent keys are left alone. */
   updateNumberBilling(tenantId: string, patch: NumberBillingPatch): Promise<void>;
+  /**
+   * Claims one number trial for a sub-account (0020 `claim_number_trial`):
+   * atomically counts it only while the trials already granted there are fewer
+   * than `numbersAtLocation`; true when claimed.
+   */
+  claimNumberTrial(locationId: string, numbersAtLocation: number): Promise<boolean>;
+  /** Gives back a claimed trial whose subscription could not be created. */
+  releaseNumberTrial(locationId: string): Promise<void>;
+  /** Numbers whose subscription was cancelled before `iso` and whose stored session has not been wiped yet. */
+  listNumbersCancelledBefore(iso: string): Promise<NumberBilling[]>;
   /** Number of activated locations across all accounts. */
   countActivatedAll(): Promise<number>;
   /** Session summaries for exactly these tenant ids (no role scope; callers authorise first). */

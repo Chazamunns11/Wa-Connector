@@ -116,6 +116,8 @@ async function processEvent(repo: WebhookRepo, deps: WebhookDeps, event: StripeE
         // Kept for a trial that ended with no card (Stripe `paused`), so the dashboard can say the trial ended.
         trialEndsAt: status === "trialing" || live.status === "paused" ? iso(live.trialEnd) : null,
         pricePence: live.unitAmount,
+        // Starts the 14-day credential cleanup grace (src/lib/billing/cleanup.ts); ended_at is when it actually ended.
+        ...(status === "cancelled" && !number.cancelledAt ? { cancelledAt: iso(live.endedAt) ?? new Date().toISOString() } : {}),
       });
       // The billed count may have moved tier (e.g. Stripe cancelled an unpaid number): re-price the rest.
       const location = await repo.getGhlAccountByLocationId(number.locationId);

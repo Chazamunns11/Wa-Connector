@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { embedPausedMessage, embedStateFor } from "@/app/api/crm/embed/session/logic";
+import { embedPausedMessage, embedStateFor, embedStateForNumbers, numberBillingPaused } from "@/app/api/crm/embed/session/logic";
 import type { BillingStatus, GhlAccount } from "@/lib/types";
 
 function acct(overrides: Partial<GhlAccount> = {}): GhlAccount {
@@ -63,4 +63,21 @@ test("embedStateFor: unpaid or paused-without-trial stays the generic billing_pa
 test("embedPausedMessage: trial-ended copy, else the generic billing line", () => {
   assert.equal(embedPausedMessage(true), "The free trial has ended. The account owner needs to add a card to keep sending.");
   assert.equal(embedPausedMessage(false), "The account owner needs to update billing.");
+});
+
+// Per-number billing (0020): the paused screen follows each number's own subscription.
+test("numberBillingPaused: live statuses send; paused-with-trial-end is trial_ended; anything else is paused; comped never pauses", () => {
+  for (const st of ["trialing", "active", "past_due"] as const) assert.equal(numberBillingPaused("active", { billingStatus: st, trialEndsAt: null }), null, st);
+  assert.equal(numberBillingPaused("active", { billingStatus: "paused", trialEndsAt: "2026-11-01T00:00:00Z" }), "trial_ended");
+  for (const st of ["paused", "incomplete", "cancelled", null] as const) assert.equal(numberBillingPaused("active", { billingStatus: st, trialEndsAt: null }), "paused", String(st));
+  assert.equal(numberBillingPaused("active", null), "paused");
+  assert.equal(numberBillingPaused("comped", null), null);
+  assert.equal(numberBillingPaused("comped", { billingStatus: "cancelled", trialEndsAt: null }), null);
+});
+
+test("embedStateForNumbers: the whole embed pauses only when no number can send; trial_ended only if true of all", () => {
+  assert.equal(embedStateForNumbers([]), null);
+  assert.equal(embedStateForNumbers([{ billingPaused: null }, { billingPaused: "paused" }]), null);
+  assert.deepEqual(embedStateForNumbers([{ billingPaused: "paused" }, { billingPaused: "trial_ended" }]), { state: "billing_paused" });
+  assert.deepEqual(embedStateForNumbers([{ billingPaused: "trial_ended" }]), { state: "billing_paused", reason: "trial_ended" });
 });

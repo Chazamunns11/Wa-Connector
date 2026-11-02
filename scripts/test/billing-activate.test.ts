@@ -39,6 +39,8 @@ function harness(
     },
     listNumberBillingForAccount: nums.listNumberBillingForAccount,
     updateNumberBilling: nums.updateNumberBilling,
+    claimNumberTrial: nums.claimNumberTrial,
+    releaseNumberTrial: nums.releaseNumberTrial,
   };
   const deps: ActivateDeps = {
     ...stripe.deps,
@@ -132,8 +134,8 @@ test("re-activating a location whose numbers were billed before restarts them wi
   assert.deepEqual(h.stripe.log.filter((l) => l.startsWith("create")), ["create:t1:999:now"]);
 });
 
-test("activation that takes the account to 11 numbers re-prices the existing ones, with no proration", async () => {
-  const h = harness({ numbers: [number("new", { locationId: "loc-1" })] });
+test("activation that takes the account to 11 numbers prices only the new one at £7.99; the first 10 keep £9.99", async () => {
+  const h = harness({ numbers: [number("new", { locationId: "loc-1", createdAt: "2026-10-20T00:00:00.000Z" })] });
   for (let i = 0; i < 10; i++) {
     const r = await h.stripe.deps.createSubscription({ customerId: "cus", accountId: "acc-1", locationId: "loc-9", tenantId: `b${i}`, unitAmountPence: 999, trial: true });
     if (!r.ok) throw new Error("setup");
@@ -142,8 +144,8 @@ test("activation that takes the account to 11 numbers re-prices the existing one
   h.stripe.log.length = 0;
   assert.deepEqual(await activateLocation(h.repo, h.deps, "acc-1", "loc-1"), { ok: true });
   assert.deepEqual(h.stripe.log.filter((l) => l.startsWith("create")), ["create:new:799:trial"]);
-  assert.equal(h.stripe.log.filter((l) => l.startsWith("price:")).length, 10);
-  assert.ok([...h.nums.rows.values()].every((n) => n.pricePence === 799));
+  assert.equal(h.stripe.log.filter((l) => l.startsWith("price:")).length, 0);
+  assert.equal(h.nums.rows.get("new")!.pricePence, 799);
 });
 
 test("deactivation clears activated_at first, then cancels that location's numbers now", async () => {

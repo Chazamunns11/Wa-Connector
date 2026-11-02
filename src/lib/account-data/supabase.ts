@@ -14,6 +14,7 @@ type AccountRepo = Pick<
   | "getWhatsappSessionSummariesForTenants"
   | "getLocationStats"
   | "countOptOutsByTenant"
+  | "countNumbersByLocation"
   | "listNumberBillingForAccount"
 >;
 
@@ -55,15 +56,16 @@ export class SupabaseAccountDataSource implements AccountDataSource {
     const locs = await this.repo.listGhlAccountsForAccount(this.accountId);
     if (locs.length === 0) return [];
     const since = new Date(this.now.getTime() - 7 * DAY_MS).toISOString();
-    const [summaries, stats, optOuts] = await Promise.all([
+    const [summaries, stats, optOuts, numberCounts] = await Promise.all([
       this.repo.getWhatsappSessionSummariesForTenants(locs.map((l) => l.tenantId)),
       this.repo.getLocationStats(locs.map((l) => l.locationId), since),
       this.repo.countOptOutsByTenant(locs.map((l) => l.tenantId)),
+      this.repo.countNumbersByLocation(locs.map((l) => l.locationId)),
     ]);
     const byTenant = new Map(summaries.map((s) => [s.coachId, s]));
     const none = { pendingSend: 0, failedLast7Days: { count: 0, reasons: [] as string[] }, everReceived: false };
     return locs.map((l) =>
-      toLocationRow(l, byTenant.get(l.tenantId) ?? null, stats[l.locationId] ?? none, this.now, DEFAULT_DAILY_CAP, optOuts.get(l.tenantId) ?? 0),
+      toLocationRow(l, byTenant.get(l.tenantId) ?? null, stats[l.locationId] ?? none, this.now, DEFAULT_DAILY_CAP, optOuts.get(l.tenantId) ?? 0, numberCounts[l.locationId] ?? 1),
     );
   }
 

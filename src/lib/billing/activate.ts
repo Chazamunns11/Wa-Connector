@@ -10,6 +10,8 @@ export type ActivateRepo = Pick<
   | "setGhlActivated"
   | "listNumberBillingForAccount"
   | "updateNumberBilling"
+  | "claimNumberTrial"
+  | "releaseNumberTrial"
 >;
 
 export interface ActivateDeps extends NumberBillingDeps {

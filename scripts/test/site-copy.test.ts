@@ -50,7 +50,7 @@ test("daily-cap, stop and white-label answers state the real behaviour", () => {
   assert.match(get("stop"), /from that sub-account/);
   assert.match(get("white-label"), /It depends on the agency/);
   assert.match(get("white-label"), /ask your agency to allow Testbrand/);
-  assert.match(get("trial"), /After that it's £9\.99 a month per WhatsApp number, each with its own 7-day free trial\. 11 to 24 numbers: £7\.99 each\. 25 or more numbers: £5\.99 each\. The tier you reach applies to every number\./);
+  assert.match(get("trial"), /After that it's £9\.99 a month for each of your first 10 WhatsApp numbers, then £7\.99 for every number after that\. Up to 3 numbers per sub-account\./);
   assert.ok(!salesCopy(brand).safety.some((s) => /from your account/.test(s.body)));
 });
 
@@ -207,12 +207,15 @@ test("W40: no 'one price', 'same price' or 'flat price' wording survives", () =>
   assert.deepEqual(hits, []);
 });
 
-test("W40: the trial paragraph, our comparison column and the other price copy state the three prices", () => {
-  assert.match(pricingCopy().trialTerms[0], /£9\.99 a month per WhatsApp number, each with its own 7-day free trial\. 11 to 24 numbers: £7\.99 each\. 25 or more numbers: £5\.99 each\. The tier you reach applies to every number\./);
-  assert.deepEqual(ourColumn("GBP")[0], "£9.99 a month per WhatsApp number, each with its own 7-day free trial. 11 to 24 numbers: £7.99 each. 25 or more numbers: £5.99 each. The tier you reach applies to every number.");
+test("Nov 2026 pricing: the trial paragraph and our comparison column state £9.99 for the first 10 numbers, £7.99 after", () => {
+  assert.match(pricingCopy().trialTerms[0], /£9\.99 a month for each of your first 10 WhatsApp numbers, then £7\.99 for every number after that\. Up to 3 numbers per sub-account\./);
+  assert.deepEqual(ourColumn("GBP")[0], "£9.99 a month for each of your first 10 WhatsApp numbers, then £7.99 for every number after that. Up to 3 numbers per sub-account.");
+  for (const text of [pricingCopy().trialTerms.join(" "), ourColumn("GBP").join(" ")]) {
+    assert.doesNotMatch(text, /£5\.99|tier you reach|numbers included|per activ(e|ated) sub-account/);
+  }
 });
 
-test("trial copy: the free trial is per number, and never claims no card is needed", () => {
+test("trial copy: a card is saved at the start and each number has its own trial; never 'no card needed'", () => {
   const signup = readFileSync(join(process.cwd(), "src/app/(site)/signup/page.tsx"), "utf8");
   const sources = {
     sales: strings(salesCopy(brand)).join(" "),
@@ -221,8 +224,9 @@ test("trial copy: the free trial is per number, and never claims no card is need
     signup,
   };
   for (const [k, v] of Object.entries(sources)) {
-    assert.doesNotMatch(v, /no card needed|covers up to|sub-accounts? free/i, k);
-    assert.match(v, /(7|\{TRIAL_DAYS\})-day( |\n\s*)free trial/, k);
-    assert.match(v, /number/i, k);
+    assert.doesNotMatch(v, /no card needed|needs no card|without a card/i, k);
+    // The signup page renders the shared sentence; the rest contain it as text.
+    if (k === "signup") assert.match(v, /trialSentence\(\)/, k);
+    else assert.match(v, /7-day free trial on every WhatsApp number\. Save your card when you start: nothing is charged until a number's trial ends/, k);
   }
 });

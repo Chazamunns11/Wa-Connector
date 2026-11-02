@@ -1,17 +1,14 @@
 /**
- * Website pricing. A business decision kept in code, not an env var
- * (Ruling W40, revised 2 Nov 2026): volume pricing in whole pence, GBP.
+ * Website pricing. A business decision kept in code, not an env var, in whole
+ * pence, GBP.
  *
- * The unit is a WHATSAPP NUMBER. Every number is its own monthly Stripe
- * subscription with its own 7-day free trial, renewing on the day its trial
- * ended. Volume pricing: the tier the account's total of billed numbers lands
- * in prices EVERY number, not just the ones above the threshold.
- *
- *  - 1 to 10 numbers:  STANDARD_PENCE each, per month
- *  - 11 to 24 numbers: MID_PENCE each
- *  - 25 or more:       VOLUME_PENCE each
- *
- * Every price the site shows is built from these constants.
+ * Nov 2026 (Charlie): the unit is a WHATSAPP NUMBER, and every number is its
+ * own monthly Stripe subscription with its own TRIAL_DAYS free trial, renewing
+ * on the day its trial ended (src/lib/billing/numbers.ts). GRADUATED: the
+ * account's first FIRST_TIER_NUMBERS billed numbers cost PRICE_PER_NUMBER_PENCE
+ * each and every number after that costs LATER_PRICE_PER_NUMBER_PENCE
+ * (`numberPricePence`), so adding a number never makes the bill go down. A
+ * sub-account can have up to MAX_NUMBERS_PER_SUB_ACCOUNT numbers.
  */
 export interface PricingConfig {
   /** ISO 4217 upper-case. */
@@ -19,13 +16,14 @@ export interface PricingConfig {
 }
 
 export const CURRENCY = "GBP";
-export const STANDARD_PENCE = 999;
-export const MID_PENCE = 799;
-export const VOLUME_PENCE = 599;
-/** First number count that gets the middle price. */
-export const MID_FROM = 11;
-/** First number count that gets the lowest price. */
-export const VOLUME_FROM = 25;
+/** The price of each of the account's first FIRST_TIER_NUMBERS billed numbers. */
+export const PRICE_PER_NUMBER_PENCE = 999;
+/** How many numbers are charged at PRICE_PER_NUMBER_PENCE before the lower price starts. */
+export const FIRST_TIER_NUMBERS = 10;
+/** The price of the 11th number onwards. */
+export const LATER_PRICE_PER_NUMBER_PENCE = 799;
+/** The most WhatsApp numbers one sub-account can have (ghl_location_numbers.slot is 1-3). */
+export const MAX_NUMBERS_PER_SUB_ACCOUNT = 3;
 
 export function pricingConfig(): PricingConfig {
   return { currency: CURRENCY };
@@ -33,28 +31,30 @@ export function pricingConfig(): PricingConfig {
 
 /** Each number's own free trial. */
 export const TRIAL_DAYS = 7;
-export const CALCULATOR_PRESETS = [1, 3, 10, 11, 25] as const;
 
-/** Pence charged per number, per month, when the account has `numbers` billed numbers. */
-export function perNumberPence(numbers: number): number {
-  if (numbers >= VOLUME_FROM) return VOLUME_PENCE;
-  if (numbers >= MID_FROM) return MID_PENCE;
-  return STANDARD_PENCE;
+/** The one trial sentence every page uses (per-number trials, card saved first). */
+export function trialSentence(): string {
+  return `${TRIAL_DAYS}-day free trial on every WhatsApp number. Save your card when you start: nothing is charged until a number's trial ends, then that number is charged automatically each month unless you remove it.`;
+}
+export const CALCULATOR_PRESETS = [1, 3, 10, 25] as const;
+
+/** The monthly price of the account's `rank`-th billed number (1-based, oldest first). */
+export function numberPricePence(rank: number): number {
+  return rank <= FIRST_TIER_NUMBERS ? PRICE_PER_NUMBER_PENCE : LATER_PRICE_PER_NUMBER_PENCE;
 }
 
-/** Monthly cost in whole pence. Invalid input costs 0; fractions floor. */
+/** What `numbers` WhatsApp numbers cost a month, in pence: £9.99 each for the first 10, £7.99 each after. */
 export function monthlyCostPence(numbers: number): number {
   if (!Number.isFinite(numbers) || numbers < 0) return 0;
   const n = Math.floor(numbers);
-  return n * perNumberPence(n);
+  const first = Math.min(n, FIRST_TIER_NUMBERS);
+  return first * PRICE_PER_NUMBER_PENCE + (n - first) * LATER_PRICE_PER_NUMBER_PENCE;
 }
 
-/** Monthly cost in major units, from whole pence (no float drift). */
 export function monthlyCost(numbers: number): number {
   return monthlyCostPence(numbers) / 100;
 }
 
-/** en-GB currency string, always with pence: "£9.99", "£79.90". */
 export function formatMoney(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-GB", {
     style: "currency",
@@ -64,38 +64,22 @@ export function formatMoney(amount: number, currency: string): string {
   }).format(amount);
 }
 
-const money = (pence: number, currency: string) => formatMoney(pence / 100, currency);
-
-/** The 1 to 10 number price per number, e.g. "£9.99". */
-export function standardPrice(currency: string): string {
-  return money(STANDARD_PENCE, currency);
+/** "£9.99" */
+export function pricePerNumber(currency: string): string {
+  return formatMoney(PRICE_PER_NUMBER_PENCE / 100, currency);
 }
 
-/** The 11 to 24 number price per number, e.g. "£7.99". */
-export function midPrice(currency: string): string {
-  return money(MID_PENCE, currency);
+/** "£7.99", the price of each number after the first FIRST_TIER_NUMBERS. */
+export function laterPricePerNumber(currency: string): string {
+  return formatMoney(LATER_PRICE_PER_NUMBER_PENCE / 100, currency);
 }
 
-/** The 25-or-more price per number, e.g. "£5.99". */
-export function volumePrice(currency: string): string {
-  return money(VOLUME_PENCE, currency);
+/** The one pricing sentence every page uses. */
+export function priceSentence(currency: string): string {
+  return `${pricePerNumber(currency)} a month for each of your first ${FIRST_TIER_NUMBERS} WhatsApp numbers, then ${laterPricePerNumber(currency)} for every number after that. Up to ${MAX_NUMBERS_PER_SUB_ACCOUNT} numbers per sub-account.`;
 }
 
-/** The pricing in plain sentences. Says outright that the tier price applies to every number. */
-export function tierSentence(currency: string): string {
-  return `${standardPrice(currency)} a month per WhatsApp number, each with its own ${TRIAL_DAYS}-day free trial. ${MID_FROM} to ${VOLUME_FROM - 1} numbers: ${midPrice(currency)} each. ${VOLUME_FROM} or more numbers: ${volumePrice(currency)} each. The tier you reach applies to every number.`;
-}
-
-/** The transparent tier list. */
-export function tierRows(currency: string): { range: string; each: string }[] {
-  return [
-    { range: `1 to ${MID_FROM - 1} numbers`, each: standardPrice(currency) },
-    { range: `${MID_FROM} to ${VOLUME_FROM - 1} numbers`, each: midPrice(currency) },
-    { range: `${VOLUME_FROM} or more numbers`, each: volumePrice(currency) },
-  ];
-}
-
-/** e.g. "10 numbers = £99.90/month"; "1 number = £9.99/month". */
+/** e.g. "3 numbers = £29.97/month"; "1 number = £9.99/month". */
 export function priceLine(numbers: number, pricing: PricingConfig): string {
   const n = Number.isFinite(numbers) && numbers > 0 ? Math.floor(numbers) : 0;
   return `${n} ${n === 1 ? "number" : "numbers"} = ${formatMoney(monthlyCost(n), pricing.currency)}/month`;

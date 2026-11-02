@@ -67,13 +67,13 @@ test("needsAttention reasons in priority order: disconnected, waiting_qr, provid
   assert.equal(needsAttention(row({ activated: false, state: { kind: "not_active" } })), null);
 });
 
-test("headline reads '2 numbers billed · £19.98/month' and switches tier at 11 and 25", () => {
+test("headline reads '2 numbers billed · £19.98/month' and is graduated from the 11th number", () => {
   assert.equal(headline(2), "2 numbers billed · £19.98/month");
   assert.equal(headline(1), "1 number billed · £9.99/month");
   assert.equal(headline(0), "0 numbers billed · £0.00/month");
   assert.equal(headline(10), "10 numbers billed · £99.90/month");
-  assert.equal(headline(11), "11 numbers billed · £87.89/month");
-  assert.equal(headline(25), "25 numbers billed · £149.75/month");
+  assert.equal(headline(11), "11 numbers billed · £107.89/month");
+  assert.equal(headline(25), "25 numbers billed · £219.75/month");
 });
 
 test("rowActionsFor for not_active, waiting_qr, connected and disconnected rows", () => {
@@ -118,4 +118,22 @@ test("fleetSummary counts states, held messages, active sends and rows needing a
   ];
   assert.deepEqual(fleetSummary(rows), { connected: 2, offline: 2, waiting: 9, awaitingScan: 1, sentToday: 76, attention: 4 });
   assert.deepEqual(fleetSummary([]), { connected: 0, offline: 0, waiting: 0, awaitingScan: 0, sentToday: 0, attention: 0 });
+});
+
+// ---------------------------------------------------------------------------
+// Setup guidance: each row shows its one next step until it is live.
+// ---------------------------------------------------------------------------
+
+test("a connected sub-account that GoHighLevel has never messaged shows the last setup step at once", () => {
+  const r = row({ awaitingFirstMessage: true });
+  assert.equal(needsAttention(r), "Last step: set the Telephony Provider in GoHighLevel, then send a test message");
+});
+
+test("the last-step hint disappears once GoHighLevel's first message arrives", () => {
+  assert.equal(needsAttention(row({ awaitingFirstMessage: false })), null);
+});
+
+test("after 24 hours with no message the stronger provider nudge wins over the setup hint", () => {
+  const r = row({ awaitingFirstMessage: true, providerNudge: true });
+  assert.equal(needsAttention(r), "No messages from GoHighLevel yet. Is the Telephony Provider set?");
 });

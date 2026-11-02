@@ -63,6 +63,9 @@ export function needsAttention(row: LocationRow): string | null {
   }
   if (row.state.kind === "waiting_qr") return "Waiting for QR scan";
   if (row.providerNudge) return "No messages from GoHighLevel yet. Is the Telephony Provider set?";
+  // Setup's last step, shown the moment WhatsApp connects. Ticks itself off
+  // when GoHighLevel's first message arrives (that proves the provider is set).
+  if (row.awaitingFirstMessage) return "Last step: set the Telephony Provider in GoHighLevel, then send a test message";
   if (row.activated && row.dailyCap > 0 && row.sentToday >= row.dailyCap) return "Daily cap reached";
   return null;
 }

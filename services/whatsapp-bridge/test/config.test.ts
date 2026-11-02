@@ -42,7 +42,9 @@ const SHUTDOWN_FLUSH_KEYS = ["WA_SHUTDOWN_FLUSH_TIMEOUT_MS"];
 const LOCK_KEYS = ["WA_LOCK_HEARTBEAT_MS", "WA_LOCK_TTL_MS"];
 /** Group management daily limits (src/group-limits.ts). */
 const GROUP_LIMIT_KEYS = ["WA_GROUP_CREATE_DAILY", "WA_GROUP_ADD_DAILY"];
-const CLEARED_KEYS = [...POKE_KEYS, ...MEDIA_KEYS, ...SHUTDOWN_FLUSH_KEYS, ...LOCK_KEYS, ...GROUP_LIMIT_KEYS];
+/** Conversation-reply pacing (src/pacing.ts). */
+const REPLY_KEYS = ["WA_REPLY_WINDOW_HOURS", "WA_REPLY_MIN_GAP_MS", "WA_REPLY_JITTER_MS"];
+const CLEARED_KEYS = [...POKE_KEYS, ...MEDIA_KEYS, ...SHUTDOWN_FLUSH_KEYS, ...LOCK_KEYS, ...GROUP_LIMIT_KEYS, ...REPLY_KEYS];
 
 function withEnv(overrides: Record<string, string | undefined>, fn: () => void): void {
   const previous: Record<string, string | undefined> = {};
@@ -359,4 +361,14 @@ test("config: WA_READ_RECEIPTS_ENABLED defaults to false and reads true", () => 
 test("config: WA_INBOUND_EVENTS_ENABLED defaults to false and reads true", () => {
   withEnv({}, () => assert.equal(loadConfig().inboundEventsEnabled, false));
   withEnv({ WA_INBOUND_EVENTS_ENABLED: "true" }, () => assert.equal(loadConfig().inboundEventsEnabled, true));
+});
+
+test("config: conversation-reply pacing defaults to a 24h window and a 3s + 0-2s gap; 0 turns it off; over 168h refuses to boot", () => {
+  withEnv({}, () => {
+    const c = loadConfig();
+    assert.deepEqual([c.replyWindowHours, c.replyMinGapMs, c.replyJitterMs], [24, 3_000, 2_000]);
+  });
+  withEnv({ WA_REPLY_WINDOW_HOURS: "0" }, () => assert.equal(loadConfig().replyWindowHours, 0));
+  withEnv({ WA_REPLY_WINDOW_HOURS: "168" }, () => assert.equal(loadConfig().replyWindowHours, 168));
+  withEnv({ WA_REPLY_WINDOW_HOURS: "169" }, () => assert.throws(() => loadConfig(), /WA_REPLY_WINDOW_HOURS/));
 });

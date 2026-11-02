@@ -29,6 +29,10 @@ export interface LocationRow {
   failedLast7Days: { count: number; reasons: string[] };
   optOuts: number;
   providerNudge: boolean;
+  /** How many WhatsApp numbers the sub-account has (per-number billing counts these while it is activated). */
+  numbers: number;
+  /** Connected, but GoHighLevel has never sent this sub-account a message, so the Telephony Provider is probably not set yet. Shown at once as the last setup step (no 24h wait, unlike `providerNudge`). */
+  awaitingFirstMessage?: boolean;
 }
 
 /** Billing is per WhatsApp number: these are counts over the account's numbers (ghl_location_numbers). */

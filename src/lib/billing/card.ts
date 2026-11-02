@@ -17,7 +17,8 @@ const fail = (what: string, message: string): never => {
  * Applies a completed "save a card" (setup-mode Checkout), at signup or from
  * the billing page. The account comes from the session's metadata and the
  * customer from the account row, never from the event body. The card becomes
- * the customer's default (what every number subscription charges), a `pending`
+ * the customer's default (what every number subscription charges) with its
+ * billing address saved on the customer (for Stripe Tax), a `pending`
  * account becomes `active` (card on file: it may now add numbers), and any
  * number Stripe paused because its trial ended with no card is resumed (which
  * charges it now). Number statuses are not written here: Stripe's own
@@ -38,7 +39,8 @@ export async function applyCardSetup(
   // A session for another customer can never move this account's card.
   if (session.customer && session.customer !== account.stripeCustomerId) return { kind: "ignored" };
 
-  const c = await deps.setCustomerDefault(account.stripeCustomerId, pm);
+  // The card's billing address goes on the customer too, so automatic tax can price number subscriptions.
+  const c = await deps.setCustomerDefault(account.stripeCustomerId, pm, undefined, session.setupBillingAddress);
   if (!c.ok) fail("customer default", c.message);
 
   if (account.billingStatus !== "active" && account.billingStatus !== "comped") {

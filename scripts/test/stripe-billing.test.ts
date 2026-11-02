@@ -111,9 +111,9 @@ test("retrieve and mutate calls use the specified paths and params", async () =>
 
     f = fake({ id: "cs_1", status: "complete", customer: "cus", metadata: { account_id: "a" } });
     const c = await retrieveCheckoutSession("cs_1", f.deps);
-    assert.deepEqual(f.calls[0], { method: "GET", path: "/checkout/sessions/cs_1", params: { expand: ["setup_intent"] } });
+    assert.deepEqual(f.calls[0], { method: "GET", path: "/checkout/sessions/cs_1", params: { expand: ["setup_intent", "setup_intent.payment_method"] } });
     assert.ok(c.ok && c.data.metadata.account_id === "a");
-    assert.ok(c.ok && c.data.mode === null && c.data.setupPaymentMethod === null);
+    assert.ok(c.ok && c.data.mode === null && c.data.setupPaymentMethod === null && c.data.setupBillingAddress === null);
 
     f = fake({ id: "cs_2", status: "complete", mode: "setup", customer: "cus", setup_intent: { id: "seti_1", payment_method: "pm_1" }, metadata: {} });
     const s = await retrieveCheckoutSession("cs_2", f.deps);
@@ -121,6 +121,12 @@ test("retrieve and mutate calls use the specified paths and params", async () =>
     f = fake({ id: "cs_3", mode: "setup", setup_intent: { payment_method: { id: "pm_2" } }, metadata: {} });
     const s2 = await retrieveCheckoutSession("cs_3", f.deps);
     assert.ok(s2.ok && s2.data.setupPaymentMethod === "pm_2");
+    // The card's billing address (collected by billing_address_collection: required) is carried for the customer.
+    const address = { line1: "1 High St", city: "Chesterfield", postal_code: "S40 1AA", country: "GB" };
+    f = fake({ id: "cs_4", mode: "setup", setup_intent: { payment_method: { id: "pm_3", billing_details: { address: { ...address, line2: null } } } }, metadata: {} });
+    const s3 = await retrieveCheckoutSession("cs_4", f.deps);
+    assert.ok(s3.ok);
+    if (s3.ok) assert.deepEqual(s3.data.setupBillingAddress, address);
 
     f = fake({ url: "P" });
     await createPortalSession("cus", "R", f.deps);
@@ -130,7 +136,7 @@ test("retrieve and mutate calls use the specified paths and params", async () =>
   });
 });
 
-test("save a card: setup-mode Checkout on the account's customer, card only, purpose in both metadata", async () => {
+test("save a card: setup-mode Checkout on the account's customer, card only, billing address required, purpose in both metadata", async () => {
   const f = fake({ id: "cs_s", url: "U" });
   const r = await createCardSetupSession({ accountId: "acc-1", customerId: "cus_1", successUrl: "S", cancelUrl: "C" }, f.deps);
   assert.ok(r.ok && r.data.url === "U");
@@ -142,6 +148,7 @@ test("save a card: setup-mode Checkout on the account's customer, card only, pur
       mode: "setup",
       customer: "cus_1",
       payment_method_types: ["card"],
+      billing_address_collection: "required",
       client_reference_id: "acc-1",
       metadata,
       setup_intent_data: { metadata },
@@ -156,6 +163,9 @@ test("default payment method and resume calls", async () => {
   let f = fake({ id: "cus" });
   await setCustomerDefaultPaymentMethod("cus", "pm_1", f.deps);
   assert.deepEqual(f.calls[0], { method: "POST", path: "/customers/cus", params: { invoice_settings: { default_payment_method: "pm_1" } } });
+  f = fake({ id: "cus" });
+  await setCustomerDefaultPaymentMethod("cus", "pm_1", f.deps, { line1: "1 High St", country: "GB" });
+  assert.deepEqual(f.calls[0].params, { invoice_settings: { default_payment_method: "pm_1" }, address: { line1: "1 High St", country: "GB" } });
   f = fake(sub);
   const r = await resumeSubscription("sub_1", f.deps);
   assert.deepEqual(f.calls[0], { method: "POST", path: "/subscriptions/sub_1/resume", params: { billing_cycle_anchor: "now" } });

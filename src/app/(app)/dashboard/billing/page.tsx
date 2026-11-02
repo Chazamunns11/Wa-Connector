@@ -9,7 +9,7 @@ import { headline, needsCard, planStatus } from "@/lib/account-data/derive";
 import { hasCardOnFile } from "@/lib/billing/activation";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
-import { formatMoney, pricingConfig, tierSentence } from "@/lib/pricing";
+import { formatMoney, priceSentence, pricingConfig } from "@/lib/pricing";
 import { dashboardHref, parseBillingNotice } from "@/lib/site/dashboard-url";
 
 import { addCardAction, openBillingPortalAction, startCheckoutAction } from "./actions";
@@ -72,7 +72,7 @@ export default async function BillingPage({
               <dt className="text-ink-faint">Plan</dt>
               <dd>
                 <p className="font-semibold tabular-nums">{headline(billing.billedNumbers)}</p>
-                <p className="mt-1 text-sm text-ink-dim">{tierSentence(pricingConfig().currency)}</p>
+                <p className="mt-1 text-sm text-ink-dim">{priceSentence(pricingConfig().currency)}</p>
               </dd>
               <dt className="text-ink-faint">Card</dt>
               <dd>{billing.cardLast4 ? <>Ending {billing.cardLast4}</> : "No card on file"}</dd>

@@ -134,7 +134,7 @@
 import { NextResponse } from "next/server";
 import { repo } from "@/lib/data";
 import { decryptGhlSsoPayload, ghlSsoSharedSecret, isGhlEmbedConfigured, mintGhlEmbedToken, parseGhlUserContext } from "@/lib/ghl-embed";
-import { embedStateFor } from "./logic";
+import { embedStateFor, embedStateForNumbers } from "./logic";
 import { brandConfig } from "@/lib/brand-config";
 import { claimSignupUrl, isClaimConfigured } from "@/lib/ghl-claim";
 import { getWhatsappBridgeHealth, isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
@@ -219,6 +219,9 @@ export async function POST(request: Request) {
     const token = mintGhlEmbedToken(account.locationId, userContext.userId);
     // See this file's header, "SEVERAL NUMBERS PER LOCATION".
     const numbers = await listEmbedNumbers(repo, account.locationId, userContext.userId);
+    // Per-number billing: every number stopped on billing shows the paused screen; otherwise each card says so itself.
+    const paused = embedStateForNumbers(numbers);
+    if (paused) return NextResponse.json({ ok: true, ...paused });
     const slotOne = numbers.find((n) => n.slot === 1);
     const summary = slotOne ? slotOne.summary : toEmbedSummary(await repo.getWhatsappSessionSummary(account.tenantId));
 

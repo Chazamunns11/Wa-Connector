@@ -22,7 +22,7 @@ test("subscribeNumbers: one subscription per new number, each with its own trial
   assert.notEqual(repo.rows.get("t1")!.stripeSubscriptionId, repo.rows.get("t2")!.stripeSubscriptionId);
 });
 
-test("subscribeNumbers: the 11th billed number is created at the middle tier", async () => {
+test("subscribeNumbers: the 11th billed number is created at the later £7.99 price", async () => {
   const billed = Array.from({ length: 10 }, (_, i) => number(`b${i}`, { stripeSubscriptionId: `sub_b${i}`, billingStatus: "active", pricePence: 999 }));
   const repo = numbersRepo([...billed, number("new")]);
   const s = fakeStripe();
@@ -68,6 +68,46 @@ test("subscribeNumbers: a row write that fails after Stripe created the subscrip
   assert.equal([...s.subs.values()][0].status, "canceled");
 });
 
+test("trial farming: removing a number and adding it back gets no second trial; a genuinely extra number does", async () => {
+  // Sub-account with one number that has had its trial (counter 1). The number is removed and re-added: a new row, count still 1.
+  const repo = numbersRepo([number("again")], { "loc-1": 1 });
+  const s = fakeStripe();
+  await subscribeNumbers(repo, s.deps, account(), ["again"]);
+  assert.deepEqual(s.log, ["create:again:999:now"]);
+  // A second number on the same sub-account: count 2 > 1 trial granted, so it gets one.
+  repo.rows.set("extra", number("extra"));
+  s.log.length = 0;
+  await subscribeNumbers(repo, s.deps, account(), ["extra"]);
+  assert.deepEqual(s.log, ["create:extra:999:trial"]);
+  assert.equal(repo.trials.get("loc-1"), 2);
+});
+
+test("trials: activating a fresh sub-account with 3 numbers trials all 3; a failed create gives its trial claim back", async () => {
+  const repo = numbersRepo([number("a"), number("b"), number("c")]);
+  const s = fakeStripe();
+  await subscribeNumbers(repo, s.deps, account(), ["a", "b", "c"]);
+  assert.deepEqual(s.log.map((l) => l.split(":")[3]), ["trial", "trial", "trial"]);
+  assert.equal(repo.trials.get("loc-1"), 3);
+
+  const failing = numbersRepo([number("x")]);
+  const down = fakeStripe({ failOn: ["create"] });
+  assert.equal((await subscribeNumbers(failing, down.deps, account(), ["x"])).ok, false);
+  assert.equal(failing.trials.get("loc-1"), 0, "the retry still gets its trial");
+});
+
+test("cancelNumber and subscribeNumbers: cancelling starts the cleanup clock; re-subscribing clears it", async () => {
+  const repo = numbersRepo([number("t1", { stripeSubscriptionId: "sub_x", billingStatus: "active" })]);
+  const s = fakeStripe();
+  s.subs.set("sub_x", { status: "active", unitAmount: 999, metadata: {}, trial: false });
+  const now = new Date("2026-11-02T10:00:00.000Z");
+  await cancelNumber(repo, s.deps, repo.rows.get("t1")!, now);
+  assert.equal(repo.rows.get("t1")!.cancelledAt, now.toISOString());
+  await subscribeNumbers(repo, s.deps, account(), ["t1"]);
+  assert.equal(repo.rows.get("t1")!.cancelledAt, null);
+  assert.equal(repo.rows.get("t1")!.cleanedUpAt, null);
+  assert.deepEqual(s.log.filter((l) => l.startsWith("create")), ["create:t1:999:now"]);
+});
+
 test("cancelNumber: cancels a running subscription and records it; nothing running is a no-op; a missing one counts as cancelled", async () => {
   const repo = numbersRepo([number("t1", { stripeSubscriptionId: "sub_x", billingStatus: "trialing", trialEndsAt: "2026-11-09T00:00:00Z" })]);
   const s = fakeStripe();
@@ -95,24 +135,31 @@ async function billedAccount(n: number, price: number) {
   for (let i = 0; i < n; i++) {
     const r = await s.deps.createSubscription({ customerId: "cus", accountId: "acc-1", locationId: "loc-1", tenantId: `t${i}`, unitAmountPence: price, trial: true });
     if (!r.ok) throw new Error("setup");
-    repo.rows.set(`t${i}`, number(`t${i}`, { stripeSubscriptionId: r.data.id, billingStatus: "trialing", pricePence: price }));
+    // Created a minute apart, t0 oldest: age decides each number's graduated price.
+    const createdAt = new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString();
+    repo.rows.set(`t${i}`, number(`t${i}`, { stripeSubscriptionId: r.data.id, billingStatus: "trialing", pricePence: price, createdAt }));
   }
   s.log.length = 0;
   return { s, repo };
 }
 
-test("syncNumberPrices: crossing up to 11 billed numbers re-prices all of them, with no proration", async () => {
-  const { s, repo } = await billedAccount(11, 999);
+test("syncNumberPrices: graduated by age — the 11th oldest number onwards pays £7.99, the first 10 stay £9.99, no proration", async () => {
+  const { s, repo } = await billedAccount(12, 999);
   assert.deepEqual(await syncNumberPrices(repo, s.deps, account()), { ok: true });
-  assert.equal(s.log.filter((l) => l.startsWith("price:")).length, 11);
+  assert.deepEqual(s.log.filter((l) => l.startsWith("price:")).length, 2);
   assert.ok(s.log.filter((l) => l.startsWith("price:")).every((l) => l.endsWith(":799")));
-  assert.ok([...repo.rows.values()].every((n) => n.pricePence === 799));
+  for (let i = 0; i < 12; i++) assert.equal(repo.rows.get(`t${i}`)!.pricePence, i < 10 ? 999 : 799, `t${i}`);
 });
 
-test("syncNumberPrices: crossing back down below 25 re-prices to the middle tier; a settled account makes no Stripe call", async () => {
-  const { s, repo } = await billedAccount(24, 599);
+test("syncNumberPrices: removing one of the first 10 moves the oldest £7.99 number up to £9.99; a settled account makes no Stripe call", async () => {
+  const { s, repo } = await billedAccount(12, 999);
   await syncNumberPrices(repo, s.deps, account());
-  assert.ok([...repo.rows.values()].every((n) => n.pricePence === 799));
+  repo.rows.set("t3", { ...repo.rows.get("t3")!, billingStatus: "cancelled" });
+  s.log.length = 0;
+  await syncNumberPrices(repo, s.deps, account());
+  assert.equal(repo.rows.get("t10")!.pricePence, 999);
+  assert.equal(repo.rows.get("t11")!.pricePence, 799);
+  assert.deepEqual(s.log.filter((l) => l.startsWith("price:")), ["price:si_sub_t10_11:999"]);
   s.log.length = 0;
   await syncNumberPrices(repo, s.deps, account());
   assert.deepEqual(s.log, []);
@@ -128,7 +175,7 @@ test("syncNumberPrices: cancelled and never-billed numbers do not count and are 
 });
 
 test("syncNumberPrices: comped or customer-less accounts do nothing; a Stripe failure is reported and the rest carry on", async () => {
-  const { s, repo } = await billedAccount(11, 999);
+  const { s, repo } = await billedAccount(12, 999);
   assert.deepEqual(await syncNumberPrices(repo, s.deps, account({ billingStatus: "comped" })), { ok: true });
   assert.deepEqual(await syncNumberPrices(repo, s.deps, account({ stripeCustomerId: null })), { ok: true });
   assert.deepEqual(s.log, []);
@@ -136,7 +183,7 @@ test("syncNumberPrices: comped or customer-less accounts do nothing; a Stripe fa
   broken.subs.clear();
   for (const [k, v] of s.subs) broken.subs.set(k, v);
   assert.deepEqual(await syncNumberPrices(repo, broken.deps, account()), { ok: false });
-  assert.equal(broken.notes.length, 11);
+  assert.equal(broken.notes.length, 2);
   assert.ok([...repo.rows.values()].every((n) => n.pricePence === 999), "a failed re-price is not recorded");
 });
 

@@ -6,7 +6,13 @@ export const CANCELLED_CLEANUP_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
 
 export type CleanupRepo = Pick<
   GhlRepository,
-  "listAccountsCancelledBefore" | "listGhlAccountsForAccount" | "setGhlActivated" | "updateAccountBilling" | "listLocationNumbers"
+  | "listAccountsCancelledBefore"
+  | "listGhlAccountsForAccount"
+  | "setGhlActivated"
+  | "updateAccountBilling"
+  | "listLocationNumbers"
+  | "listNumbersCancelledBefore"
+  | "updateNumberBilling"
 >;
 
 export interface CleanupDeps {
@@ -16,7 +22,8 @@ export interface CleanupDeps {
 }
 
 /**
- * Cancelled for 14+ days: log every location out of the bridge (which deletes
+ * Cancelled for 14+ days (an account, or one number's own subscription): log
+ * out of the bridge. For an account: log every location out of the bridge (which deletes
  * its stored credentials) and clear its activation. Multiple numbers (merge):
  * EVERY number of the location (`listLocationNumbers`, plus the location's
  * own default tenant), not only the default, so numbers 2-3 never stay
@@ -28,9 +35,10 @@ export interface CleanupDeps {
 export async function purgeCancelledAccounts(
   repo: CleanupRepo,
   deps: CleanupDeps
-): Promise<{ accounts: number; locations: number; failures: number }> {
+): Promise<{ accounts: number; locations: number; numbers: number; failures: number }> {
   const now = deps.now();
-  const accounts = await repo.listAccountsCancelledBefore(new Date(now.getTime() - CANCELLED_CLEANUP_AFTER_MS).toISOString());
+  const cutoff = new Date(now.getTime() - CANCELLED_CLEANUP_AFTER_MS).toISOString();
+  const accounts = await repo.listAccountsCancelledBefore(cutoff);
   let locations = 0;
   let failures = 0;
   for (const account of accounts) {
@@ -70,5 +78,23 @@ export async function purgeCancelledAccounts(
       await repo.updateAccountBilling(account.id, { cleanedUpAt: now.toISOString() });
     }
   }
-  return { accounts: accounts.length, locations, failures };
+  // Per-number billing (0020): a number whose own subscription ended 14+ days
+  // ago (and was not re-subscribed, which clears cancelled_at) is logged out
+  // the same way. cleaned_up_at is written only after a successful logout, so
+  // a bridge outage retries on the next pass.
+  const numbers = await repo.listNumbersCancelledBefore(cutoff);
+  for (const n of numbers) {
+    let ok = false;
+    try {
+      ok = (await deps.logout(n.tenantId)).ok;
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      failures += 1;
+      continue;
+    }
+    await repo.updateNumberBilling(n.tenantId, { cleanedUpAt: now.toISOString() });
+  }
+  return { accounts: accounts.length, locations, numbers: numbers.length, failures };
 }

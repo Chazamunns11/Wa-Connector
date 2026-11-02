@@ -1,4 +1,4 @@
-import { TRIAL_DAYS, pricingConfig, tierSentence } from "@/lib/pricing";
+import { pricingConfig, priceSentence, trialSentence } from "@/lib/pricing";
 
 export interface PricingCopy {
   trialTerms: string[];
@@ -11,7 +11,7 @@ export function pricingCopy(): PricingCopy {
   return {
     // One paragraph (Task 13C). Kept as an array because /docs/billing renders it.
     trialTerms: [
-      `Save a card once, then each number you add gets its own ${TRIAL_DAYS}-day free trial. Nothing is charged until that number's trial ends. After that it's ${tierSentence(pricingConfig().currency)} Each number is billed per month as its own payment, on the day its trial ended.`,
+      `${trialSentence()} After that it's ${priceSentence(pricingConfig().currency)} Each number is billed as its own monthly payment, on the day its trial ended.`,
     ],
     failedPayment: [
       "If a payment fails, Stripe retries it for about 7 days. That number keeps sending while that happens, and a banner on your dashboard asks you to update the card.",

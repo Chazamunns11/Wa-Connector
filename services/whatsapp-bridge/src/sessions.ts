@@ -220,8 +220,25 @@ type QueuePayload = { kind: "text"; text: string } | { kind: "attachment"; attac
 interface QueueItem {
   record: MessageRecord;
   payload: QueuePayload;
-  /** Daily-cap units this item costs: 1 for a 1:1 part, `GROUP_SEND_CAP_UNITS` for a group send — reserved at accept time (`queuedUnits`), recorded at dispatch. */
+  /** Daily-cap units this item costs: 1 for a 1:1 part, `GROUP_SEND_CAP_UNITS` for a group send, 0 for a conversation reply — reserved at accept time (`queuedUnits`), recorded at dispatch. */
   units: number;
+  /** A conversation reply (`isConversationReply`): short gap, no cap units, dispatched ahead of queued cold sends. */
+  reply: boolean;
+}
+
+/**
+ * The queue index `drainQueue` dispatches next: the oldest reply with no
+ * older queued send to the same phone (one contact's messages never
+ * reorder), else the head. So a live chat never waits behind a queue of
+ * cold sends and their 45s gaps; cold sends keep their own order.
+ */
+export function nextQueueIndex(queue: readonly Pick<QueueItem, "record" | "reply">[]): number {
+  for (let i = 0; i < queue.length; i++) {
+    if (!queue[i]!.reply) continue;
+    const phone = queue[i]!.record.toPhone;
+    if (!queue.slice(0, i).some((earlier) => earlier.record.toPhone === phone)) return i;
+  }
+  return 0;
 }
 
 /** Units reserved by a session's queue — what the accept-time cap check counts, so a queued group send weighs 5, not 1. Summed from the queue itself, so it can never drift from it. */
@@ -306,6 +323,8 @@ interface Session {
   enabledGroups: Set<string>;
   /** Generation counter for `loadEnabledGroups` — only the newest load may write `enabledGroups`, so a slow, stale read can never overwrite a fresher one. */
   enabledGroupsLoad: number;
+  /** Set while `drainQueue` is sleeping out a pacer gap; calling it ends the sleep early so a newly queued reply is picked at once. */
+  wakeDrain?: (() => void) | null;
   /** Cap units of the item the drain worker has shifted off the queue but not yet recorded (`recordSend`) or let go undispatched — counted by the accept-time reservation alongside `queuedUnits`. 0 when nothing is in flight. */
   inFlightUnits: number;
 }
@@ -869,7 +888,7 @@ export class SessionManager {
 
     await this.store.ensureSessionRow(coachId);
 
-    const activity = await this.store.getDailyActivity(coachId);
+    const activity = await this.store.getDailyActivity(coachId, this.replyWindowMs());
 
     // Two-step construction: the lease's onLost callback must close over
     // THIS session object (not the coachId), so that teardown can check
@@ -891,7 +910,13 @@ export class SessionManager {
         () => this.teardownLocal(session)
       ),
       pacer: new SessionPacer(
-        { minGapMs: this.config.sendMinGapMs, jitterMs: this.config.sendJitterMs, dailyCap: this.config.dailyCap },
+        {
+          minGapMs: this.config.sendMinGapMs,
+          jitterMs: this.config.sendJitterMs,
+          dailyCap: this.config.dailyCap,
+          replyMinGapMs: this.config.replyMinGapMs,
+          replyJitterMs: this.config.replyJitterMs,
+        },
         activity.attemptCount,
         undefined,
         undefined,
@@ -1517,8 +1542,14 @@ export class SessionManager {
     // counts"), a group send `GROUP_SEND_CAP_UNITS`. Queued UNITS are
     // reserved, not queue.length, so a queued group send weighs 5 — plus the
     // item the drain is mid-way through dispatching (`inFlightUnits`).
-    const units = isGroup ? GROUP_SEND_CAP_UNITS : 1;
-    if (session.pacer.atDailyCap() || session.pacer.sentTodayCount() + session.inFlightUnits + queuedUnits(session) + units > session.pacer.effectiveDailyCap()) {
+    // A conversation reply costs 0 units and is never refused at the cap
+    // (warm-up included — warm-up only lowers the cap).
+    const reply = !isGroup && (await this.isConversationReply(coachId, target.toPhone));
+    const units = reply ? 0 : isGroup ? GROUP_SEND_CAP_UNITS : 1;
+    if (
+      !reply &&
+      (session.pacer.atDailyCap() || session.pacer.sentTodayCount() + session.inFlightUnits + queuedUnits(session) + units > session.pacer.effectiveDailyCap())
+    ) {
       return { kind: "daily_cap_reached", cap: session.pacer.effectiveDailyCap() };
     }
 
@@ -1530,9 +1561,48 @@ export class SessionManager {
       return { kind: "accepted", record, fresh: false };
     }
 
-    session.queue.push({ record, payload, units });
+    session.queue.push({ record, payload, units, reply });
+    if (reply) session.wakeDrain?.();
     void this.drainQueue(session);
     return { kind: "accepted", record, fresh: true };
+  }
+
+  /** WA_REPLY_WINDOW_HOURS in ms; 0 (exemption off) when unset or 0. */
+  private replyWindowMs(): number {
+    const hours = this.config.replyWindowHours;
+    return hours > 0 ? hours * 60 * 60 * 1000 : 0;
+  }
+
+  /**
+   * A 1:1 send is a conversation reply when that contact sent this number a
+   * 1:1 message within WA_REPLY_WINDOW_HOURS (`store.hasInboundFromPhone`:
+   * `whatsapp_inbound_messages`, not missed calls/reactions/edits, not
+   * phone-sent mirrors). A failed lookup counts as cold — the safe side.
+   */
+  private async isConversationReply(coachId: string, phone: string): Promise<boolean> {
+    const windowMs = this.replyWindowMs();
+    if (windowMs === 0) return false;
+    try {
+      return await this.store.hasInboundFromPhone(coachId, phone, Date.now(), windowMs);
+    } catch (err) {
+      this.log.warn({ coachId, code: (err as { code?: string }).code }, "reply-window lookup failed — pacing as a cold send");
+      return false;
+    }
+  }
+
+  /** Sleeps out a pacer gap; resolves true if `wakeDrain` ended it early. */
+  private paceSleep(session: Session, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        session.wakeDrain = null;
+        resolve(false);
+      }, ms);
+      session.wakeDrain = () => {
+        clearTimeout(timer);
+        session.wakeDrain = null;
+        resolve(true);
+      };
+    });
   }
 
   /**
@@ -1557,13 +1627,17 @@ export class SessionManager {
       while (session.queue.length > 0) {
         if (session.status !== "connected" || !session.sock || !session.lock.isHeld()) return; // resume on next 'open'.
 
-        const waitMs = session.pacer.msUntilNextSendAllowed();
-        if (waitMs > 0) await sleep(waitMs);
+        // Replies go first (`nextQueueIndex`). A reply queued while we sleep
+        // out a cold gap wakes us, and the loop re-picks it at the reply gap.
+        // Only pushes happen during the sleep, so the index stays valid.
+        const index = nextQueueIndex(session.queue);
+        const waitMs = session.pacer.msUntilNextSendAllowed(session.queue[index]!.reply);
+        if (waitMs > 0 && (await this.paceSleep(session, waitMs))) continue;
         if (session.status !== "connected" || !session.sock) return; // state may have moved while we slept.
 
-        const item = session.queue.shift();
+        const item = session.queue.splice(index, 1)[0];
         if (!item) break;
-        const { record, payload, units } = item;
+        const { record, payload, units, reply } = item;
         // In flight from here until `recordSend(units)` moves them into
         // `sentToday` (same synchronous step) or the item exits undispatched:
         // the accept-time reservation counts these units too, so the awaits
@@ -1736,7 +1810,7 @@ export class SessionManager {
             }
           }
 
-          session.pacer.recordSend(units); // count the ATTEMPT, in cap units (5 for a group) — see pacer JSDoc.
+          session.pacer.recordSend(units, reply); // count the ATTEMPT, in cap units (5 for a group) — see pacer JSDoc.
           session.inFlightUnits = 0; // now in sentToday — never count them twice.
           try {
             // Phone-sent mirror (src/inbound.ts) — the id is chosen HERE and

@@ -109,8 +109,10 @@ test("past_due is written (the number keeps sending) and a deletion writes cance
   const h = harness();
   await run(h, ev("customer.subscription.updated", sub({ status: "past_due" })));
   assert.equal(h.nums.rows.get("t1")!.billingStatus, "past_due");
-  await run(h, ev("customer.subscription.deleted", sub({ status: "canceled" }), "evt_2"));
+  await run(h, ev("customer.subscription.deleted", sub({ status: "canceled", ended_at: 1_800_000_000 }), "evt_2"));
   assert.equal(h.nums.rows.get("t1")!.billingStatus, "cancelled");
+  // Starts the 14-day credential cleanup grace from when it actually ended.
+  assert.equal(h.nums.rows.get("t1")!.cancelledAt, new Date(1_800_000_000 * 1000).toISOString());
   assert.equal(h.log.filter((l) => l === "sync").length, 2);
 });
 
