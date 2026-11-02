@@ -238,7 +238,9 @@ export function ghlAuthUrl(state: string): string | null {
     // install link GHL generates for this app — one less env var to get
     // wrong, and it cannot drift out of step with the client id it belongs
     // to. Verified against that generated link on 3 Aug 2026.
-    version_id: appVersionIdFromClientId(env.clientId),
+    // GHL_APP_VERSION_ID overrides it once a newer app version is published
+    // (Nov 2026: v2.0.0 added oauth.* scopes; the derived id still opens v1.0.0).
+    version_id: process.env.GHL_APP_VERSION_ID?.trim() || appVersionIdFromClientId(env.clientId),
     state,
   });
   return `${AUTH_ENDPOINT}?${params.toString()}`;
