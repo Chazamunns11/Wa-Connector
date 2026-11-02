@@ -1100,7 +1100,7 @@ test("handleProviderOutboundMessage: a disabled account never attempts the bridg
 });
 
 const REASON_GATE_NOT_ACTIVATED = "WhatsApp isn't activated for this sub-account";
-const REASON_GATE_INACTIVE = "PingWren subscription inactive — the account owner needs to update billing";
+const REASON_GATE_INACTIVE = "Not sent: PingWren subscription inactive. Nothing sends until the account owner updates billing.";
 
 test("sending gate: a location that is not activated is refused with the fixed string, reported failed inline, bridge never called", async () => {
   const { repo, rows, calls } = createFakeRepo([makeAccount({ activatedAt: null })]);

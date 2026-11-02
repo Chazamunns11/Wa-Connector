@@ -43,14 +43,17 @@ export type AddCardOutcome = { kind: "redirect"; url: string } | { kind: "not_ne
 /**
  * "Add a card": a setup-mode Checkout on the account's own customer. Offered
  * while trialing (before the trial ends) and once a trial has ended with no
- * card (Stripe `paused`, which keeps trialEndsAt). An `unpaid` account is
- * also `paused` but has a card and an unpaid invoice: that goes to the portal.
+ * card (Stripe `paused`, which keeps trialEndsAt). Also offered when the
+ * account owes money: `unpaid` (stored as `paused` with no trialEndsAt) or
+ * `past_due`. There the webhook pays the outstanding invoice with the new
+ * card once it is saved (src/lib/billing/card.ts), which restarts sending.
  */
 export async function addCardFlow(
   account: Account,
   deps: { appUrl: string; setup: typeof createCardSetupSession; then?: "end_trial" },
 ): Promise<AddCardOutcome> {
-  const eligible = account.billingStatus === "trialing" || (account.billingStatus === "paused" && !!account.trialEndsAt);
+  const eligible =
+    account.billingStatus === "trialing" || account.billingStatus === "paused" || account.billingStatus === "past_due";
   if (!eligible || !account.stripeCustomerId || !account.stripeSubscriptionId) return { kind: "not_needed" };
   const r = await deps.setup({
     accountId: account.id,

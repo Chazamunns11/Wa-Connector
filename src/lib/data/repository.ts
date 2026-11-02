@@ -8,6 +8,7 @@
  */
 import type {
   Account,
+  BillingStatus,
   AccountAdminRow,
   AccountBillingPatch,
   AccountDraft,
@@ -837,6 +838,8 @@ export interface GhlRepository {
   listAccountsForAdmin(): Promise<AccountAdminRow[]>;
   /** Accounts with cancelled_at < iso AND cleaned_up_at IS NULL. */
   listAccountsCancelledBefore(iso: string): Promise<Account[]>;
+  /** Every account whose billing_status is `status` (the daily unpaid reminder reads `paused`). */
+  listAccountsByBillingStatus(status: BillingStatus): Promise<Account[]>;
   /** Inserts a portal profile row for an existing auth user. */
   createProfile(draft: { id: string; role: Role; email: string; accountId: string | null }): Promise<void>;
   /** Profile lookup by lower-cased, trimmed email (all writes store it normalised), or null. */

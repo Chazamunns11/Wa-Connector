@@ -32,19 +32,20 @@ const session = (over: Partial<StripeCheckoutSession> = {}): StripeCheckoutSessi
   ...over,
 });
 
-function harness(liveStatus: string, acct: Account | null = account(), fail?: string) {
+function harness(liveStatus: string, acct: Account | null = account(), fail?: string, latestInvoice: string | null = "in_1") {
   const log: string[] = [];
   const ok = <T>(what: string, data: T) => {
     log.push(what);
     return what.startsWith(fail ?? "\0") ? { ok: false as const, status: 500, code: null, message: "x" } : { ok: true as const, data };
   };
-  const live = { id: "sub", status: liveStatus } as never;
+  const live = { id: "sub", status: liveStatus, latestInvoice } as never;
   const deps: CardSetupDeps = {
     setCustomerDefault: (async (c: string, pm: string) => ok(`customer:${c}:${pm}`, { id: c })) as never,
     retrieveSubscription: (async (id: string) => ok(`live:${id}`, live)) as never,
     resume: (async (id: string) => ok(`resume:${id}`, live)) as never,
     setSubscriptionDefault: (async (id: string, pm: string) => ok(`subdefault:${id}:${pm}`, live)) as never,
     endTrial: (async (id: string) => ok(`endtrial:${id}`, live)) as never,
+    payInvoice: (async (id: string) => ok(`pay:${id}`, { id, status: "paid" })) as never,
   };
   const repo = { getAccountById: async () => acct };
   return { log, deps, repo };
@@ -101,4 +102,23 @@ test("a Stripe failure throws so the webhook releases the event and Stripe retri
     const h = harness("paused", account(), step);
     await assert.rejects(applyCardSetup(h.repo, h.deps, session()), /card setup/, step);
   }
+});
+
+test("unpaid or past due: the new card becomes the default, then the outstanding invoice is paid with it", async () => {
+  for (const status of ["unpaid", "past_due"]) {
+    const h = harness(status, account({ billingStatus: status === "unpaid" ? "paused" : "past_due", trialEndsAt: null }));
+    assert.deepEqual(await applyCardSetup(h.repo, h.deps, session()), { kind: "paid" }, status);
+    assert.deepEqual(h.log, ["customer:cus:pm_1", "live:sub", "subdefault:sub:pm_1", "pay:in_1"], status);
+  }
+});
+
+test("unpaid: a declined payment is reported, not thrown (Stripe must not replay the webhook for a decline)", async () => {
+  const h = harness("unpaid", account({ trialEndsAt: null }), "pay:");
+  assert.deepEqual(await applyCardSetup(h.repo, h.deps, session()), { kind: "payment_failed" });
+});
+
+test("an active subscription is never charged again on a replay", async () => {
+  const h = harness("active", account({ billingStatus: "active", trialEndsAt: null }));
+  await applyCardSetup(h.repo, h.deps, session());
+  assert.ok(!h.log.some((l) => l.startsWith("pay:")));
 });

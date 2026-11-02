@@ -1,6 +1,7 @@
 import type { GhlRepository } from "@/lib/data/repository";
 import type {
   endTrialNow,
+  payInvoice,
   resumeSubscription,
   retrieveSubscription,
   setCustomerDefaultPaymentMethod,
@@ -14,6 +15,7 @@ export interface CardSetupDeps {
   setSubscriptionDefault: typeof setSubscriptionDefaultPaymentMethod;
   resume: typeof resumeSubscription;
   endTrial: typeof endTrialNow;
+  payInvoice: typeof payInvoice;
 }
 
 export type CardSetupOutcome =
@@ -21,7 +23,11 @@ export type CardSetupOutcome =
   | { kind: "unknown_account" }
   | { kind: "saved" }
   | { kind: "resumed" }
-  | { kind: "trial_ended" };
+  | { kind: "trial_ended" }
+  /** Unpaid or past due: the outstanding invoice was charged to the new card. */
+  | { kind: "paid" }
+  /** Unpaid or past due: the new card was saved but the outstanding invoice was declined. */
+  | { kind: "payment_failed" };
 
 const fail = (what: string, message: string): never => {
   throw new Error(`card setup: ${what} failed: ${message}`);
@@ -35,7 +41,9 @@ const fail = (what: string, message: string): never => {
  * resume, then the subscription's own default. billing_status is not written
  * here: Stripe's `customer.subscription.resumed` / `updated` event does that.
  * Safe to replay: each step is idempotent on Stripe's side, and a subscription
- * that is no longer paused is not resumed again.
+ * that is no longer paused is not resumed again. An unpaid or past-due
+ * subscription gets its outstanding invoice paid with the new card last
+ * (`payInvoice`); a paid invoice is not charged twice on a replay.
  */
 export async function applyCardSetup(
   repo: Pick<GhlRepository, "getAccountById">,
@@ -67,6 +75,15 @@ export async function applyCardSetup(
 
   const s = await deps.setSubscriptionDefault(subId, pm);
   if (!s.ok) fail("subscription default", s.message);
+
+  // Unpaid (retries ran out) or past due: a saved card alone does not restart
+  // the subscription, the outstanding invoice must be paid. A decline is not an
+  // error (Stripe must not replay the webhook for it): sending stays paused and
+  // the daily reminder carries on.
+  if ((live.data.status === "unpaid" || live.data.status === "past_due") && live.data.latestInvoice) {
+    const p = await deps.payInvoice(live.data.latestInvoice);
+    return p.ok ? { kind: "paid" } : { kind: "payment_failed" };
+  }
 
   if (outcome.kind === "saved" && live.data.status === "trialing" && session.metadata.then === "end_trial") {
     const e = await deps.endTrial(subId);

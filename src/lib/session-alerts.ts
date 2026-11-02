@@ -24,6 +24,7 @@ import type { GhlRepository } from "@/lib/data";
 import type { TriggerSessionRow, WhatsappSessionStatus } from "@/lib/types";
 import { brandConfig } from "@/lib/brand-config";
 import { holdMaxHours } from "@/lib/ghl-held-rules";
+import { REMINDER_KEY_PREFIX } from "@/lib/billing/reminders";
 
 /** A number must be down this long before the email goes (unless logged out or banned). */
 export const ALERT_AFTER_MS = 5 * 60 * 1000;
@@ -233,6 +234,8 @@ export async function runHealthCheck(repo: HealthRepo, deps: HealthDeps, now: nu
   for (const key of open.keys()) {
     if (checkedKeys.has(key)) continue;
     if (key.startsWith("session:") && !sessionsEvaluated) continue;
+    // The daily unpaid reminder's rows (src/lib/billing/reminders.ts) are not health checks: that pass owns them.
+    if (key.startsWith(REMINDER_KEY_PREFIX)) continue;
     try {
       await repo.clearOpsAlert(key);
     } catch (err) {

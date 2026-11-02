@@ -21,6 +21,14 @@ export interface PlanStatus {
 /** Shown on the dashboard and billing page once a trial has ended with no card. */
 export const TRIAL_ENDED_NO_CARD = "Your trial has ended. Add a card to keep sending.";
 
+/**
+ * Shown while an account is unpaid (Stripe's retries ran out). It must leave
+ * no doubt that nothing is going out: messages sent now are refused, not
+ * queued, so they never go out later.
+ */
+export const UNPAID_BANNER =
+  "Your payment didn't go through, so nothing is sending from any of your WhatsApp numbers. Messages sent from GoHighLevel now fail and won't go out later. Update your card to pay what's due and sending restarts straight away. Your numbers stay connected, so there's nothing to rescan.";
+
 /** Days before the trial ends when a trial with no card starts showing the reminder. */
 export const TRIAL_REMINDER_DAYS = 2;
 
@@ -54,14 +62,24 @@ export function planStatus(account: AccountSummary, now: Date, opts: { hasCard?:
     case "paused":
       // Stripe `paused` (trial ended, no card) keeps trialEndsAt; `unpaid` (retries ran out) does not.
       if (account.trialEndsAt) return { label: "Trial ended", tone: "loss", banner: TRIAL_ENDED_NO_CARD };
-      return { label: "Paused", tone: "loss", banner: "Sending is paused — update billing to resume" };
+      return { label: "Not sending: payment due", tone: "loss", banner: UNPAID_BANNER };
     case "cancelled":
       return { label: "Cancelled", tone: "muted", banner: null };
   }
 }
 
-/** True when the dashboard should offer "Add a card": a trial ended with no card, or a trial with none in its last days. */
+/** True when the account owes money: unpaid (sending stopped) or past due (Stripe still retrying). */
+export function owesPayment(account: Pick<AccountSummary, "billingStatus" | "trialEndsAt">): boolean {
+  return account.billingStatus === "past_due" || (account.billingStatus === "paused" && !account.trialEndsAt);
+}
+
+/**
+ * True when the dashboard should offer a card button: a trial ended with no
+ * card, a card-less trial in its last days, or an account that owes money
+ * (saving the card there also pays what's due, see src/lib/billing/card.ts).
+ */
 export function needsCard(account: AccountSummary, now: Date, hasCard: boolean | undefined): boolean {
+  if (owesPayment(account)) return true;
   if (account.billingStatus === "paused") return !!account.trialEndsAt;
   if (account.billingStatus !== "trialing" || hasCard !== false) return false;
   const n = trialDaysLeft(account.trialEndsAt, now);

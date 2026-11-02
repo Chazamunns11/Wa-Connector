@@ -13,6 +13,8 @@ export interface StripeSubscription {
   itemId: string | null;
   quantity: number;
   cardLast4: string | null;
+  /** The subscription's most recent invoice: what an `unpaid` subscription must pay to become active again. */
+  latestInvoice: string | null;
   metadata: Record<string, string>;
 }
 
@@ -70,6 +72,7 @@ export function parseSubscription(raw: unknown): StripeSubscription | null {
     itemId: str(first?.id),
     quantity: num(first?.quantity) ?? 0,
     cardLast4: str(card?.last4),
+    latestInvoice: idOf(o.latest_invoice),
     metadata: stringMap(o.metadata),
   };
 }
@@ -253,6 +256,18 @@ export async function setSubscriptionDefaultPaymentMethod(
 export async function resumeSubscription(subscriptionId: string, deps?: BillingDeps): Promise<StripeResult<StripeSubscription>> {
   const r = await req(deps)<unknown>("POST", `/subscriptions/${subscriptionId}/resume`, { billing_cycle_anchor: "now" });
   return mapData(r, parseSubscription);
+}
+
+/**
+ * Charges an open invoice now with the customer's saved card. An `unpaid`
+ * subscription only becomes `active` again once its most recent invoice is
+ * paid; saving a new card does not retry it
+ * (docs.stripe.com/billing/subscriptions/overview, "past_due").
+ * A decline comes back as `ok: false`.
+ */
+export async function payInvoice(invoiceId: string, deps?: BillingDeps): Promise<StripeResult<{ id: string; status: string | null }>> {
+  const r = await req(deps)<{ id?: unknown; status?: unknown }>("POST", `/invoices/${invoiceId}/pay`, {});
+  return mapData(r, (d) => (typeof d.id === "string" ? { id: d.id, status: str(d.status) } : null));
 }
 
 export async function createPortalSession(

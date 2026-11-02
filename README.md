@@ -23,7 +23,7 @@ npm run check   # typecheck + lint + tests
 | `BRAND_SUPPORT_EMAIL` | Optional support address shown to users |
 | `GHL_REQUEST_AGENCY_SCOPES` | `true` asks HighLevel for `oauth.readonly` and `oauth.write`, which agency installs need. Tick both in the developer portal first, or every install breaks. |
 | `GHL_APP_VERSION_ID` | Optional. The Marketplace app version the install link opens. Unset = derived from `GHL_CLIENT_ID`, which is the first version (v1.0.0). Set it to the current live version id (v2.0.0: `6ae7ffc6f6375af7722b0986`). |
-| `RESEND_API_KEY`, `EMAIL_FROM` | Resend credentials for outage emails. Unset: alerts go to Slack only. |
+| `RESEND_API_KEY`, `EMAIL_FROM` | Resend credentials for outage emails and the daily "nothing is sending until you pay" email to unpaid account owners. Unset: alerts go to Slack only and no payment reminders are sent. |
 | `ALERT_EMAIL_TO` | Operator alert inbox, comma-separated (default `charlie@pingwren.co.uk`) |
 
 ### Environment variables — website

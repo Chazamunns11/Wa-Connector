@@ -11,6 +11,7 @@ import { notifyText } from "@/lib/slack";
 import { verifyStripeSignature } from "@/lib/stripe/webhook";
 import {
   endTrialNow,
+  payInvoice,
   resumeSubscription,
   retrieveCheckoutSession,
   retrieveSubscription,
@@ -63,6 +64,7 @@ export async function POST(request: NextRequest) {
               setSubscriptionDefault: setSubscriptionDefaultPaymentMethod,
               resume: resumeSubscription,
               endTrial: endTrialNow,
+              payInvoice,
             },
             session,
           ),

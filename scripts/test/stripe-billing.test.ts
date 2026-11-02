@@ -116,8 +116,11 @@ test("parseSubscription: typed shape, object customer, missing items", () => {
     itemId: "si_1",
     quantity: 3,
     cardLast4: "4242",
+    latestInvoice: null,
     metadata: {},
   });
+  assert.equal(parseSubscription({ ...raw, latest_invoice: "in_9" })?.latestInvoice, "in_9");
+  assert.equal(parseSubscription({ ...raw, latest_invoice: { id: "in_8" } })?.latestInvoice, "in_8");
   assert.equal(parseSubscription({ ...raw, customer: { id: "cus" } })?.customer, "cus");
   const { items: _items, ...noItems } = raw;
   void _items;

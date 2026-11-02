@@ -344,7 +344,13 @@ Then walk this journey:
    **past_due**, the dashboard shows the payment-failed banner, Slack gets the
    "Stripe payment failed" note, and **sending keeps working** while Stripe
    retries. Advance until the retries run out. Status becomes **paused** and
-   sending stops.
+   sending stops: the dashboard says "Not sending: payment due", GoHighLevel
+   shows each message as failed ("Nothing sends until the account owner
+   updates billing"), and within the hour the owner gets the first daily
+   "Nothing is sending" email (needs `RESEND_API_KEY` and `EMAIL_FROM`).
+   Then press **Update card and pay** with `4242 4242 4242 4242`. The
+   outstanding invoice is paid, status goes back to **active**, sending
+   restarts with no QR rescan, and the daily emails stop.
 8. **Cancel.** In the Customer Portal, cancel. The billing page should say
    "Cancels at the end of this period". Advance past the period end. Status
    becomes **cancelled**.

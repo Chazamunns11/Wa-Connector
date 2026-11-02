@@ -8,7 +8,7 @@ import { Container } from "@/components/site/Container";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { getAccountDataSource } from "@/lib/account-data";
 import { connectLinkForOwnedLocation } from "@/lib/account-data/connect-link";
-import { fleetSummary, headline, needsAttention, needsCard, planStatus, TRIAL_REMINDER_DAYS, trialDaysLeft } from "@/lib/account-data/derive";
+import { fleetSummary, headline, needsAttention, needsCard, owesPayment, planStatus, TRIAL_REMINDER_DAYS, trialDaysLeft } from "@/lib/account-data/derive";
 import { isWhatsappBridgeConfigured } from "@/lib/whatsapp-bridge";
 import { requireAccountSession } from "@/lib/account-session";
 import { brandConfig } from "@/lib/brand-config";
@@ -53,7 +53,7 @@ export default async function DashboardPage({
     account.billingStatus === "pending"
       ? { action: startCheckoutAction, label: "Start your free trial" }
       : needsCard(account, now, hasCard)
-        ? { action: addCardAction, label: "Add a card" }
+        ? { action: addCardAction, label: owesPayment(account) ? "Update card and pay" : "Add a card" }
         : undefined;
 
   // Both only ever name a row of this account's own list; the link is minted here, never carried in a URL.
