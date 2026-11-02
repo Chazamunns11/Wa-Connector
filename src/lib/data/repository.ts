@@ -935,6 +935,19 @@ export interface GhlRepository {
   stampSessionTriggerPhone(tenantId: string, phoneE164: string): Promise<void>;
   /** Sessions (with slot and label) of the given locations' numbers, for the connection watcher. */
   listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]>;
+
+  /**
+   * Health alerts (migration 0019, `src/lib/session-alerts.ts`). `listOpsAlerts`
+   * reads every open outage; `markOpsAlertDown` records one (no-op if already
+   * open); `claimOpsAlert` stamps `alerted_at` and is true only for the ONE
+   * caller that flipped it from null (that caller sends the email);
+   * `clearOpsAlert` deletes the row and returns whether it HAD been alerted
+   * (only that caller sends "back up"), or null if there was no row.
+   */
+  listOpsAlerts(): Promise<{ key: string; downSince: string; alertedAt: string | null }[]>;
+  markOpsAlertDown(key: string, detail: string | null): Promise<void>;
+  claimOpsAlert(key: string): Promise<boolean>;
+  clearOpsAlert(key: string): Promise<{ wasAlerted: boolean } | null>;
   /** Records a Stripe event id: INSERT ... ON CONFLICT DO NOTHING; true iff newly inserted. */
   recordStripeEvent(eventId: string, type: string): Promise<boolean>;
   /** Releases a recorded Stripe event id after a processing failure so Stripe's retry is handled, not dropped as a duplicate. */

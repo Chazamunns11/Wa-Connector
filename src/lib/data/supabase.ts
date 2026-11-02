@@ -2512,6 +2512,45 @@ export class SupabaseGhlRepository implements GhlRepository {
     if (error) throw error;
   }
 
+  async listOpsAlerts() {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ops_alerts").select("key, down_since, alerted_at");
+    if (error) throw error;
+    return ((data ?? []) as { key: string; down_since: string; alerted_at: string | null }[]).map((r) => ({
+      key: r.key,
+      downSince: r.down_since,
+      alertedAt: r.alerted_at,
+    }));
+  }
+
+  async markOpsAlertDown(key: string, detail: string | null) {
+    const supabase = getServiceClient();
+    const { error } = await supabase
+      .from("ops_alerts")
+      .upsert({ key, detail: detail?.slice(0, 500) ?? null }, { onConflict: "key", ignoreDuplicates: true });
+    if (error) throw error;
+  }
+
+  async claimOpsAlert(key: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase
+      .from("ops_alerts")
+      .update({ alerted_at: new Date().toISOString() })
+      .eq("key", key)
+      .is("alerted_at", null)
+      .select("key");
+    if (error) throw error;
+    return (data ?? []).length > 0;
+  }
+
+  async clearOpsAlert(key: string) {
+    const supabase = getServiceClient();
+    const { data, error } = await supabase.from("ops_alerts").delete().eq("key", key).select("alerted_at");
+    if (error) throw error;
+    const row = (data ?? [])[0] as { alerted_at: string | null } | undefined;
+    return row ? { wasAlerted: row.alerted_at !== null } : null;
+  }
+
   async listSessionsForTriggers(locationIds: string[]): Promise<TriggerSessionRow[]> {
     if (locationIds.length === 0) return [];
     const supabase = getServiceClient();
